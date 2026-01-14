@@ -5,11 +5,7 @@ const APPLICATION_VERSION = "1.1.4";
 
 require_once __DIR__.'/../vendor/autoload.php';
 
-try {
-    (new Dotenv\Dotenv(__DIR__ . '/../'))->load();
-} catch (Dotenv\Exception\InvalidPathException $e) {
-    //
-}
+Dotenv\Dotenv::createImmutable(__DIR__ . '/../')->safeLoad();
 
 /*
 |--------------------------------------------------------------------------
