@@ -22,7 +22,7 @@ RUN apk add --no-cache \
         pdo \
         pdo_mysql \
         zip \
-    && pecl install mongodb \
+    && pecl install mongodb-1.21.0 \
     && docker-php-ext-enable mongodb \
     && apk del .build-deps \
     && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
