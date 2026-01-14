@@ -13,6 +13,7 @@ RUN apk add --no-cache \
         oniguruma-dev \
         unzip \
         zip \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
     && docker-php-ext-install \
         bcmath \
         intl \
@@ -23,6 +24,7 @@ RUN apk add --no-cache \
         zip \
     && pecl install mongodb \
     && docker-php-ext-enable mongodb \
+    && apk del .build-deps \
     && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
 # Setup project structure
