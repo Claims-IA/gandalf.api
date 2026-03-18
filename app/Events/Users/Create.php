@@ -1,8 +1,12 @@
 <?php
 /**
- * Author: Paul Bardack paul.bardack@gmail.com http://paulbardack.com
- * Date: 07.07.16
- * Time: 13:23
+ * Users\Create Event
+ *
+ * Fired by UsersRepository::createOrUpdate() when a new user is created. Carries
+ * the newly persisted User model to the EventListener which forwards the data to
+ * Intercom (user profile sync) and Mixpanel (user-create track event).
+ *
+ * @package App\Events\Users
  */
 
 namespace App\Events\Users;

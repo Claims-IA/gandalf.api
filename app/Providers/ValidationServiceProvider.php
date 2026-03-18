@@ -1,4 +1,16 @@
 <?php
+/**
+ * ValidationServiceProvider
+ *
+ * Extends Lumen's validation system with domain-specific rules for decision tables
+ * and user management. Registers custom rules via Validator::extend() and overrides
+ * the 'validator' singleton to use the custom App\Http\Services\Validator class
+ * which fixes the dot-notation flattening for nested conditions arrays. Also
+ * registers the database presence verifier required for 'unique' rules to work
+ * with MongoDB via the Jenssegers driver.
+ *
+ * @package App\Providers
+ */
 namespace App\Providers;
 
 use Illuminate\Validation\DatabasePresenceVerifier;

@@ -1,0 +1,27 @@
+version: '3.8'
+services:
+  nginx:
+    image: nginx:latest
+    container_name: gandalf_nginx
+    volumes:
+      - ./:/app
+      - ./config/nginx/docker.conf:/etc/nginx/conf.d/gandalf.api.conf
+    ports:
+      - 80:80
+    depends_on:
+      - php
+  php:
+    container_name: gandalf_api
+    build:
+      context: .
+    volumes:
+      - ./:/app
+    depends_on:
+      - db
+  db:
+    image: mongo:latest
+    container_name: gandalf_mongodb
+    ports:
+      - 27017:27017
+    volumes:
+      - /data/db

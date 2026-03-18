@@ -1,8 +1,15 @@
 <?php
 /**
- * Author: Paul Bardack paul.bardack@gmail.com http://paulbardack.com
- * Date: 25.05.16
- * Time: 13:35
+ * Variant Model
+ *
+ * Represents one variant embedded within a decision Table. A table must have at
+ * least one variant; when multiple variants exist, the Table::getVariantForCheck()
+ * method selects which one to use based on the table's variants_probability setting
+ * (first, random, or weighted percent). Each variant carries its own ordered list
+ * of Rules and a default_decision that is returned when no rule matches. Variants
+ * enable A/B testing of different rule sets on the same table schema.
+ *
+ * @package App\Models
  */
 
 namespace App\Models;
@@ -58,6 +65,11 @@ class Variant extends Base
         'default_description' => 'string',
     ];
 
+    /**
+     * Expose rules as a serialisable relation for toArray().
+     *
+     * @return array
+     */
     protected function getArrayableRelations()
     {
         return [
@@ -65,16 +77,35 @@ class Variant extends Base
         ];
     }
 
+    /**
+     * Define the embedded-many relationship for rules.
+     *
+     * Rules are evaluated in order during scoring; for decision-type tables the
+     * first fully matching rule wins.
+     *
+     * @return \Jenssegers\Mongodb\Relations\EmbedsMany
+     */
     public function rules()
     {
         return $this->embedsMany('App\Models\Rule');
     }
 
+    /**
+     * Replace all rules on this variant with a new set including their conditions.
+     *
+     * Clears existing rules first, then creates Rule models and delegates condition
+     * creation to Rule::setConditions(). Returns $this for method chaining.
+     *
+     * @param  array $rules  Array of rule definition arrays (each optionally containing 'conditions').
+     * @return $this
+     */
     public function setRules($rules)
     {
+        // Clear existing rules before writing the new set to prevent accumulation
         $this->rules()->delete();
         foreach ($rules as $rule) {
             $ruleModel = new Rule($rule);
+            // Only set conditions when explicitly provided (some rules may have none)
             if (isset($rule['conditions'])) {
                 $ruleModel->setConditions($rule['conditions']);
             }

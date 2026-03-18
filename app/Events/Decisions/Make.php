@@ -1,8 +1,13 @@
 <?php
 /**
- * Author: Paul Bardack paul.bardack@gmail.com http://paulbardack.com
- * Date: 05.07.16
- * Time: 14:48
+ * Decisions\Make Event
+ *
+ * Fired by the Scoring service immediately after a Decision document is persisted.
+ * Carries the Decision model to the EventListener which uses it to notify Intercom
+ * and Mixpanel of the analytics event. This decouples the decision evaluation logic
+ * from the analytics side-effects.
+ *
+ * @package App\Events\Decisions
  */
 
 namespace App\Events\Decisions;

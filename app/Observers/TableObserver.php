@@ -1,6 +1,14 @@
 <?php
-/*
- * This code was generated automatically by Nebo15/REST
+/**
+ * TableObserver
+ *
+ * Eloquent model observer for the Table model. The primary active hook is 'saved',
+ * which creates a changelog snapshot via the Nebo15/Changelog library after every
+ * successful save (create or update). The changelog records the full table state and
+ * the username of the authenticated user who made the change, enabling audit trails
+ * and rollback functionality exposed through the ChangelogController.
+ *
+ * @package App\Observers
  */
 
 namespace App\Observers;

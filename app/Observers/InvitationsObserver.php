@@ -1,6 +1,15 @@
 <?php
-/*
- * This code was generated automatically by Nebo15/REST
+/**
+ * InvitationsObserver
+ *
+ * Eloquent model observer for the Invitation model. The primary active hook is
+ * 'created', which sends the invitation email via the Mail service when a new
+ * Invitation document is persisted. Note: the UsersController::invite() method
+ * also calls sendEmailInvitation() directly, so there is currently a duplicate
+ * send; the observer hook is retained for cases where invitations are created
+ * outside the controller context.
+ *
+ * @package App\Observers
  */
 
 namespace App\Observers;

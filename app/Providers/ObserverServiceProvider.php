@@ -1,8 +1,14 @@
 <?php
 /**
- * Author: Paul Bardack paul.bardack@gmail.com http://paulbardack.com
- * Date: 12.04.16
- * Time: 14:46
+ * ObserverServiceProvider
+ *
+ * Attaches Eloquent model observers to the Table, User, and Invitation models
+ * during application boot. Observers are used in preference to inline model events
+ * to keep side-effect logic (sending emails, writing changelog entries, hashing
+ * passwords) in dedicated classes rather than in the models or repositories
+ * themselves.
+ *
+ * @package App\Providers
  */
 
 namespace App\Providers;

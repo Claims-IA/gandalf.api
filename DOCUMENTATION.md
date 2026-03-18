@@ -1,0 +1,565 @@
+# Gandalf API — Comprehensive Documentation
+
+## Table of Contents
+
+1. [Project Overview][1]
+2. [Architecture Diagram][2]
+3. [Module Descriptions][3]
+4. [Class Reference][4]
+5. [API Authentication Flow][5]
+6. [Decision Engine Flow][6]
+7. [Scheduled Tasks][7]
+8. [Environment Variables][8]
+
+---
+
+## Project Overview
+
+Gandalf is a multi-tenant Decision Engine API built on **PHP Lumen 5.2** and **MongoDB**. It allows platform users and their consumer applications to:
+
+- Create **decision tables** with typed fields, variants, and rule-condition sets
+- Submit field values and receive a **decision result** (approve/decline/score)
+- Support **A/B testing** (split testing) by running multiple variants of the same table
+- Browse **audit history** (changelog) for every table change with diff and rollback
+- Manage **users, OAuth2 tokens**, and multi-tenant **application projects**
+- Export application data as a compressed archive for backup or migration
+
+The system is designed around three access levels:
+
+| Level    | Authentication                 | Typical Consumer                           |
+| -------- | ------------------------------ | ------------------------------------------ |
+| Public   | OAuth2 client credentials only | Unauthenticated registration/reset flows   |
+| User     | OAuth2 bearer token            | Logged-in admin users via the web frontend |
+| Consumer | Application + user or client   | External applications making decisions     |
+
+> **`matching_type` values:** `first` (first matching rule wins) · `scoring_sum` (sum of all matching rules) · `scoring_max` (highest value among matching rules) · `scoring_min` (lowest value among matching rules) · `scoring_count` (count of matching rules)
+
+---
+
+## Architecture Diagram
+
+	
+	┌─────────────────────────────────────────────────────────────┐
+	│                        HTTP Layer                           │
+	│  GET /  ·  POST /api/v1/users  ·  POST /api/v1/tables/…     │
+	│                   app/Http/routes.php                       │
+	└────────────────────────────┬────────────────────────────────┘
+	                             │ Lumen Middleware stack
+	                             │  JsonMiddleware (sets Accept/Content-Type)
+	                             │  NewRelicMiddleware (APM transaction naming)
+	                             │  oauth / oauth.basic.client (LumenOauth2)
+	                             │  applicationable / applicationable.acl
+	                             ▼
+	┌─────────────────────────────────────────────────────────────┐
+	│                     Controllers                              │
+	│  UsersController · TablesController · DecisionsController    │
+	│  ConsumerController · ChangelogController · ProjectsController│
+	└──────────┬──────────────────────────┬───────────────────────┘
+	           │                          │
+	           ▼                          ▼
+	┌──────────────────┐       ┌──────────────────────────────────┐
+	│  Repositories    │       │         Services                  │
+	│  UsersRepository │       │  Scoring (decision engine core)   │
+	│  TablesRepository│       │  ConditionsTypes (operators)      │
+	│  DecisionsRepo   │       │  Mail (Postmark)                  │
+	└────────┬─────────┘       │  Intercom · Mixpanel              │
+	         │                 │  DbTransfer (mongoexport)         │
+	         ▼                 │  Hasher (token generation)        │
+	┌──────────────────┐       └──────────────────────────────────┘
+	│     Models       │
+	│  User · Table    │       ┌──────────────────────────────────┐
+	│  Decision · Rule │       │     Event System                  │
+	│  Condition       │       │  Events: Decisions\Make           │
+	│  Variant · Field │       │          Users\Create/Update      │
+	│  Preset          │       │  EventListener → Intercom/Mixpanel│
+	│  Invitation      │       └──────────────────────────────────┘
+	│  ConditionType   │
+	└────────┬─────────┘       ┌──────────────────────────────────┐
+	         │                 │     Observers                     │
+	         ▼                 │  UserObserver  (hash pw, send email)│
+	┌──────────────────┐       │  TableObserver (write changelog)   │
+	│    MongoDB       │       │  InvitationsObserver (send invite) │
+	│  users           │       └──────────────────────────────────┘
+	│  tables          │
+	│  decisions       │       ┌──────────────────────────────────┐
+	│  applications    │       │     Console Commands              │
+	│  changelogs      │       │  SendStatistic    (every minute)  │
+	│  oauth_clients   │       │  DeleteExpiredTokens (hourly)     │
+	│  invitations     │       │  DeleteExpiredProjectDumps (2×day)│
+	└──────────────────┘       └──────────────────────────────────┘
+
+---
+
+## Module Descriptions
+
+### Controllers (`app/Http/Controllers/`)
+
+Controllers handle HTTP request parsing, input validation, and response formatting. They are thin — all business logic is delegated to repositories or services.
+
+| Class                 | Role                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `Controller`          | Base class; thin wrapper over Lumen's routing controller                             |
+| `UsersController`     | User registration, verification, password reset, profile update, invitation dispatch |
+| `TablesController`    | CRUD for decision tables plus analytics endpoint                                     |
+| `DecisionsController` | Admin read-only access to decision records and metadata updates                      |
+| `ConsumerController`  | Consumer-facing decision evaluation and result retrieval                             |
+| `ChangelogController` | Table audit history list, diff, and rollback                                         |
+| `ProjectsController`  | Application deletion and data export                                                 |
+
+### Models (`app/Models/`)
+
+All models extend `Base` (which extends Jenssegers MongoDB Eloquent). Embedded documents (`Field`, `Rule`, `Condition`, `Preset`, `Variant`) are stored as nested arrays within their parent document.
+
+| Class           | MongoDB Collection         | Role                                                    |
+| --------------- | -------------------------- | ------------------------------------------------------- |
+| `User`          | `users`                    | Platform user with OAuth tokens and email verification  |
+| `Table`         | `tables`                   | Decision table with variants, fields, and rules         |
+| `Decision`      | `decisions`                | Immutable audit record of a single evaluation           |
+| `Field`         | embedded in Table/Decision | Input field definition (key, type, source, preset)      |
+| `Rule`          | embedded in Variant        | Ordered rule with conditions and outcome value          |
+| `Condition`     | embedded in Rule           | Single field comparison (field\_key, operator, value)   |
+| `Variant`       | embedded in Table          | A/B test variant containing rules and default decision  |
+| `Preset`        | embedded in Field          | Pre-processing condition applied before rule evaluation |
+| `Invitation`    | `invitations`              | Pending invitation to join an application               |
+| `ConditionType` | `condition_types`          | Placeholder (condition types managed in code)           |
+
+### Repositories (`app/Repositories/`)
+
+Repositories encapsulate all MongoDB query logic. They extend `AbstractRepository` from Nebo15/REST.
+
+| Class                 | Models Managed | Key Methods                                                                 |
+| --------------------- | -------------- | --------------------------------------------------------------------------- |
+| `UsersRepository`     | User           | `createOrUpdate()` — handles email verification token flow and fires events |
+| `TablesRepository`    | Table          | `createOrUpdate()`, `readListWithFilters()`, `analyzeTableDecisions()`      |
+| `DecisionsRepository` | Decision       | `getDecisions()`, `getConsumerDecision()`, `updateMeta()`                   |
+
+### Services (`app/Services/`)
+
+| Class             | Role                                                                            |
+| ----------------- | ------------------------------------------------------------------------------- |
+| `Scoring`         | Core decision engine — evaluates rules, accumulates results, persists decisions |
+| `ConditionsTypes` | Defines all comparison operators as closures; evaluates conditions at runtime   |
+| `Mail`            | Postmark email integration (verification, password reset, invitations)          |
+| `Intercom`        | Intercom CRM integration (user profile sync, decision events, secure code)      |
+| `Mixpanel`        | Mixpanel analytics integration (user track events, decision counters)           |
+| `Hasher`          | Cryptographically strong URL-safe token generation                              |
+| `DbTransfer`      | mongoexport-based data export to .tar.gz archive                                |
+| `BaseEvents`      | Abstract base for Intercom/Mixpanel; provides IP detection helper               |
+
+### Providers (`app/Providers/`)
+
+| Class                       | Role                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| `AppServiceProvider`        | Registers DbTransfer singleton; provides no-op stubs for disabled integrations |
+| `AuthServiceProvider`       | Registers api\_token driver for simple token auth                              |
+| `BugsnagServiceProvider`    | Configures and registers the Bugsnag error-tracking client                     |
+| `EventServiceProvider`      | Registers EventListener as a subscriber                                        |
+| `ObserverServiceProvider`   | Attaches TableObserver, UserObserver, InvitationsObserver                      |
+| `ValidationServiceProvider` | Registers custom validation rules and the custom Validator class               |
+
+### Validators (`app/Validators/`)
+
+| Class              | Rules Registered                                                                                            |
+| ------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `GeneralValidator` | `mongoId`, `json`, `betweenString`                                                                          |
+| `TableValidator`   | `conditionType`, `conditionsCount`, `conditionsFieldKey`, `ruleThanType`, `probabilitySum`, `decision_type` |
+| `UserValidator`    | `password`, `current_password`, `username`, `last_name`, `uniqueExceptUser`                                 |
+
+### Middleware (`app/Http/Middleware/`)
+
+| Class                | Purpose                                                                               |
+| -------------------- | ------------------------------------------------------------------------------------- |
+| `JsonMiddleware`     | Sets `Accept: application/json` and `Content-Type: application/json` on every request |
+| `NewRelicMiddleware` | Names each New Relic transaction as `URI (METHOD)` for per-endpoint APM visibility    |
+
+### Exceptions (`app/Exceptions/`)
+
+| Class                          | HTTP Status | Error Code             | When Thrown                                               |
+| ------------------------------ | ----------- | ---------------------- | --------------------------------------------------------- |
+| `Handler`                      | —           | —                      | Global exception renderer; routes all exceptions to JSON  |
+| `AdminIsNotActivatedException` | 403         | `admin_not_activated`  | Application has no active (verified) admin user           |
+| `ConditionException`           | —           | —                      | Unknown condition operator key (caught by TableValidator) |
+| `FailedToSaveModel`            | 400         | `failed_to_save_model` | MongoDB write returns false                               |
+| `IdNotFoundException`          | 404         | `mongo_id_not_found`   | Empty ID passed to `findById()`                           |
+| `TokenExpiredException`        | 422         | `token_expired`        | Email/password token has passed its TTL                   |
+| `TokenNotFoundException`       | 404         | `token_not_found`      | No user found with the given token                        |
+| `VariantNotFound`              | 404         | `variant_not_found`    | Requested variant ID not found on the table               |
+
+### Events and Listeners (`app/Events/`, `app/Listeners/`)
+
+| Class            | Type          | Fired By                                                  |
+| ---------------- | ------------- | --------------------------------------------------------- |
+| `Event`          | Abstract base | —                                                         |
+| `Decisions\Make` | Event         | `Scoring::check()` after decision is persisted            |
+| `Users\Create`   | Event         | `UsersRepository::createOrUpdate()` on new user           |
+| `Users\Update`   | Event         | `UsersRepository::createOrUpdate()` on existing user      |
+| `EventListener`  | Subscriber    | Handles all three events; routes to Intercom and Mixpanel |
+
+### Observers (`app/Observers/`)
+
+| Class                 | Model      | Active Hooks                                                                                        |
+| --------------------- | ---------- | --------------------------------------------------------------------------------------------------- |
+| `UserObserver`        | User       | `creating` (auto-username, activate), `created` (send verification email), `saving` (hash password) |
+| `TableObserver`       | Table      | `saved` (write changelog snapshot)                                                                  |
+| `InvitationsObserver` | Invitation | `created` (send invitation email)                                                                   |
+
+### Console Commands (`app/Console/Commands/`)
+
+| Command                     | Signature        | Schedule     | Purpose                                                   |
+| --------------------------- | ---------------- | ------------ | --------------------------------------------------------- |
+| `SendStatistic`             | `send:statistic` | Every minute | Push decisions-per-minute count to CachetHQ               |
+| `DeleteExpiredTokens`       | `tokens:delete`  | Hourly       | Remove expired OAuth and email tokens from user documents |
+| `DeleteExpiredProjectDumps` | `dump:delete`    | Twice daily  | Delete export archives older than 24 hours                |
+
+---
+
+## Class Reference
+
+### `App\Application`
+
+Extends `Laravel\Lumen\Application`.
+
+| Method                    | Description                                                                           |
+| ------------------------- | ------------------------------------------------------------------------------------- |
+| `registerErrorHandling()` | Calls parent then re-applies `E_DEPRECATED` suppression for PHP 8+ compatibility      |
+| `getMonologHandler()`     | Returns a single-line StreamHandler to stdout in production; parent handler elsewhere |
+
+---
+
+### `App\Models\Base`
+
+Abstract MongoDB Eloquent model.
+
+| Method                      | Description                                                                               |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| `getId()`                   | Returns the `_id` attribute value                                                         |
+| `isNew()`                   | Returns true when the model has no `_id` yet                                              |
+| `createId()`                | Generates and assigns a new MongoDB ObjectID                                              |
+| `save(array $options = [])` | Saves and returns `$this`; throws `FailedToSaveModel` on failure                          |
+| `static findById($id)`      | Finds by `_id`; throws `IdNotFoundException` if empty, `ModelNotFoundException` if absent |
+
+---
+
+### `App\Models\User`
+
+| Method                             | Description                                                             |
+| ---------------------------------- | ----------------------------------------------------------------------- |
+| `createResetPasswordToken()`       | Generates a 1-hour reset\_password token, stores in `tokens` map        |
+| `getResetPasswordToken()`          | Returns the `reset_password` token array or false                       |
+| `findByResetPasswordToken($token)` | Finds user by token; throws if missing or expired                       |
+| `removeResetPasswordToken()`       | Deletes the reset\_password entry from `tokens`                         |
+| `changePassword($new_password)`    | Sets a new plain-text password (hashed by observer on save)             |
+| `createVerifyEmailToken()`         | Generates a 1-hour verify\_email token, stores in `tokens` map          |
+| `getVerifyEmailToken()`            | Returns the `verify_email` token array or false                         |
+| `verifyEmail()`                    | Promotes `temporary_email` → `email`, sets `active=true`, removes token |
+| `findByVerifyEmailToken($token)`   | Finds user by token; throws if missing or expired                       |
+| `removeVerifyEmailToken()`         | Deletes the verify\_email entry from `tokens`                           |
+| `findByToken($token, $type, ...)`  | Generic token lookup with expiry check                                  |
+| `isActive()`                       | Returns `$this->active`                                                 |
+
+---
+
+### `App\Models\Table`
+
+| Method                                  | Description                                                                |
+| --------------------------------------- | -------------------------------------------------------------------------- |
+| `fields()`                              | Embedded-many relation to `Field` models                                   |
+| `variants()`                            | Embedded-many relation to `Variant` models                                 |
+| `toListArray()`                         | Returns minimal list representation with variant summaries                 |
+| `setFields($fields)`                    | Replaces all embedded fields (deletes first, then re-creates with Presets) |
+| `setVariants($variants)`                | Replaces all embedded variants (delegates rules to `Variant::setRules`)    |
+| `getVariantForCheck($variantId = null)` | Selects a variant using first/random/percent strategy                      |
+| `getFieldsKeys()`                       | Returns a Collection of field key strings                                  |
+
+---
+
+### `App\Models\Decision`
+
+| Method              | Description                                                      |
+| ------------------- | ---------------------------------------------------------------- |
+| `rules()`           | Embedded-many relation to `Rule` snapshots                       |
+| `fields()`          | Embedded-many relation to `Field` snapshots                      |
+| `toConsumerArray()` | Returns consumer-safe decision with ISO-8601 timestamps          |
+| `toArray()`         | Overrides parent to cast MongoDB ObjectIDs in `table` to strings |
+| `getTableArray()`   | Returns the `table` sub-document with ObjectIDs as strings       |
+
+---
+
+### `App\Models\Variant`
+
+| Method             | Description                                                        |
+| ------------------ | ------------------------------------------------------------------ |
+| `rules()`          | Embedded-many relation to `Rule` models                            |
+| `setRules($rules)` | Replaces all rules (delegates conditions to `Rule::setConditions`) |
+
+---
+
+### `App\Models\Rule`
+
+| Method                       | Description                                      |
+| ---------------------------- | ------------------------------------------------ |
+| `conditions()`               | Embedded-many relation to `Condition` models     |
+| `setConditions($conditions)` | Replaces all conditions                          |
+| `setThanAttribute($value)`   | Rounds floats to 5 decimal places before storage |
+
+---
+
+### `App\Services\Scoring`
+
+| Method                                   | Description                                                    |
+| ---------------------------------------- | -------------------------------------------------------------- |
+| `check($id, $values, $appId, $showMeta)` | Full decision evaluation pipeline; returns consumer-safe array |
+| `checkCondition(Condition, $value)`      | Sets `condition->matched` via ConditionsTypes                  |
+| `prepareFieldPreset(Field, $value)`      | Applies preset transform with per-run caching                  |
+| `createValidationRules(Table)`           | Builds Lumen validation rules from table field definitions     |
+| `getValidationRuleByType($type)`         | Maps field type string to Lumen rule name                      |
+
+---
+
+### `App\Services\ConditionsTypes`
+
+Supported operators:
+
+| Operator   | Input Type    | Description                            |
+| ---------- | ------------- | -------------------------------------- |
+| `$is_set`  | —             | Always true (field exists in request)  |
+| `$is_null` | —             | True when field value is null          |
+| `$eq`      | —             | Loose equality (`==`)                  |
+| `$ne`      | —             | Loose inequality (`!=`)                |
+| `$gt`      | numeric       | Greater than                           |
+| `$gte`     | numeric       | Greater than or equal                  |
+| `$lt`      | numeric       | Less than                              |
+| `$lte`     | numeric       | Less than or equal                     |
+| `$between`       | betweenString | Between two values, both inclusive: `min <= x <= max` (format: `min;max`) |
+| `$between_excl`  | betweenString | Between two values, both exclusive: `min < x < max` (format: `min;max`)   |
+| `$between_lexcl` | betweenString | Left-exclusive: `min < x <= max` (format: `min;max`)                      |
+| `$between_rexcl` | betweenString | Right-exclusive: `min <= x < max` (format: `min;max`)                     |
+| `$in`            | —             | Value in comma-separated list                                              |
+| `$nin`           | —             | Value not in comma-separated list                                          |
+| `$any`           | —             | Always true regardless of value (including null)                           |
+
+| Method                                           | Description                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------------------- |
+| `getConditionsRules()`                           | Returns comma-separated operator key string for `in:` validation rules    |
+| `checkConditionValue($key, $condVal, $fieldVal)` | Evaluates a condition; returns bool                                       |
+| `getCondition($key)`                             | Returns operator definition array; throws `ConditionException` if unknown |
+
+---
+
+### `App\Repositories\TablesRepository`
+
+| Method                                          | Description                                                             |
+| ----------------------------------------------- | ----------------------------------------------------------------------- |
+| `readListWithFilters(array $filters)`           | Paginates tables with optional title/description/matching\_type filters |
+| `createOrUpdate($values, $id = null)`           | Creates or updates a table with full field and variant replacement      |
+| `analyzeTableDecisions($table_id, $variant_id)` | Aggregates decision history to calculate rule/condition hit rates       |
+
+---
+
+### `App\Repositories\DecisionsRepository`
+
+| Method                                        | Description                                             |
+| --------------------------------------------- | ------------------------------------------------------- |
+| `getDecisions($size, $table_id, $variant_id)` | Paginates decisions with optional table/variant filter  |
+| `getConsumerDecision($id)`                    | Returns decision as consumer-safe array                 |
+| `updateMeta($id, $meta)`                      | Validates and persists metadata on an existing decision |
+
+---
+
+### `App\Repositories\UsersRepository`
+
+| Method                                | Description                                                                        |
+| ------------------------------------- | ---------------------------------------------------------------------------------- |
+| `createOrUpdate($values, $id = null)` | Creates/updates user with email verification token flow; fires Create/Update event |
+
+---
+
+## API Authentication Flow
+
+	1. Client obtains OAuth2 access token
+	   POST /oauth/access_token
+	   Body: { grant_type, client_id, client_secret, username, password }
+	   → Returns: { access_token, refresh_token, expires_in, token_type }
+	
+	2. Client includes token in subsequent requests
+	   Authorization: Bearer <access_token>
+	   X-Application: <application_id>   ← identifies the tenant project
+	
+	3. LumenOauth2 middleware validates the bearer token against the users collection
+	   → Resolves $request->user() to the authenticated User model
+	
+	4. LumenApplicationable middleware validates the X-Application header
+	   → Resolves the Application model and checks the user's role and scope
+	
+	5. applicationable.acl middleware checks that the user's scope includes
+	   the required permission for the route (e.g. 'tables_create', 'decisions_make')
+	
+	6. Controller method executes with $request->user() and Application available
+
+### User Registration Flow
+
+	POST /api/v1/users                     ← OAuth client credentials only
+	  ↓ UsersController::create()
+	  ↓ UsersRepository::createOrUpdate()
+	    → stores email as temporary_email
+	    → generates verify_email token (1-hour TTL)
+	    → fires Users\Create event
+	  ↓ UserObserver::created()
+	    → sends verification email via Mail service
+	  → Returns HTTP 201 with user data
+	
+	POST /api/v1/users/verify/email        ← OAuth client credentials only
+	  Body: { token }
+	  ↓ User::findByVerifyEmailToken()     ← throws TokenNotFound/TokenExpired
+	  ↓ User::verifyEmail()
+	    → moves temporary_email → email
+	    → sets active = true
+	    → removes verify_email token
+	  → Returns HTTP 200 with updated user
+
+### Password Reset Flow
+
+	POST /api/v1/users/password/reset      ← initiate
+	  Body: { email }
+	  ↓ User::createResetPasswordToken()   ← 1-hour TTL token
+	  ↓ Mail::sendRecoveryPassword()       ← Postmark email with reset link
+	
+	PUT /api/v1/users/password/reset       ← complete
+	  Body: { token, password }
+	  ↓ User::findByResetPasswordToken()   ← validates token + expiry
+	  ↓ User::changePassword()             ← sets raw password
+	  ↓ UserObserver::saving()             ← hashes with bcrypt
+	  → Returns HTTP 200 with updated user
+
+---
+
+## Decision Engine Flow
+
+	POST /api/v1/tables/{id}/decisions
+	  Body: { field_key_1: value, field_key_2: value, ..., variant_id?: id }
+	
+	1. ConsumerController::tableCheck()
+	   → Verify application has at least one active admin user
+	   → Delegate to Scoring::check()
+	
+	2. Scoring::check($id, $values, $appId, $showMeta)
+	
+	   a. Load table from MongoDB via TablesRepository::read($id)
+	
+	   b. Validate submitted values against the table's field schema
+	      - Each field becomes: "field_key" => "present|{type}"
+	      - 'present' allows null; type is numeric / boolean / string
+	
+	   c. Select variant:
+	      - If variant_id supplied: use that specific variant
+	      - variants_probability = 'first':   always use first variant
+	      - variants_probability = 'random':  uniform random pick
+	      - variants_probability = 'percent': weighted random via cumulative distribution
+	
+	   d. For each Rule in the variant (in order):
+	      For each Condition in the rule:
+	        i.  Find the Field definition matching condition.field_key
+	        ii. Apply field Preset (if configured):
+	              preset.condition evaluated against raw value
+	              → result (true/false or transformed value) cached for this field
+	        iii. Evaluate: ConditionsTypes::checkConditionValue(
+	               condition.condition,  ← operator key e.g. '$gt'
+	               condition.value,      ← threshold from the table
+	               field_value           ← from request (or preset result)
+	             ) → stores result in condition.matched
+	
+	      Determine whether ALL conditions matched (AND logic):
+	        - First-match table (matching_type: 'first'): if all match AND final_decision is still null
+	                          → set final_decision = rule.than
+	                          → update title/description from rule
+	        - Scoring sum table (matching_type: 'scoring_sum'): if all match → add rule.than (float) to running total
+	        - Scoring max table (matching_type: 'scoring_max'): if all match → keep max(final_decision, rule.than)
+	        - Scoring min table (matching_type: 'scoring_min'): if all match → keep min(final_decision, rule.than)
+	        - Scoring count table (matching_type: 'scoring_count'): if all match → increment counter by 1
+
+	   e. If no rule matched (or score is 0): use variant.default_decision
+	
+	   f. Build scoring_data snapshot:
+	      { table, application, applications, title, description,
+	        default_decision, fields, rules (with per-condition matched flags),
+	        request, final_decision }
+	
+	   g. Persist Decision document to MongoDB
+	
+	   h. Fire Decisions\Make event
+	      → EventListener finds admin user IDs for the application
+	      → Intercom: creates 'decision-made' event per admin user
+	      → Mixpanel: increments 'Decisions count' per admin user
+	
+	   i. Return decision.toConsumerArray()
+	      { _id, table, application, title, description,
+	        final_decision, request, created_at, updated_at,
+	        rules: [{ title, description, decision }] }
+	      Note: 'rules' is omitted when show_meta application setting is false
+	
+	Example — scoring_sum Table Result:
+	  Rules: "Good IP" (+10), "Trusted bank" (+10), "Low turnover" (+60)
+	  If all three match: final_decision = 10 + 10 + 60 = 80
+	  If only first two match: final_decision = 10 + 10 = 20
+	  If nothing matches: final_decision = default_decision (e.g. 30)
+
+	Example — scoring_max Table Result:
+	  Rules: "Good IP" (+10), "Trusted bank" (+10), "Low turnover" (+60)
+	  If all three match: final_decision = max(10, 10, 60) = 60
+	  If only first two match: final_decision = max(10, 10) = 10
+	  If nothing matches: final_decision = default_decision (e.g. 30)
+	
+	Example — scoring_min Table Result:
+	  Rules: "Good IP" (+10), "Trusted bank" (+10), "Low turnover" (+60)
+	  If all three match: final_decision = min(10, 10, 60) = 10
+	  If only first and third match: final_decision = min(10, 60) = 10
+	  If nothing matches: final_decision = default_decision (e.g. 30)
+
+	Example — scoring_count Table Result:
+	  Rules: "Good IP" (+10), "Trusted bank" (+10), "Low turnover" (+60)
+	  If all three match: final_decision = 3
+	  If only first two match: final_decision = 2
+	  If nothing matches: final_decision = default_decision (e.g. 0)
+
+	Example — First-match Table Result (matching_type: 'first'):
+	  Rules evaluated in order: "Approved", "Declined", "Review"
+	  First fully matching rule wins: final_decision = "Approved"
+
+---
+
+## Scheduled Tasks
+
+The Console Kernel schedules three recurring tasks via Laravel's task scheduler. Run `php artisan schedule:run` every minute (typically via cron: `* * * * * php /path/to/artisan schedule:run`).
+
+| Task             | Frequency                      | Purpose                                                                         |
+| ---------------- | ------------------------------ | ------------------------------------------------------------------------------- |
+| `send:statistic` | Every minute                   | Count decisions in the last 60s, POST to CachetHQ status page                   |
+| `tokens:delete`  | Hourly                         | Remove expired OAuth access/refresh tokens and email tokens from user documents |
+| `dump:delete`    | Twice daily (01:00, 13:00 UTC) | Delete .tar.gz export archives older than 24 hours from `public/dump/`          |
+
+---
+
+## Environment Variables
+
+| Variable              | Default        | Description                                     |
+| --------------------- | -------------- | ----------------------------------------------- |
+| `APP_ENV`             | —              | Environment name (`local`, `staging`, `prod`)   |
+| `APP_DEBUG`           | —              | When `true`, 500 errors expose full stack trace |
+| `APP_LOG_PATH`        | `php://stdout` | Log destination (stdout in production)          |
+| `DB_HOST`             | —              | MongoDB host                                    |
+| `DB_PORT`             | —              | MongoDB port                                    |
+| `DB_DATABASE`         | —              | MongoDB database name                           |
+| `ACTIVATE_ALL_USERS`  | false          | When `true`, skip email verification (dev only) |
+| `INTERCOM_ENABLED`    | false          | Enable Intercom integration                     |
+| `INTERCOM_APP_SECRET` | —              | HMAC secret for Intercom identity verification  |
+| `MIXPANEL_ENABLED`    | false          | Enable Mixpanel integration                     |
+| `BUGSNAG_ENABLED`     | —              | Enable Bugsnag error reporting                  |
+
+[1]:	#project-overview
+[2]:	#architecture-diagram
+[3]:	#module-descriptions
+[4]:	#class-reference
+[5]:	#api-authentication-flow
+[6]:	#decision-engine-flow
+[7]:	#scheduled-tasks
+[8]:	#environment-variables

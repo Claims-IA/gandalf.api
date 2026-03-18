@@ -1,4 +1,16 @@
 <?php
+/**
+ * Exception Handler
+ *
+ * Global exception handler that translates PHP exceptions into structured JSON
+ * error responses. Maps well-known exception types (validation failures, model not
+ * found, access denied, etc.) to appropriate HTTP status codes and machine-readable
+ * error codes. Unknown 500-level exceptions are reported to Bugsnag when enabled
+ * and exposed as a full stack trace only when APP_DEBUG is true, otherwise a generic
+ * internal_server_error response is returned.
+ *
+ * @package App\Exceptions
+ */
 
 namespace App\Exceptions;
 

@@ -44,6 +44,10 @@ RUN composer --no-ansi --no-dev --no-interaction --no-progress --no-scripts --no
 # To skip some files add them to .dockerignore file
 COPY . ${HOME}/
 
+# Fix case-sensitivity: nebo15 packages use lowercase 'exceptions/' dirs but uppercase namespaces
+RUN mv vendor/nebo15/lumen.intercom/src/exceptions vendor/nebo15/lumen.intercom/src/Exceptions && \
+    mv vendor/nebo15/lumen.mixpanel/src/exceptions vendor/nebo15/lumen.mixpanel/src/Exceptions
+
 # Install dependencies and generate autoloader
 RUN composer --no-ansi --no-dev --no-interaction --no-progress --no-scripts --optimize-autoloader install
 

@@ -1,6 +1,14 @@
 <?php
-/*
- * This code was generated automatically by Nebo15/REST
+/**
+ * TablesController
+ *
+ * Manages decision table resources via RESTful CRUD endpoints registered by the
+ * Nebo15/REST package. Extends AbstractController to gain standard create, read,
+ * update, delete, and list actions. Adds a readList override for filter support
+ * and an analytics endpoint that aggregates decision hit rates per rule/condition
+ * for a given table variant.
+ *
+ * @package App\Http\Controllers
  */
 
 namespace App\Http\Controllers;
@@ -26,17 +34,29 @@ class TablesController extends AbstractController
         'readList' => [
             'title' => 'sometimes|min:1',
             'description' => 'sometimes|min:1',
-            'matching_type' => 'sometimes|in:decision,scoring',
+            'matching_type' => 'sometimes|in:first,scoring_sum,scoring_max,scoring_min,scoring_count',
         ]
     ];
 
+    /**
+     * Build validation rules and call the parent constructor.
+     *
+     * Condition operator values (e.g. $eq, $gt) are generated dynamically from
+     * the ConditionsTypes service so the allowed list stays in sync with the
+     * engine without duplicating definitions here.
+     *
+     * @param Request         $request
+     * @param Response        $response
+     * @param ConditionsTypes $conditionsTypes
+     */
     public function __construct(Request $request, Response $response, ConditionsTypes $conditionsTypes)
     {
+        // Build the comma-separated list of valid condition operators for use in "in:" rules
         $condRules = $conditionsTypes->getConditionsRules();
         $rules = [
             'title' => 'sometimes|string',
             'description' => 'sometimes|string',
-            'matching_type' => 'required|in:decision,scoring',
+            'matching_type' => 'required|in:first,scoring_sum,scoring_max,scoring_min,scoring_count',
             'decision_type' => 'required|in:alpha_num,numeric,string,json|decision_type',
             'fields' => 'required|array',
             'fields.*._id' => 'sometimes|mongoId',
@@ -74,6 +94,15 @@ class TablesController extends AbstractController
         parent::__construct($request, $response);
     }
 
+    /**
+     * Return a paginated list of decision tables for the current application.
+     *
+     * Supports optional query filters: title and description are matched with a
+     * case-insensitive regex, matching_type can be 'first', 'scoring_sum', 'scoring_max', 'scoring_min', or 'scoring_count'. Only
+     * tables belonging to the authenticated application are returned.
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
     public function readList()
     {
         $this->validateRoute();
@@ -84,6 +113,37 @@ class TablesController extends AbstractController
             function (ListableInterface $model) {
                 return $model->toListArray();
             }
+        );
+    }
+
+    /**
+     * Return rule and condition analytics for a specific table variant.
+     *
+     * Queries all historical Decision documents for the table/variant combination
+     * (since the table's last update) and calculates the probability (hit rate)
+     * for each rule and each condition. This lets administrators see which rules
+     * fire most often and tune the table accordingly.
+     *
+     * @param  string $id         MongoDB ObjectID of the decision table.
+     * @param  string $variant_id MongoDB ObjectID of the variant to analyse.
+     * @return \Illuminate\Http\JsonResponse
+     */
+    /**
+     * Copy a decision table into a different project.
+     *
+     * Duplicates the table identified by $id (from the current application) and
+     * saves the copy under the application identified by $project_id. All fields,
+     * variants, rules, and conditions are preserved; only the owning application
+     * is changed.
+     *
+     * @param  string $id         MongoDB ObjectID of the source table.
+     * @param  string $project_id MongoDB ObjectID of the target project/application.
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function copyTo($id, $project_id)
+    {
+        return $this->response->json(
+            $this->getRepository()->copyTo($id, $project_id)->toArray()
         );
     }
 
