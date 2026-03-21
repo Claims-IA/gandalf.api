@@ -55,7 +55,7 @@ tags:
   - name: Projects
     description: Project (application) lifecycle — delete and export
   - name: Tables
-    description: Decision table CRUD and analytics
+    description: Decision table CRUD, analytics, export, and import
   - name: Decisions (Admin)
     description: Admin access to decision audit records
   - name: Decisions (Consumer)
@@ -564,6 +564,46 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/VariantSummary'
+
+    TableImport:
+      type: object
+      description: |
+        Table representation used for JSON export and import.
+        Identical to `Table` but without `_id` fields — these are stripped on export
+        and ignored on import so that a fresh document is always created.
+      properties:
+        title:
+          type: string
+          example: "Credit Scoring"
+        description:
+          type: string
+          example: "Evaluates credit applications."
+        matching_type:
+          type: string
+          enum: [first, scoring_sum, scoring_max, scoring_min, scoring_count]
+          example: "first"
+        decision_type:
+          type: string
+          enum: [alpha_num, numeric, string, json]
+          example: "string"
+        variants_probability:
+          type: string
+          enum: [first, random, percent, ""]
+          example: ""
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/Field'
+        variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/Variant'
+      required:
+        - title
+        - matching_type
+        - decision_type
+        - fields
+        - variants
 
     TableCreateUpdate:
       type: object
@@ -1845,6 +1885,155 @@ paths:
       responses:
         "200":
           description: Table deleted.
+
+  # ── Export ────────────────────────────────────────────────────────────────────
+  /api/v1/admin/tables/{id}/export:
+    get:
+      tags: [Tables]
+      summary: Export a decision table
+      description: |
+        Downloads a decision table as a file in the requested format.
+
+        | Format | `?format=` | Content-Type | Notes |
+        |--------|-----------|--------------|-------|
+        | JSON   | `json` (default) | `application/json` | Full export — all variants, all rules. Can be re-imported as-is. |
+        | CSV    | `csv` | `text/csv` | First variant only. Human-readable, easily editable in a spreadsheet. |
+        | Excel  | `excel` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | First variant only. Same structure as CSV, formatted as XLSX. |
+
+        ### CSV / Excel format
+
+        The CSV and Excel files use three labelled sections separated by blank rows:
+
+        ```
+        ## METADATA
+        title,<table title>
+        description,<optional>
+        matching_type,<first|scoring_sum|...>
+        decision_type,<string|numeric|alpha_num|json>
+        default_decision,<default outcome>
+
+        ## FIELDS
+        key,title,type
+        age,Age,numeric
+        country,Pays,string
+
+        ## RULES
+        age,country,decision
+        $gte:18,$eq:FR,approved
+        *,*,declined
+        ```
+
+        Each condition cell uses the format `operator:value` (e.g. `$gte:18`, `$eq:FR`).
+        A `*` cell means no condition is applied for that field in this rule.
+      operationId: exportTable
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - name: format
+          in: query
+          required: false
+          description: Export format. Defaults to `json`.
+          schema:
+            type: string
+            enum: [json, csv, excel]
+            default: json
+      responses:
+        "200":
+          description: |
+            File download. The response `Content-Type` and filename depend on the requested format.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableImport'
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Table not found.
+
+  # ── Import ────────────────────────────────────────────────────────────────────
+  /api/v1/admin/tables/import:
+    post:
+      tags: [Tables]
+      summary: Import a decision table
+      description: |
+        Creates a new decision table in the current project by uploading a file
+        previously exported via `GET /api/v1/admin/tables/{id}/export`.
+
+        The format is detected automatically from the file extension:
+
+        | Extension | Format |
+        |-----------|--------|
+        | `.json`   | JSON — full table structure, all variants. |
+        | `.csv`    | CSV — three-section format (METADATA / FIELDS / RULES), one variant. |
+        | `.xlsx` / `.xls` | Excel — same three-section structure as CSV. |
+
+        A **new table is always created**, even if a table with the same title already
+        exists in the project. Existing tables are never overwritten.
+
+        The target project is determined by the `X-Application` header, exactly like
+        all other admin endpoints.
+
+        ### Validation errors
+
+        If the file cannot be parsed or contains structural errors (missing title,
+        unknown field references, etc.) the endpoint returns `422` with an `errors`
+        array describing each problem.
+      operationId: importTable
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: >
+                    The table file to import. Accepted extensions: `.json`, `.csv`, `.xlsx`, `.xls`.
+                    Maximum size: 10 MB.
+      responses:
+        "201":
+          description: Table imported and created successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Table'
+        "422":
+          description: File format error or structural validation failure.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Erreurs de validation dans le fichier importé."
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                    example:
+                      - "Le titre de la table est obligatoire (section ## METADATA, ligne title)."
+                      - "Règle #2, condition #0: champ inconnu 'salary'."
 
   # ── Analytics ─────────────────────────────────────────────────────────────────
   /api/v1/admin/tables/{id}/{variant_id}/analytics:

@@ -17,7 +17,9 @@
         "nebo15/lumen.oauth2-mongodb": "*",
         "nebo15/lumen.intercom": "*",
         "nebo15/lumen.mixpanel": "*",
-        "wildbit/postmark-php": "^2.2"
+        "wildbit/postmark-php": "^2.2",
+        "phpoffice/phpspreadsheet": "^1.29",
+        "phpoffice/phpspreadsheet": "^1.29"
     },
     "require-dev": {
         "fzaninotto/faker": "~1.4",

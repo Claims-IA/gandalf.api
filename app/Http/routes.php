@@ -125,6 +125,11 @@ $app->group(
         $app->get('/tables/{id:[0-9a-z]{24}}/{variant_id:[0-9a-z]{24}}/analytics', ['uses' => 'TablesController@analytics']);
         // Copy a decision table into a different project
         $app->post('/tables/{id:[0-9a-z]{24}}/copyto/{project_id:[0-9a-z]{24}}', ['uses' => 'TablesController@copyTo']);
+        // Export a decision table as CSV, Excel or JSON (?format=csv|excel|json)
+        $app->get('/tables/{id:[0-9a-z]{24}}/export', ['uses' => 'TablesController@export']);
+        // Import a decision table from an uploaded CSV, Excel or JSON file (multipart/form-data, field: file)
+        // NOTE: must be declared before any wildcard {id} POST routes to avoid routing conflicts
+        $app->post('/tables/import', ['uses' => 'TablesController@import']);
     }
 );
 

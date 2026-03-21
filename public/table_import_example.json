@@ -1,0 +1,92 @@
+{
+    "title": "Credit Scoring",
+    "description": "Évalue la demande de crédit selon le score et le revenu",
+    "matching_type": "first",
+    "decision_type": "string",
+    "variants_probability": "",
+    "fields": [
+        {
+            "key": "credit_score",
+            "title": "Score de crédit",
+            "type": "numeric",
+            "source": "request",
+            "preset": []
+        },
+        {
+            "key": "income",
+            "title": "Revenu annuel",
+            "type": "numeric",
+            "source": "request",
+            "preset": []
+        },
+        {
+            "key": "employed",
+            "title": "Est employé",
+            "type": "boolean",
+            "source": "request",
+            "preset": []
+        },
+        {
+            "key": "country",
+            "title": "Pays",
+            "type": "string",
+            "source": "request",
+            "preset": []
+        }
+    ],
+    "variants": [
+        {
+            "title": "Default Variant",
+            "description": "",
+            "default_decision": "review",
+            "default_title": "",
+            "default_description": "",
+            "rules": [
+                {
+                    "title": "Score excellent + revenu élevé",
+                    "description": "Approbation automatique pour les profils solides",
+                    "than": "approved",
+                    "conditions": [
+                        { "field_key": "credit_score", "condition": "$gte", "value": "700" },
+                        { "field_key": "income",       "condition": "$gte", "value": "50000" },
+                        { "field_key": "employed",     "condition": "$eq",  "value": "true" },
+                        { "field_key": "country",      "condition": "$is_set", "value": "" }
+                    ]
+                },
+                {
+                    "title": "Score correct + France",
+                    "description": "Approbation pour les résidents français avec un score acceptable",
+                    "than": "approved",
+                    "conditions": [
+                        { "field_key": "credit_score", "condition": "$gte", "value": "600" },
+                        { "field_key": "income",       "condition": "$gte", "value": "30000" },
+                        { "field_key": "employed",     "condition": "$is_set", "value": "" },
+                        { "field_key": "country",      "condition": "$eq",  "value": "FR" }
+                    ]
+                },
+                {
+                    "title": "Score moyen + employé",
+                    "description": "Mise en révision manuelle pour les profils intermédiaires",
+                    "than": "review",
+                    "conditions": [
+                        { "field_key": "credit_score", "condition": "$gte", "value": "500" },
+                        { "field_key": "income",       "condition": "$gte", "value": "20000" },
+                        { "field_key": "employed",     "condition": "$eq",  "value": "true" },
+                        { "field_key": "country",      "condition": "$is_set", "value": "" }
+                    ]
+                },
+                {
+                    "title": "Score insuffisant",
+                    "description": "Refus automatique en dessous de 500",
+                    "than": "declined",
+                    "conditions": [
+                        { "field_key": "credit_score", "condition": "$lt",     "value": "500" },
+                        { "field_key": "income",       "condition": "$is_set", "value": "" },
+                        { "field_key": "employed",     "condition": "$is_set", "value": "" },
+                        { "field_key": "country",      "condition": "$is_set", "value": "" }
+                    ]
+                }
+            ]
+        }
+    ]
+}

@@ -16,6 +16,8 @@ namespace App\Http\Controllers;
 use Nebo15\REST\Response;
 use Illuminate\Http\Request;
 use App\Services\ConditionsTypes;
+use App\Services\TableExportService;
+use App\Services\TableImportService;
 use Nebo15\REST\AbstractController;
 use Nebo15\REST\Interfaces\ListableInterface;
 
@@ -27,6 +29,9 @@ use Nebo15\REST\Interfaces\ListableInterface;
 class TablesController extends AbstractController
 {
     protected $repositoryClassName = 'App\Repositories\TablesRepository';
+
+    private TableExportService $exportService;
+    private TableImportService $importService;
 
     protected $validationRules = [
         'create' => [],
@@ -49,8 +54,15 @@ class TablesController extends AbstractController
      * @param Response        $response
      * @param ConditionsTypes $conditionsTypes
      */
-    public function __construct(Request $request, Response $response, ConditionsTypes $conditionsTypes)
-    {
+    public function __construct(
+        Request $request,
+        Response $response,
+        ConditionsTypes $conditionsTypes,
+        TableExportService $exportService,
+        TableImportService $importService
+    ) {
+        $this->exportService = $exportService;
+        $this->importService = $importService;
         // Build the comma-separated list of valid condition operators for use in "in:" rules
         $condRules = $conditionsTypes->getConditionsRules();
         $rules = [
@@ -154,5 +166,97 @@ class TablesController extends AbstractController
         return $this->response->json(
             $this->getRepository()->analyzeTableDecisions($id, $variant_id)->toArray()
         );
+    }
+
+    /**
+     * Export a decision table as a downloadable file.
+     *
+     * Accepts a ?format=csv|excel|json query parameter (defaults to json).
+     * For CSV and Excel only the first variant is exported. JSON exports all variants.
+     *
+     * @param  string $id  MongoDB ObjectID of the table
+     * @return \Symfony\Component\HttpFoundation\Response
+     */
+    public function export($id)
+    {
+        $format   = strtolower($this->request->query('format', 'json'));
+        $table    = $this->getRepository()->read($id);
+        $filename = $this->sanitizeFilename($table->title);
+
+        switch ($format) {
+            case 'csv':
+                $content = $this->exportService->toCsv($table);
+                return response($content, 200, [
+                    'Content-Type'        => 'text/csv; charset=UTF-8',
+                    'Content-Disposition' => 'attachment; filename="' . $filename . '.csv"',
+                ]);
+
+            case 'excel':
+                $tmpPath = $this->exportService->toExcel($table);
+                return response()->download($tmpPath, $filename . '.xlsx', [
+                    'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ])->deleteFileAfterSend(true);
+
+            case 'json':
+            default:
+                $content = $this->exportService->toJson($table);
+                return response($content, 200, [
+                    'Content-Type'        => 'application/json; charset=UTF-8',
+                    'Content-Disposition' => 'attachment; filename="' . $filename . '.json"',
+                ]);
+        }
+    }
+
+    /**
+     * Import a decision table from an uploaded CSV, Excel, or JSON file.
+     *
+     * The file is imported into the current project (X-Application header).
+     * A new table is always created — existing tables are never overwritten.
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function import()
+    {
+        $this->validate($this->request, [
+            'file' => 'required|file|max:10240',
+        ]);
+
+        $file = $this->request->file('file');
+        $ext  = strtolower($file->getClientOriginalExtension());
+
+        if (!in_array($ext, ['json', 'csv', 'xlsx', 'xls'])) {
+            return $this->response->json([
+                'message' => 'Format de fichier non supporté. Formats acceptés: json, csv, xlsx, xls.',
+            ], 422);
+        }
+
+        try {
+            $table = $this->importService->fromFile($file);
+        } catch (\RuntimeException $e) {
+            // Structural validation errors from the import service
+            return $this->response->json([
+                'message' => 'Erreurs de validation dans le fichier importé.',
+                'errors'  => json_decode($e->getMessage(), true) ?? [$e->getMessage()],
+            ], 422);
+        } catch (\InvalidArgumentException $e) {
+            return $this->response->json([
+                'message' => $e->getMessage(),
+            ], 422);
+        }
+
+        return $this->response->json($table->toArray(), 201);
+    }
+
+    /**
+     * Sanitize a table title for use as a filename.
+     * Replaces anything that is not alphanumeric, dash, or underscore with "_".
+     *
+     * @param  string $title
+     * @return string
+     */
+    private function sanitizeFilename(string $title): string
+    {
+        $safe = preg_replace('/[^a-z0-9_\-]/i', '_', $title ?? 'table');
+        return mb_substr($safe ?: 'table', 0, 64);
     }
 }
