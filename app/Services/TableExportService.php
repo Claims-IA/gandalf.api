@@ -11,7 +11,9 @@
  *                  Conditions are encoded as "operator:value" (e.g. "$gte:18").
  *                  "*" means no condition for that field in the rule.
  *
- * Only the first variant is exported for CSV/Excel. JSON exports all variants.
+ * The default variant (is_default = true) is exported for CSV/Excel.
+ * JSON exports all variants: the default variant under the "table" key,
+ * and the others under the "variants" key.
  *
  * @package App\Services
  */
@@ -39,6 +41,27 @@ class TableExportService
         $data = $this->stripIds($data);
         unset($data['applications']);
 
+        // Split variants: default variant → "table" key; others → "variants" key
+        $defaultVariant = null;
+        $otherVariants  = [];
+        foreach ($data['variants'] ?? [] as $variant) {
+            if (!empty($variant['is_default'])) {
+                $defaultVariant = $variant;
+            } else {
+                $otherVariants[] = $variant;
+            }
+        }
+
+        // Fallback: if no variant is flagged, treat the first one as default
+        if ($defaultVariant === null && !empty($data['variants'])) {
+            $defaultVariant = array_shift($data['variants']);
+            $otherVariants  = array_values($data['variants']);
+        }
+
+        unset($data['variants']);
+        $data['table']    = $defaultVariant;
+        $data['variants'] = $otherVariants;
+
         return json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
@@ -51,7 +74,7 @@ class TableExportService
     public function toCsv(Table $table): string
     {
         $fieldKeys = $this->buildFieldKeys($table);
-        $variant   = $this->getFirstVariant($table);
+        $variant   = $this->getDefaultVariant($table);
 
         $lines = [];
 
@@ -148,11 +171,16 @@ class TableExportService
     // -------------------------------------------------------------------------
 
     /**
-     * Return the first variant of the table, or null if none exist.
+     * Return the default variant (is_default = true), falling back to the first one.
      */
-    private function getFirstVariant(Table $table)
+    private function getDefaultVariant(Table $table)
     {
         $variants = $table->variants()->get();
+        foreach ($variants as $variant) {
+            if ($variant->is_default) {
+                return $variant;
+            }
+        }
         return count($variants) > 0 ? $variants[0] : null;
     }
 
@@ -224,7 +252,9 @@ class TableExportService
 
         if (isset($data['variants']) && is_array($data['variants'])) {
             foreach ($data['variants'] as &$variant) {
-                unset($variant['_id']);
+                // Strip identity and system-managed fields; keep is_default (portable)
+                unset($variant['_id'], $variant['created_at'], $variant['created_by'],
+                      $variant['updated_at'], $variant['updated_by']);
                 if (isset($variant['rules']) && is_array($variant['rules'])) {
                     foreach ($variant['rules'] as &$rule) {
                         unset($rule['_id'], $rule['probability'], $rule['requests']);

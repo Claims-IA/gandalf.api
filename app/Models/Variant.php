@@ -26,12 +26,17 @@ namespace App\Models;
  */
 class Variant extends Base
 {
+    // Timestamps are managed manually in Table::setVariants() because embedded
+    // documents are not subject to Eloquent's automatic timestamp handling.
+    public $timestamps = false;
+
     protected $attributes = [
-        'title' => '',
-        'description' => '',
-        'default_title' => '',
+        'title'               => '',
+        'description'         => '',
+        'default_title'       => '',
         'default_description' => '',
-        'probability' => 0,
+        'probability'         => 0,
+        'is_default'          => false,
     ];
 
     protected $visible = [
@@ -42,6 +47,11 @@ class Variant extends Base
         'default_title',
         'default_description',
         'probability',
+        'is_default',
+        'created_at',
+        'created_by',
+        'updated_at',
+        'updated_by',
         'rules',
         'fields',
     ];
@@ -55,14 +65,20 @@ class Variant extends Base
         'default_decision',
         'matching_type',
         'probability',
+        'is_default',
+        'created_at',
+        'created_by',
+        'updated_at',
+        'updated_by',
     ];
 
     protected $casts = [
-        '_id' => 'string',
-        'title',
-        'description',
-        'default_title' => 'string',
+        '_id'          => 'string',
+        'title'        => 'string',
+        'description'  => 'string',
+        'default_title'       => 'string',
         'default_description' => 'string',
+        'is_default'   => 'boolean',
     ];
 
     /**

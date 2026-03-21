@@ -131,9 +131,10 @@ class Table extends Base implements ListableInterface, Applicationable
         // Include variant summaries so the frontend can show variant picker without fetching full table
         $array['variants'] = $this->variants()->get()->map(function (Variant $variant) {
             return [
-                '_id' => $variant->_id,
-                'title' => $variant->title,
-                'description' => $variant->description,
+                '_id'        => $variant->_id,
+                'title'      => $variant->title,
+                'description'=> $variant->description,
+                'is_default' => (bool)$variant->is_default,
             ];
         });
 
@@ -168,18 +169,62 @@ class Table extends Base implements ListableInterface, Applicationable
     /**
      * Replace all embedded variants with a new set (including their rules).
      *
-     * Deletes existing variants first, then creates Variant models and delegates
-     * rule creation to Variant::setRules(). Returns $this for chaining.
+     * Snapshots existing variants before deletion to preserve immutable fields
+     * (created_at, created_by, is_default) across updates. Sets updated_at and
+     * updated_by on every variant using the currently authenticated user.
+     *
+     * is_default rules:
+     *   - Preserved from the existing variant when its _id matches.
+     *   - New variants (no matching _id) receive is_default = false.
+     *   - If no variant ends up with is_default = true, the first one is promoted.
      *
      * @param  array $variants  Array of variant definition arrays (each containing 'rules').
      * @return $this
      */
     public function setVariants($variants)
     {
-        // Clear existing variants before writing the new set
+        // Snapshot existing variants indexed by string _id before they are deleted
+        $existing = [];
+        foreach ($this->variants()->get() as $v) {
+            $existing[strval($v->_id)] = $v;
+        }
+
+        $now  = \Carbon\Carbon::now();
+        $user = \Auth::guard()->user();
+        $uid  = $user ? strval($user->getId()) : null;
+
         $this->variants()->delete();
-        foreach ($variants as $variant) {
-            $this->variants()->associate((new Variant($variant))->setRules($variant['rules']));
+
+        $hasDefault  = false;
+        $builtModels = [];
+
+        foreach ($variants as $variantData) {
+            $existingId = isset($variantData['_id']) ? strval($variantData['_id']) : null;
+            $prev       = ($existingId && isset($existing[$existingId])) ? $existing[$existingId] : null;
+
+            // Preserve is_default from the database; new variants default to false
+            $isDefault = $prev ? (bool)$prev->is_default : false;
+
+            // Preserve created_at / created_by for existing variants
+            $variantData['is_default']  = $isDefault;
+            $variantData['created_at']  = $prev ? $prev->created_at : $now;
+            $variantData['created_by']  = $prev ? $prev->created_by : $uid;
+            $variantData['updated_at']  = $now;
+            $variantData['updated_by']  = $uid;
+
+            if ($isDefault) {
+                $hasDefault = true;
+            }
+
+            $model = (new Variant($variantData))->setRules($variantData['rules'] ?? []);
+            $this->variants()->associate($model);
+            $builtModels[] = $model;
+        }
+
+        // Ensure exactly one variant carries is_default = true (promote the first if none do)
+        if (!$hasDefault && !empty($builtModels)) {
+            $builtModels[0]->is_default = true;
+            $this->variants()->associate($builtModels[0]);
         }
 
         return $this;

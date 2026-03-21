@@ -92,6 +92,11 @@ class TableImportService
 
     /**
      * Parse a JSON string into a table data array.
+     *
+     * Supports the current export format where the default variant lives under
+     * the "table" key and additional variants live under "variants". Also accepts
+     * the legacy flat format where all variants are in a single "variants" array.
+     *
      * _id fields are stripped so the import always creates a fresh document.
      *
      * @param  string $content
@@ -107,6 +112,18 @@ class TableImportService
 
         if (!is_array($data)) {
             throw new \InvalidArgumentException('Le fichier JSON doit contenir un objet à la racine.');
+        }
+
+        // Current format: default variant under "table", others under "variants"
+        if (isset($data['table'])) {
+            $defaultVariant             = $data['table'];
+            $defaultVariant['is_default'] = true;
+            $otherVariants              = $data['variants'] ?? [];
+            foreach ($otherVariants as &$v) {
+                $v['is_default'] = false;
+            }
+            $data['variants'] = array_merge([$defaultVariant], array_values($otherVariants));
+            unset($data['table']);
         }
 
         return $this->stripIds($data);
@@ -269,6 +286,7 @@ class TableImportService
                     'default_decision'    => $metadata['default_decision'] ?? '',
                     'default_title'       => '',
                     'default_description' => '',
+                    'is_default'          => true,
                     'rules'               => $rules,
                 ]
             ],
