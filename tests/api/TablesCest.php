@@ -570,6 +570,69 @@ class TablesCest
         }
     }
 
+    public function ruleContains(ApiTester $I)
+    {
+        $I->createAndLoginUser();
+        $I->createProjectAndSetHeader();
+        $table = $I->createTable([
+            'title' => 'Test contains',
+            'description' => 'Test contains operator',
+            'matching_type' => 'decision',
+            'decision_type' => 'alpha_num',
+            'fields' => [
+                [
+                    'key' => 'text',
+                    'title' => 'Text',
+                    'source' => 'request',
+                    'type' => 'string',
+                    'preset' => null,
+                ],
+            ],
+            'variants' => [
+                [
+                    'default_decision' => 'Decline',
+                    'rules' => [
+                        [
+                            'than' => 'Approve',
+                            'title' => '',
+                            'description' => '',
+                            'conditions' => [
+                                [
+                                    'field_key' => 'text',
+                                    'condition' => '$contains',
+                                    'value' => 'ty',
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+        // [field_value, expected_matched]
+        $data = [
+            'azerty' => true,   // "azerty" contains "ty"
+            'AZERTY' => true,   // case-insensitive: "AZERTY" contains "ty"
+            'AZ'     => false,  // "AZ" does not contain "ty"
+            'hello'  => false,  // "hello" does not contain "ty"
+        ];
+        foreach ($data as $value => $matched) {
+            $id = $I->makeDecision($table->_id, ['text' => $value])->_id;
+            $I->sendGET('api/v1/admin/decisions/' . $id);
+            $I->assertResponseDataFields([
+                'rules' => [
+                    'conditions' => [
+                        [
+                            'field_key' => 'text',
+                            'condition' => '$contains',
+                            'value' => 'ty',
+                            'matched' => $matched,
+                        ],
+                    ],
+                ],
+            ]);
+        }
+    }
+
     public function ruleEqual(ApiTester $I)
     {
         $I->createAndLoginUser();

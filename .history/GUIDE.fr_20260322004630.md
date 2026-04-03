@@ -171,11 +171,11 @@ Un utilisateur peut appartenir à plusieurs applications avec des rôles différ
 
 #### Rôles et permissions
 
-| Rôle         | Droits                                                               |
-|--------------|----------------------------------------------------------------------|
-| **Admin**    | Gestion complète : tables, variantes, règles, utilisateurs du projet |
-| **Manager**  | Gestion des tables et règles, lecture des décisions                  |
-| **Consumer** | Exécution des tables (appel au moteur de décision) uniquement        |
+| Rôle         | Droits                                                                   |
+|--------------|--------------------------------------------------------------------------|
+| **Admin**    | **Gestion complète** : tables, variantes, règles, utilisateurs du projet |
+| **Manager**  | **Gestion des tables et règles**, lecture des décisions                  |
+| **Consumer** | **Exécution des tables** (appel au moteur de décision) uniquement        |
 
 Les rôles sont attribués lors de l'invitation d'un utilisateur à une application.
 
@@ -234,6 +234,51 @@ Une **Condition** évalue un champ d'entrée avec un opérateur :
 | `$is_null`       | La valeur est absente ou nulle                               | —                              |
 | `$any`           | Toujours vrai (passe-partout)                                | —                              |
 
+##### Opérateurs de comparaison
+
+| Nom                   | Symbole | Code interne | Description                              |
+|-----------------------|:-------:|--------------|------------------------------------------|
+| EQUAL                 | =       | $eq          | Egal à (valeur numérique ou texte)       |
+| NOT_EQUAL             | ≠       | $ne          | Différent de (valeur numérique ou texte) |
+| GREATER_THEN          | >       | $gt          | Supérieur à (valeur numérique)           |
+| GREATER_OR_EQUAL_THEN | ≥       | $gte         | Supérieur ou égal à (valeur numérique)   |
+| LOWER_THEN            | <       | $lt          | Inférieur à (valeur numérique)           |
+| LOWER_OR_EQUAL_THEN   | ≤       | $lte         | Inférieur ou égal à (valeur numérique)   |
+
+##### Opérateurs de collection
+
+| Nom      | Symbole  | Code interne | Description                                           |
+|----------|:--------:|--------------|-------------------------------------------------------|
+| IN       | ∈        | $in          | La valeur est dans l'ensemble de valeurs défini       |
+| NOT_IN   | ∉        | $nin         | La valeur n'est pas dans l'ensemble de valeurs défini |
+| CONTAINS | contains | $contains    | ???                                                   |
+
+##### Opérateurs d'état
+
+| Nom     | Symbole | Code interne | Description                                          |
+|---------|:-------:|--------------|------------------------------------------------------|
+| IS_SET  | is set  | $is_set      | Vrai si une valeur est définie. Contraire de is_null |
+| IS_NULL | is null | $is_null     | Vrai si la valeur est null. Contraire de is_set      |
+| ANY     | any     | $any         | Toujours vrai, qu'il y ait une valeur ou non         |
+
+##### Opérateurs d'intervalle (Between)
+
+N.B. Ces opérateurs ne s'appliquent qu'à des valeurs numériques
+
+| Nom           | Notation  | Code interne   | Description                                                   |
+|---------------|:---------:|----------------|---------------------------------------------------------------|
+| BETWEEN       | [between] | $between       | Valeur dans l'intervalle, bornes incluses                     |
+| BETWEEN_EXCL  | ]between[ | $between_excl  | Valeur dans l'intervalle, bornes exclues                      |
+| BETWEEN_LEXCL | ]between] | $between_lexcl | Valeur dans l'intervalle, borne gauche exclue, droite incluse |
+| BETWEEN_REXCL | [between[ | $between_rexcl | Valeur dans l'intervalle, borne gauche incluse, droite exclue |
+
+Remarques :
+
+- **$is_set**, **$is_null**, **$any** ne nécessitent pas de valeur
+- La disponibilité des opérateurs varie selon le type de champ (number vs string)
+- Définis dans conditions.js
+
+
 #### Flux d'évaluation
 
 Lors d'un appel au moteur de décision (`POST /api/v1/tables/{id}/decisions`) :
@@ -259,7 +304,7 @@ Les **Variantes** permettent de tester différentes versions de règles sur un m
 Le comportement de sélection est contrôlé par `variants_probability` au niveau de la table :
 
 | Valeur | Comportement |
-|--------|--------------|
+|--------|-------------|
 | `first` | Toujours utiliser la première variante (ou celle marquée `is_default = true`). |
 | `random` | Sélection aléatoire uniforme entre toutes les variantes. |
 | `percent` | Sélection pondérée. Chaque variante a un champ `probability` (1–100) ; la somme doit faire 100. |

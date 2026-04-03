@@ -2,8 +2,6 @@
 
 Gandalf API est un moteur de règles métier accessible via une API REST. Il permet de créer des tables de décision, de définir des règles et conditions, puis d'évaluer des données en temps réel pour obtenir une décision automatique. Cas d'usage typiques : scoring de crédit, détection de fraude, qualification de leads, personnalisation de contenu.
 
----
-
 ## Table des matières
 
 1. [Installation](#1-installation)
@@ -20,8 +18,6 @@ Gandalf API est un moteur de règles métier accessible via une API REST. Il per
    - 3.4 [Exécution de la table](#34-exécution-de-la-table)
    - 3.5 [Exécution d'une variante spécifique](#35-exécution-dune-variante-spécifique)
    - 3.6 [Gestion des utilisateurs et comptes](#36-gestion-des-utilisateurs-et-comptes)
-
----
 
 ## 1. Installation
 
@@ -82,8 +78,6 @@ L'API est disponible sur **http://localhost:8080**.
 | Nginx   | 8080      | 80             |
 | MongoDB | 27017     | 27017          |
 
----
-
 ### 1.2 Depuis les sources (développeurs)
 
 Pour développer ou contribuer au projet, il est possible de faire tourner l'application directement sur la machine hôte sans Docker.
@@ -138,9 +132,6 @@ composer require --dev codeception/codeception
 # Exécuter la suite de tests API
 ./vendor/bin/codecept run api
 ```
-
----
-
 ## 2. Principes et fonctionnalités
 
 ### 2.1 Comptes utilisateurs et rôles
@@ -171,15 +162,13 @@ Un utilisateur peut appartenir à plusieurs applications avec des rôles différ
 
 #### Rôles et permissions
 
-| Rôle         | Droits                                                               |
-|--------------|----------------------------------------------------------------------|
-| **Admin**    | Gestion complète : tables, variantes, règles, utilisateurs du projet |
-| **Manager**  | Gestion des tables et règles, lecture des décisions                  |
-| **Consumer** | Exécution des tables (appel au moteur de décision) uniquement        |
+| Rôle         | Droits                                                                   |
+|--------------|--------------------------------------------------------------------------|
+| **Admin**    | **Gestion complète** : tables, variantes, règles, utilisateurs du projet |
+| **Manager**  | **Gestion des tables et règles**, lecture des décisions                  |
+| **Consumer** | **Exécution des tables** (appel au moteur de décision) uniquement        |
 
 Les rôles sont attribués lors de l'invitation d'un utilisateur à une application.
-
----
 
 ### 2.2 Tables, règles et conditions
 
@@ -248,8 +237,6 @@ Lors d'un appel au moteur de décision (`POST /api/v1/tables/{id}/decisions`) :
 6. Si aucune règle ne correspond, la valeur `default_decision` de la variante est retournée.
 7. Une **Décision** immuable est enregistrée avec un snapshot complet (données d'entrée, règles évaluées, résultat).
 
----
-
 ### 2.3 Variantes et A/B testing
 
 Les **Variantes** permettent de tester différentes versions de règles sur un même flux de données. Chaque table peut avoir plusieurs variantes, chacune avec son propre jeu de règles.
@@ -259,7 +246,7 @@ Les **Variantes** permettent de tester différentes versions de règles sur un m
 Le comportement de sélection est contrôlé par `variants_probability` au niveau de la table :
 
 | Valeur | Comportement |
-|--------|--------------|
+|--------|-------------|
 | `first` | Toujours utiliser la première variante (ou celle marquée `is_default = true`). |
 | `random` | Sélection aléatoire uniforme entre toutes les variantes. |
 | `percent` | Sélection pondérée. Chaque variante a un champ `probability` (1–100) ; la somme doit faire 100. |
@@ -270,15 +257,11 @@ Il est aussi possible de **forcer une variante** en passant son `_id` dans le co
 
 Chaque table doit avoir exactement une variante avec `is_default: true`. Cette variante est utilisée comme référence lors de la sélection `first`.
 
----
-
 ## 3. Scénario d'utilisation
 
 Ce scénario illustre la création et l'utilisation d'une table de **scoring de risque crédit** qui évalue les demandes de prêt et retourne une décision : `Approuvé`, `Révision manuelle` ou `Refusé`.
 
 > **Convention** : remplacer `{APP_ID}` par l'ObjectID MongoDB de votre application, et les tokens par ceux obtenus lors de l'authentification.
-
----
 
 ### 3.1 Authentification
 
@@ -310,8 +293,6 @@ Content-Type: application/json
 ```
 
 Utiliser `access_token` dans tous les appels suivants.
-
----
 
 ### 3.2 Création d'une table
 
@@ -433,8 +414,6 @@ Content-Type: application/json
 
 Conserver l'`_id` de la table (`65f1a2b3c4d5e6f7a8b9c0d1`) et celui de la variante (`65f1a2b3c4d5e6f7a8b9c0d5`) pour les étapes suivantes.
 
----
-
 ### 3.3 Modification de la table
 
 La mise à jour d'une table se fait via `PUT /api/v1/admin/tables/{id}`. 
@@ -533,8 +512,6 @@ Pour ajouter une règle, inclure un nouvel objet **sans `_id`** dans le tableau 
 
 Pour supprimer une règle, **ne pas l'inclure** dans le tableau `rules` lors du `PUT`. Toutes les règles non présentes dans la requête sont supprimées.
 
----
-
 ### 3.4 Exécution de la table
 
 L'évaluation d'une table se fait avec des **identifiants consumer** (client credentials) ou un token utilisateur avec le rôle approprié.
@@ -624,8 +601,6 @@ POST /api/v1/tables/65f1a2b3c4d5e6f7a8b9c0d1/decisions
 }
 ```
 
----
-
 ### 3.5 Exécution d'une variante spécifique
 
 Lorsque plusieurs variantes existent sur une table (A/B testing), il est possible de **forcer l'utilisation d'une variante particulière** en passant son identifiant dans le corps de la requête.
@@ -693,8 +668,6 @@ Content-Type: application/json
 ```
 
 Le champ `variant_id` force l'utilisation de la variante désignée, indépendamment de la stratégie de sélection configurée.
-
----
 
 ### 3.6 Gestion des utilisateurs et comptes
 
@@ -850,8 +823,6 @@ X-Application: {APP_ID}
   ]
 }
 ```
-
----
 
 ## Annexe — Récapitulatif des endpoints principaux
 

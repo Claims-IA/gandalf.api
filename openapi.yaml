@@ -334,6 +334,7 @@ components:
         | `$between_rexcl` | min ≤ x < max (right exclusive) | `"min;max"` |
         | `$in` | Value in comma-separated list | `"a,b,c"` |
         | `$nin` | Value not in comma-separated list | `"a,b,c"` |
+        | `$contains` (∋) | String contains substring (case-insensitive) | string |
       enum:
         - "$is_set"
         - "$is_null"
@@ -350,6 +351,7 @@ components:
         - "$between_rexcl"
         - "$in"
         - "$nin"
+        - "$contains"
       example: "$gte"
 
     Condition:

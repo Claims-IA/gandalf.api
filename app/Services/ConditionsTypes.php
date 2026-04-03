@@ -93,6 +93,13 @@ class ConditionsTypes
                     return !in_array($field_value, $this->explodeValue($condition_value));
                 }
             ],
+            '$contains' => [
+                // Vrai si la valeur du champ contient la sous-chaîne (insensible à la casse)
+                'input_type' => '',
+                'function' => function ($condition_value, $field_value) {
+                    return stripos((string) $field_value, (string) $condition_value) !== false;
+                }
+            ],
             '$any' => [
                 // Toujours vrai, quelle que soit la valeur (y compris null)
                 'input_type' => '',

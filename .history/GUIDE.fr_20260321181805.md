@@ -171,11 +171,11 @@ Un utilisateur peut appartenir à plusieurs applications avec des rôles différ
 
 #### Rôles et permissions
 
-| Rôle         | Droits                                                               |
-|--------------|----------------------------------------------------------------------|
-| **Admin**    | Gestion complète : tables, variantes, règles, utilisateurs du projet |
-| **Manager**  | Gestion des tables et règles, lecture des décisions                  |
-| **Consumer** | Exécution des tables (appel au moteur de décision) uniquement        |
+| Rôle         | Droits                                                                   |
+|--------------|--------------------------------------------------------------------------|
+| **Admin**    | **Gestion complète** : tables, variantes, règles, utilisateurs du projet |
+| **Manager**  | **Gestion des tables et règles**, lecture des décisions                  |
+| **Consumer** | **Exécution des tables** (appel au moteur de décision) uniquement        |
 
 Les rôles sont attribués lors de l'invitation d'un utilisateur à une application.
 
@@ -259,7 +259,7 @@ Les **Variantes** permettent de tester différentes versions de règles sur un m
 Le comportement de sélection est contrôlé par `variants_probability` au niveau de la table :
 
 | Valeur | Comportement |
-|--------|--------------|
+|--------|-------------|
 | `first` | Toujours utiliser la première variante (ou celle marquée `is_default = true`). |
 | `random` | Sélection aléatoire uniforme entre toutes les variantes. |
 | `percent` | Sélection pondérée. Chaque variante a un champ `probability` (1–100) ; la somme doit faire 100. |
