@@ -1,43 +1,42 @@
 # Gandalf Decision Engine — API Guide
 
-> **Machine-readable specification:** [openapi.yaml](openapi.yaml) (OpenAPI 3.0)
+> **Machine-readable specification:** [openapi.yaml][1] (OpenAPI 3.0)
 
 ---
 
 ## Table of contents
 
-1. [Overview](#overview)
-2. [Core concepts](#core-concepts)
-3. [Authentication](#authentication)
-4. [Application context header](#application-context-header)
-5. [Request & response format](#request--response-format)
-6. [Pagination](#pagination)
-7. [Error handling](#error-handling)
-8. [Sandbox mode](#sandbox-mode)
-9. [Endpoints reference](#endpoints-reference)
-   - [Health](#health)
-   - [Auth — OAuth 2.0](#auth--oauth-20)
-   - [Users](#users)
-   - [Projects](#projects)
-   - [Decision Tables](#decision-tables)
-   - [Decisions (Admin)](#decisions-admin)
-   - [Decisions (Consumer)](#decisions-consumer)
-   - [Changelog](#changelog)
-10. [Decision engine deep dive](#decision-engine-deep-dive)
-    - [Matching types](#matching-types)
-    - [Condition operators](#condition-operators)
-    - [Presets](#presets)
-    - [Variant selection](#variant-selection)
-11. [Field types](#field-types)
-12. [Decision types](#decision-types)
-13. [Quick-start guide](#quick-start-guide)
+1. [Overview][2]
+2. [Core concepts][3]
+3. [Authentication][4]
+4. [Application context header][5]
+5. [Request & response format][6]
+6. [Pagination][7]
+7. [Error handling][8]
+8. [Sandbox mode][9]
+9. [Endpoints reference][10]
+   10. [Health][11]
+   11. [Auth — OAuth 2.0][12]
+   12. [Users][13]
+   13. [Projects][14]
+   14. [Decision Tables][15]
+   15. [Decisions (Admin)][16]
+   16. [Decisions (Consumer)][17]
+   17. [Changelog][18]
+10. [Decision engine deep dive][19]
+	- [Matching types][20]
+	- [Condition operators][21]
+	- [Presets][22]
+	- [Variant selection][23]
+11. [Field types][24]
+12. [Decision types][25]
+13. [Quick-start guide][26]
 
 ---
 
 ## Overview
 
-Gandalf is a **rule-based decision engine**. You define *decision tables* that
-describe the logic for a business decision (e.g. credit approval, fraud scoring,
+Gandalf is a **rule-based decision engine**. You define *decision tables* that describe the logic for a business decision (e.g. credit approval, fraud scoring,
 routing). Your application then calls the API at runtime with field values and
 receives back a deterministic (or probabilistic) decision.
 
@@ -48,15 +47,15 @@ complete audit trail with full input/output snapshots.
 
 ## Core concepts
 
-| Concept | Description |
-|---------|-------------|
-| **Table** | A decision table. Contains the field schema, matching strategy, and one or more variants. |
-| **Field** | An input field the consumer must supply (e.g. `credit_score`, `age`). Has a type and an optional preset transform. |
-| **Variant** | An A/B testing variant within a table. Contains an ordered list of rules. Only one variant is evaluated per request. |
-| **Rule** | A set of conditions (all must match — AND logic). If it fires, it contributes its `than` value to the final decision. |
-| **Condition** | A comparison of a field value against a threshold using an operator (e.g. `$gte 700`). |
-| **Preset** | A pre-condition transform applied to a field value before conditions evaluate it (e.g. convert any non-null value to `true`). |
-| **Decision** | Immutable audit record created every time a table is evaluated. Stores the full request snapshot, matched rules, and final result. |
+| Concept       | Description                                                                                                                        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Table**     | A decision table. Contains the field schema, matching strategy, and one or more variants.                                          |
+| **Field**     | An input field the consumer must supply (e.g. `credit_score`, `age`). Has a type and an optional preset transform.                 |
+| **Variant**   | An A/B testing variant within a table. Contains an ordered list of rules. Only one variant is evaluated per request.               |
+| **Rule**      | A set of conditions (all must match — AND logic). If it fires, it contributes its `than` value to the final decision.              |
+| **Condition** | A comparison of a field value against a threshold using an operator (e.g. `$gte 700`).                                             |
+| **Preset**    | A pre-condition transform applied to a field value before conditions evaluate it (e.g. convert any non-null value to `true`).      |
+| **Decision**  | Immutable audit record created every time a table is evaluated. Stores the full request snapshot, matched rules, and final result. |
 
 ---
 
@@ -184,15 +183,15 @@ GET /api/v1/admin/tables?size=50&page=2
 }
 ```
 
-| HTTP Code | Meaning |
-|-----------|---------|
-| `200` | Success |
-| `201` | Resource created |
-| `401` | Unauthenticated |
-| `403` | Forbidden (e.g. inactive admin) |
-| `404` | Resource not found |
-| `410` | Token expired |
-| `422` | Validation error |
+| HTTP Code | Meaning                         |
+| --------- | ------------------------------- |
+| `200`     | Success                         |
+| `201`     | Resource created                |
+| `401`     | Unauthenticated                 |
+| `403`     | Forbidden (e.g. inactive admin) |
+| `404`     | Resource not found              |
+| `410`     | Token expired                   |
+| `422`     | Validation error                |
 
 ---
 
@@ -236,11 +235,11 @@ Returns `ok` (plain text). No authentication required. For load balancer health 
 
 #### `POST /oauth/token`
 
-| Grant type | Use case |
-|------------|----------|
-| `password` | User logs in with username + password |
-| `client_credentials` | Machine-to-machine (consumer) auth |
-| `refresh_token` | Exchange a refresh token for a new access token |
+| Grant type           | Use case                                        |
+| -------------------- | ----------------------------------------------- |
+| `password`           | User logs in with username + password           |
+| `client_credentials` | Machine-to-machine (consumer) auth              |
+| `refresh_token`      | Exchange a refresh token for a new access token |
 
 ---
 
@@ -559,13 +558,13 @@ Restore a resource to a previous snapshot. A new changelog entry is created for 
 
 ### Matching types
 
-| Type | Behaviour |
-|------|-----------|
-| `first` | Stop at first matching rule. `than` value = final decision. |
-| `scoring_sum` | Evaluate all rules. Sum matching `than` values. |
-| `scoring_max` | Evaluate all rules. Take the highest matching `than` value. |
-| `scoring_min` | Evaluate all rules. Take the lowest matching `than` value. |
-| `scoring_count` | Evaluate all rules. Count how many matched. |
+| Type            | Behaviour                                                   |
+| --------------- | ----------------------------------------------------------- |
+| `first`         | Stop at first matching rule. `than` value = final decision. |
+| `scoring_sum`   | Evaluate all rules. Sum matching `than` values.             |
+| `scoring_max`   | Evaluate all rules. Take the highest matching `than` value. |
+| `scoring_min`   | Evaluate all rules. Take the lowest matching `than` value.  |
+| `scoring_count` | Evaluate all rules. Count how many matched.                 |
 
 Fallback: when no rule matches (or score is zero), the variant's `default_decision` is used.
 
@@ -573,23 +572,23 @@ Fallback: when no rule matches (or score is zero), the variant's `default_decisi
 
 ### Condition operators
 
-| Operator | Description | `value` format |
-|----------|-------------|----------------|
-| `$is_set` | Always `true` | — |
-| `$is_null` | Field value is `null` | — |
-| `$any` | Always `true` including `null` | — |
-| `$eq` | Equal to | any scalar |
-| `$ne` | Not equal to | any scalar |
-| `$gt` | Greater than | numeric |
-| `$gte` | Greater than or equal | numeric |
-| `$lt` | Less than | numeric |
-| `$lte` | Less than or equal | numeric |
-| `$between` | `min ≤ x ≤ max` | `"300;700"` |
-| `$between_excl` | `min < x < max` | `"300;700"` |
-| `$between_lexcl` | `min < x ≤ max` | `"300;700"` |
-| `$between_rexcl` | `min ≤ x < max` | `"300;700"` |
-| `$in` | Value in list | `"visa,mastercard"` |
-| `$nin` | Value not in list | `"visa,mastercard"` |
+| Operator         | Description                    | `value` format      |
+| ---------------- | ------------------------------ | ------------------- |
+| `$is_set`        | Always `true`                  | —                   |
+| `$is_null`       | Field value is `null`          | —                   |
+| `$any`           | Always `true` including `null` | —                   |
+| `$eq`            | Equal to                       | any scalar          |
+| `$ne`            | Not equal to                   | any scalar          |
+| `$gt`            | Greater than                   | numeric             |
+| `$gte`           | Greater than or equal          | numeric             |
+| `$lt`            | Less than                      | numeric             |
+| `$lte`           | Less than or equal             | numeric             |
+| `$between`       | `min ≤ x ≤ max`                | `"300;700"`         |
+| `$between_excl`  | `min < x < max`                | `"300;700"`         |
+| `$between_lexcl` | `min < x ≤ max`                | `"300;700"`         |
+| `$between_rexcl` | `min ≤ x < max`                | `"300;700"`         |
+| `$in`            | Value in list                  | `"visa,mastercard"` |
+| `$nin`           | Value not in list              | `"visa,mastercard"` |
 
 > **Null values:** Only `$is_null` and `$any` match a `null` field value. All other operators return `false`.
 
@@ -617,10 +616,10 @@ Preset results are cached per field per scoring run.
 
 ### Variant selection
 
-| Strategy | Behaviour |
-|----------|-----------|
-| `first` | Always use the first variant. Deterministic. |
-| `random` | Uniform random pick across all variants. |
+| Strategy  | Behaviour                                                                       |
+| --------- | ------------------------------------------------------------------------------- |
+| `first`   | Always use the first variant. Deterministic.                                    |
+| `random`  | Uniform random pick across all variants.                                        |
 | `percent` | Weighted random. Each variant has a `probability` (1–100). All must sum to 100. |
 
 Override per-request: include `variant_id` in the decision request body.
@@ -629,11 +628,11 @@ Override per-request: include `variant_id` in the decision request body.
 
 ## Field types
 
-| Type | Accepted values |
-|------|----------------|
+| Type      | Accepted values     |
+| --------- | ------------------- |
 | `numeric` | `700`, `3.14`, `-1` |
-| `boolean` | `true`, `false` |
-| `string` | Any text |
+| `boolean` | `true`, `false`     |
+| `string`  | Any text            |
 
 Keys are normalised: lowercased, spaces → underscores. The key `variant_id` is reserved.
 
@@ -641,12 +640,12 @@ Keys are normalised: lowercased, spaces → underscores. The key `variant_id` is
 
 ## Decision types
 
-| Type | Description |
-|------|-------------|
-| `alpha_num` | Alphanumeric string |
-| `numeric` | Number (required for scoring tables) |
-| `string` | Any string |
-| `json` | JSON-encoded string |
+| Type        | Description                          |
+| ----------- | ------------------------------------ |
+| `alpha_num` | Alphanumeric string                  |
+| `numeric`   | Number (required for scoring tables) |
+| `string`    | Any string                           |
+| `json`      | JSON-encoded string                  |
 
 ---
 
@@ -710,3 +709,30 @@ curl -X PUT https://api.example.com/api/v1/admin/decisions/<decision_id>/meta \
   -H "Content-Type: application/json" \
   -d '{"meta":{"transaction_id":"TXN-99999"}}'
 ```
+
+[1]:	openapi.yaml
+[2]:	#overview
+[3]:	#core-concepts
+[4]:	#authentication
+[5]:	#application-context-header
+[6]:	#request--response-format
+[7]:	#pagination
+[8]:	#error-handling
+[9]:	#sandbox-mode
+[10]:	#endpoints-reference
+[11]:	#health
+[12]:	#auth--oauth-20
+[13]:	#users
+[14]:	#projects
+[15]:	#decision-tables
+[16]:	#decisions-admin
+[17]:	#decisions-consumer
+[18]:	#changelog
+[19]:	#decision-engine-deep-dive
+[20]:	#matching-types
+[21]:	#condition-operators
+[22]:	#presets
+[23]:	#variant-selection
+[24]:	#field-types
+[25]:	#decision-types
+[26]:	#quick-start-guide
