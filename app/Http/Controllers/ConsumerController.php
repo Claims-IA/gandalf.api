@@ -14,7 +14,6 @@
 namespace App\Http\Controllers;
 
 use App\Exceptions\AdminIsNotActivatedException;
-use App\Models\Decision;
 use App\Models\User;
 use App\Services\Scoring;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
@@ -79,27 +78,6 @@ class ConsumerController extends Controller
         // The show_meta application setting controls whether rule details are included in the response
         return $this->response->json(
             $scoring->check($id, $request->all(), $application->_id, $application->getSettingsElem('show_meta', false))
-        );
-    }
-
-    /**
-     * List decisions visible to the consumer (reduced field set).
-     *
-     * Returns a paginated collection using toConsumerArray() which omits internal
-     * admin fields and exposes only the final decision, request snapshot, and
-     * matched rule summaries.
-     *
-     * @param  Request $request
-     * @return \Illuminate\Http\JsonResponse
-     */
-    public function decisions(Request $request)
-    {
-        return $this->response->jsonPaginator(
-            $this->decisionsRepository->readList($request->input('size')),
-            [],
-            function (Decision $decision) {
-                return $decision->toConsumerArray();
-            }
         );
     }
 
