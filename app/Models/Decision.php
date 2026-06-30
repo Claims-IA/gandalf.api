@@ -126,11 +126,16 @@ class Decision extends Base implements Applicationable
      * to just title, description, and decision outcome. Timestamps are formatted
      * as ISO-8601 strings to ensure consistent serialisation regardless of driver.
      *
+     * The `rules` breakdown is gated by the application's `show_meta` setting, in
+     * line with the live decision endpoint (POST /tables/{id}/decisions): when
+     * `show_meta` is disabled the key is omitted entirely.
+     *
+     * @param  bool $showMeta  Whether to include the per-rule summary.
      * @return array
      */
-    public function toConsumerArray()
+    public function toConsumerArray($showMeta = false)
     {
-        return [
+        $data = [
             '_id' => $this->getId(),
             'table' => $this->getTableArray(),
             'application' => $this->application,
@@ -140,15 +145,20 @@ class Decision extends Base implements Applicationable
             'request' => $this->request,
             self::CREATED_AT => $this->getAttribute(self::CREATED_AT)->toIso8601String(),
             self::UPDATED_AT => $this->getAttribute(self::UPDATED_AT)->toIso8601String(),
+        ];
+
+        if ($showMeta) {
             // Only expose the summary columns for each rule — not the full condition breakdown
-            'rules' => $this->rules()->get()->map(function (Rule $rule) {
+            $data['rules'] = $this->rules()->get()->map(function (Rule $rule) {
                 return [
                     'title' => $rule->title,
                     'description' => $rule->description,
                     'decision' => $rule->decision,
                 ];
-            })->toArray(),
-        ];
+            })->toArray();
+        }
+
+        return $data;
     }
 
     /**

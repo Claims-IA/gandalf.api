@@ -468,6 +468,32 @@ components:
             Weight percentage used when `variants_probability` is `percent`.
             All variant probabilities should sum to 100.
           example: 70
+        is_default:
+          type: boolean
+          description: >
+            Marks this variant as the table's default. Exactly one variant per
+            table carries `is_default: true` — when none is set, the first
+            variant is auto-promoted. The default variant is the one exported
+            under the `table` key and used for CSV/Excel export.
+          example: true
+        created_at:
+          type: string
+          format: date-time
+          description: When the variant was first created. Preserved across table updates.
+          example: "2024-01-15T10:30:00+0000"
+        created_by:
+          type: string
+          description: ObjectID of the user who created the variant.
+          example: "507f1f77bcf86cd799439011"
+        updated_at:
+          type: string
+          format: date-time
+          description: When the variant was last modified.
+          example: "2024-01-20T14:05:00+0000"
+        updated_by:
+          type: string
+          description: ObjectID of the user who last modified the variant.
+          example: "507f1f77bcf86cd799439011"
         rules:
           type: array
           items:
@@ -489,6 +515,10 @@ components:
         description:
           type: string
           example: "Standard scoring variant"
+        is_default:
+          type: boolean
+          description: Whether this variant is the table's default variant.
+          example: true
 
     # ── Table ────────────────────────────────────────────────────────────────
     Table:
@@ -571,8 +601,19 @@ components:
       type: object
       description: |
         Table representation used for JSON export and import.
-        Identical to `Table` but without `_id` fields — these are stripped on export
-        and ignored on import so that a fresh document is always created.
+
+        Like `Table` but with `_id` and system-managed fields stripped (timestamps,
+        `created_by`/`updated_by`) so a fresh document is always created on import.
+
+        **Variant layout.** The default variant is exported under the top-level
+        `table` key (a single variant object), while every other variant is listed
+        in the `variants` array. On import, the object under `table` is treated as
+        the default variant (`is_default: true`) and merged ahead of `variants`.
+
+        **Backward compatibility.** The legacy flat format — where *all* variants
+        (including the default) live in the `variants` array and there is no `table`
+        key — is still accepted on import. In that case the first variant is taken
+        as the default.
       properties:
         title:
           type: string
@@ -596,8 +637,19 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Field'
+        table:
+          description: >
+            The default variant, exported as a single object. On import this
+            variant is flagged `is_default: true`. Omitted only in the legacy flat
+            format (see schema description).
+          allOf:
+            - $ref: '#/components/schemas/Variant'
         variants:
           type: array
+          description: >
+            The non-default variants. In the legacy flat format this array instead
+            holds every variant, including the default one (which is then taken as
+            the first element).
           items:
             $ref: '#/components/schemas/Variant'
       required:
@@ -605,7 +657,7 @@ components:
         - matching_type
         - decision_type
         - fields
-        - variants
+        - table
 
     TableCreateUpdate:
       type: object
@@ -2079,6 +2131,48 @@ paths:
                     type: object
                   data:
                     $ref: '#/components/schemas/Analytics'
+
+  # ── Copy ──────────────────────────────────────────────────────────────────────
+  /api/v1/admin/tables/{id}/copyto/{project_id}:
+    post:
+      tags: [Tables]
+      summary: Copy a decision table to another project
+      description: |
+        Clones the decision table identified by `{id}` into the project identified
+        by `{project_id}`, including all fields, variants, rules, and conditions.
+
+        A brand-new table document is created in the target project — the source
+        table is left untouched and its `_id` is not reused. The source table is
+        resolved within the project given by the `X-Application` header, exactly
+        like all other admin endpoints.
+      operationId: copyTableTo
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the source decision table.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: project_id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the destination project (application).
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+      responses:
+        "200":
+          description: The newly created table in the destination project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Table'
+        "404":
+          description: Source table not found.
 
   # ── Decisions (Admin) ────────────────────────────────────────────────────────
   /api/v1/admin/decisions:

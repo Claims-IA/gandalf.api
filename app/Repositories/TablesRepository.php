@@ -49,8 +49,7 @@ class TablesRepository extends AbstractRepository
      */
     public function readListWithFilters(array $filters = [])
     {
-        // Note: $filter (singular) below is intentional — matches the loop variable
-        $size = isset($filter['size']) ? $filter['size'] : null;
+        $size = isset($filters['size']) ? $filters['size'] : null;
         if (!$filters) {
             return $this->readList($size);
         }

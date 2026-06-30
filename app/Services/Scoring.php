@@ -178,13 +178,9 @@ class Scoring
         // Persist the decision and notify analytics services
         $decision = (new Decision())->fill($scoring_data)->save();
         \Event::fire(new Make($decision));
-        $response = $decision->toConsumerArray();
-        // The 'rules' detail is gated by the application's show_meta setting
-        if (!$showMeta) {
-            unset($response['rules']);
-        }
-
-        return $response;
+        // The 'rules' detail is gated by the application's show_meta setting,
+        // applied directly inside toConsumerArray().
+        return $decision->toConsumerArray($showMeta);
     }
 
     /**

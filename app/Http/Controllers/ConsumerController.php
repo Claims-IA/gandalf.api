@@ -106,11 +106,20 @@ class ConsumerController extends Controller
     /**
      * Retrieve a single decision by ID using the consumer-safe representation.
      *
-     * @param  string $id  MongoDB ObjectID of the decision.
+     * The per-rule breakdown is gated by the application's `show_meta` setting,
+     * matching the live decision endpoint (tableCheck).
+     *
+     * @param  Application $application  Resolved from the X-Application header.
+     * @param  string      $id           MongoDB ObjectID of the decision.
      * @return \Illuminate\Http\JsonResponse
      */
-    public function decision($id)
+    public function decision(Application $application, $id)
     {
-        return $this->response->json($this->decisionsRepository->getConsumerDecision($id));
+        return $this->response->json(
+            $this->decisionsRepository->getConsumerDecision(
+                $id,
+                $application->getSettingsElem('show_meta', false)
+            )
+        );
     }
 }

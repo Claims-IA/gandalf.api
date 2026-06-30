@@ -72,12 +72,14 @@ class DecisionsRepository extends AbstractRepository
     /**
      * Retrieve a single decision using the consumer-safe field subset.
      *
-     * @param  string $id  MongoDB ObjectID of the decision.
+     * @param  string $id        MongoDB ObjectID of the decision.
+     * @param  bool   $showMeta  Whether to include the per-rule summary (gated by
+     *                           the application's `show_meta` setting).
      * @return array
      */
-    public function getConsumerDecision($id)
+    public function getConsumerDecision($id, $showMeta = false)
     {
-        return $this->read($id)->toConsumerArray();
+        return $this->read($id)->toConsumerArray($showMeta);
     }
 
     /**
