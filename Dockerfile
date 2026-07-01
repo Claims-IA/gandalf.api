@@ -11,11 +11,16 @@ RUN apk add --no-cache \
         icu-dev \
         libzip-dev \
         oniguruma-dev \
+        freetype-dev \
+        libjpeg-turbo-dev \
+        libpng-dev \
         unzip \
         zip \
     && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install \
         bcmath \
+        gd \
         intl \
         mbstring \
         opcache \
