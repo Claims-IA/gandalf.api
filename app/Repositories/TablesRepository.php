@@ -49,7 +49,11 @@ class TablesRepository extends AbstractRepository
      */
     public function readListWithFilters(array $filters = [])
     {
-        $size = isset($filters['size']) ? $filters['size'] : null;
+        // Cast to int: query-string values arrive as strings, but MongoDB's
+        // $limit stage requires a numeric argument (a string "20" throws a
+        // CommandException). Keep null when absent so the model's default
+        // page size applies.
+        $size = isset($filters['size']) ? (int) $filters['size'] : null;
         if (!$filters) {
             return $this->readList($size);
         }
