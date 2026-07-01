@@ -1,4 +1,17 @@
 <?php
+/**
+ * DatabaseSeeder
+ *
+ * Seeds the MongoDB database with demo data for local development and testing.
+ * Creates two users (admin and demo), a sample application with appropriate scope
+ * assignments, an OAuth2 client, and a "PSP Scoring" decision table with six rules
+ * covering common payment fraud signals (IP blacklist, delivery zone, country
+ * restriction, card brand, trusted banks, and turnover limits). All records use
+ * fixed ObjectIDs so the seed is idempotent — safe to run multiple times without
+ * creating duplicates.
+ *
+ * @package Database\Seeds
+ */
 
 use \MongoDB\BSON\ObjectID;
 use Illuminate\Database\Seeder;
@@ -16,8 +29,19 @@ class DatabaseSeeder extends Seeder
         $this->seedTable();
     }
 
+    /**
+     * Seed the users, application, and OAuth client.
+     *
+     * Deletes then re-inserts each document using a fixed ObjectID so the operation
+     * is idempotent. The admin user has full project scope; the demo user has
+     * read-only + decisions_make scope. The OAuth client is used by the frontend
+     * to authenticate against the token endpoints.
+     *
+     * @return void
+     */
     private function seedApplication()
     {
+        // Fixed ObjectIDs ensure re-running the seeder overwrites rather than duplicates
         $userId = new ObjectID('5774f3b7ce3c0c02ed0e63a0');
         $adminId = new ObjectID('576bf5f9ce3c0c02ee2d314e');
 
@@ -79,6 +103,9 @@ class DatabaseSeeder extends Seeder
             ]
         ]);
 
+        // Create Application
+        //      with user admin and default user
+        //      with consumer "demo"
         $app_id = new ObjectID("576bf5f9ce3c0c02ee2d314d");
         \DB::collection('applications')->where("_id", $app_id)->delete();
         \DB::collection('applications')->insert([
@@ -130,6 +157,7 @@ class DatabaseSeeder extends Seeder
             ]
         ]);
 
+        // Seed the OAuth2 client used by the demo frontend to obtain access tokens
         $oauth_id = new ObjectID("5745cc5af70466a1098b456e");
         \DB::collection('oauth_clients')->where("_id", $oauth_id)->delete();
         \DB::collection('oauth_clients')->insert([
@@ -139,6 +167,17 @@ class DatabaseSeeder extends Seeder
         ]);
     }
 
+    /**
+     * Seed a sample "PSP Scoring" decision table.
+     *
+     * Creates a scoring-type table (rules accumulate numeric scores) with 11 fields
+     * covering typical payment transaction attributes and 6 scoring rules. Positive
+     * scores indicate trust signals (e.g. trusted banks add +10) while negative scores
+     * indicate risk signals (e.g. non-GB country for GB-only merchant subtracts 100).
+     * The default score is 30 when no rule matches.
+     *
+     * @return void
+     */
     private function seedTable()
     {
         $table_id = new ObjectID("5745ce96f70466a2098b457c");

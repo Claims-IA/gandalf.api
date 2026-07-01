@@ -1,0 +1,2608 @@
+openapi: 3.0.3
+
+info:
+  title: Gandalf Decision Engine API
+  description: |
+    The **Gandalf Decision Engine** is a rule-based decision automation platform.
+    It allows you to define decision tables with typed input fields, weighted variants,
+    and conditional rules, then evaluate them in real time against submitted data.
+
+    ## Core concepts
+
+    - **Table** — a decision table that defines input fields, matching strategy, and one or more variants.
+    - **Variant** — an A/B testing variant within a table, containing an ordered list of rules.
+    - **Rule** — a set of conditions (AND-evaluated); if all pass, the rule "fires" its `than` value.
+    - **Decision** — an immutable audit record created every time a table is evaluated.
+    - **Field** — an input field descriptor (key, type, optional preset transform).
+    - **Preset** — a pre-condition transform applied to a field value before rule conditions evaluate it.
+
+    ## Authentication
+
+    The API uses two authentication mechanisms:
+
+    | Mechanism | Used for |
+    |-----------|----------|
+    | **OAuth 2.0 Bearer token** | Admin and user endpoints |
+    | **Consumer API key** (Basic auth or header) | Consumer/decision endpoints |
+
+    Most endpoints also require the **`X-Application`** header that identifies the project (application) context.
+
+    ### Sandbox mode
+
+    When `APP_ENV=local`, some responses include an extra `sandbox` object containing
+    tokens (email verification, password reset) that would normally be delivered by email.
+    This allows end-to-end testing without an email server.
+
+  version: "1.0.0"
+  contact:
+    name: Gandalf API Support
+
+servers:
+  - url: https://{host}
+    description: Your Gandalf installation
+    variables:
+      host:
+        default: localhost
+        description: Hostname of your Gandalf instance
+
+tags:
+  - name: Health
+    description: Service health check
+  - name: Auth
+    description: OAuth 2.0 token management
+  - name: Users
+    description: User registration, verification, and profile management
+  - name: Projects
+    description: Project (application) lifecycle — delete and export
+  - name: Tables
+    description: Decision table CRUD, analytics, export, and import
+  - name: Decisions (Admin)
+    description: Admin access to decision audit records
+  - name: Decisions (Consumer)
+    description: Consumer-facing decision evaluation and retrieval
+  - name: Changelog
+    description: Audit trail — history, diff, and rollback for decision tables
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Security schemes
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: >
+        OAuth 2.0 access token issued by `POST /oauth/token`.
+        Include as `Authorization: Bearer <token>`.
+    BasicAuth:
+      type: http
+      scheme: basic
+      description: >
+        OAuth client credentials (client_id : client_secret) encoded as Basic auth.
+        Required for public user endpoints (registration, password reset).
+    ConsumerAuth:
+      type: http
+      scheme: basic
+      description: >
+        API consumer credentials (consumer_id : consumer_secret) encoded as Basic auth.
+        Used for the consumer decision endpoints.
+
+  parameters:
+    XApplication:
+      name: X-Application
+      in: header
+      required: true
+      description: MongoDB ObjectID of the application (project) context.
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{24}$'
+        example: "507f1f77bcf86cd799439011"
+
+    PathId:
+      name: id
+      in: path
+      required: true
+      description: MongoDB ObjectID (24 hex characters).
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{24}$'
+        example: "507f1f77bcf86cd799439011"
+
+    QuerySize:
+      name: size
+      in: query
+      required: false
+      description: Number of items per page (default 20).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Reusable schemas
+  # ───────────────────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── Pagination wrapper ──────────────────────────────────────────────────
+    PaginatedResponse:
+      type: object
+      properties:
+        meta:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: 200
+        data:
+          type: array
+          items: {}
+        paging:
+          $ref: '#/components/schemas/Paging'
+
+    Paging:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Total number of items across all pages.
+          example: 42
+        per_page:
+          type: integer
+          description: Items returned per page.
+          example: 20
+        current_page:
+          type: integer
+          example: 1
+        last_page:
+          type: integer
+          example: 3
+        next_page_url:
+          type: string
+          nullable: true
+          example: "https://api.example.com/api/v1/admin/tables?page=2"
+        prev_page_url:
+          type: string
+          nullable: true
+
+    # ── Error ───────────────────────────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      properties:
+        meta:
+          type: object
+          properties:
+            code:
+              type: integer
+              example: 422
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+              example: "The given data failed to pass validation."
+            type:
+              type: string
+              example: "validation_failed"
+          additionalProperties: true
+
+    # ── User ────────────────────────────────────────────────────────────────
+    User:
+      type: object
+      properties:
+        _id:
+          type: string
+          description: MongoDB ObjectID.
+          example: "507f1f77bcf86cd799439011"
+        username:
+          type: string
+          minLength: 2
+          maxLength: 32
+          description: Unique username (alphanumeric, dashes, dots).
+          example: "john.doe"
+        first_name:
+          type: string
+          minLength: 2
+          maxLength: 32
+          example: "John"
+        last_name:
+          type: string
+          minLength: 2
+          maxLength: 32
+          example: "Doe"
+        email:
+          type: string
+          format: email
+          description: Confirmed email address (only set after email verification).
+          example: "john.doe@example.com"
+        temporary_email:
+          type: string
+          format: email
+          nullable: true
+          description: Pending (unverified) email address. Becomes `email` after verification.
+          example: "new.email@example.com"
+        active:
+          type: boolean
+          description: >
+            Whether the account is active (email has been verified).
+            Inactive users cannot trigger decisions.
+          example: true
+        secure_code:
+          type: string
+          description: >
+            HMAC-based Intercom identity verification code. Only present in
+            `GET /api/v1/users/current` responses when Intercom is enabled.
+          example: "abc123def456..."
+
+    UserListItem:
+      type: object
+      description: Reduced user representation used in search / invitation autocomplete.
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439011"
+        username:
+          type: string
+          example: "john.doe"
+        first_name:
+          type: string
+          example: "John"
+        last_name:
+          type: string
+          example: "Doe"
+
+    # ── Field ────────────────────────────────────────────────────────────────
+    Preset:
+      type: object
+      description: >
+        A pre-condition transform applied to the raw field value before rule
+        conditions evaluate it. For example, `$is_set` converts any non-null
+        value to `true`, allowing boolean conditions on optional fields.
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439012"
+        condition:
+          $ref: '#/components/schemas/ConditionOperator'
+        value:
+          description: Reference value for the preset condition.
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+          example: null
+      required:
+        - condition
+        - value
+
+    Field:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439013"
+        key:
+          type: string
+          description: >
+            Machine-readable identifier. Automatically normalised to lowercase
+            with spaces replaced by underscores. Must not be `variant_id`.
+          example: "credit_score"
+        title:
+          type: string
+          description: Human-readable label shown in the UI.
+          example: "Credit Score"
+        type:
+          type: string
+          enum: [numeric, boolean, string]
+          description: Data type of values submitted for this field.
+          example: "numeric"
+        source:
+          type: string
+          enum: [request]
+          description: Origin of the field value (always `request` in current version).
+          example: "request"
+        preset:
+          $ref: '#/components/schemas/Preset'
+          nullable: true
+      required:
+        - key
+        - title
+        - type
+        - source
+        - preset
+
+    # ── Condition ────────────────────────────────────────────────────────────
+    ConditionOperator:
+      type: string
+      description: |
+        Comparison operator applied to a field value. Available operators:
+
+        | Operator | Description | Value type |
+        |----------|-------------|------------|
+        | `$is_set` | Always true (field is present) | — |
+        | `$is_null` | Field value is `null` | — |
+        | `$any` | Always true, including `null` values | — |
+        | `$eq` | Equal to | any |
+        | `$ne` | Not equal to | any |
+        | `$gt` | Greater than | numeric |
+        | `$gte` | Greater than or equal | numeric |
+        | `$lt` | Less than | numeric |
+        | `$lte` | Less than or equal | numeric |
+        | `$between` | min ≤ x ≤ max (inclusive) | `"min;max"` |
+        | `$between_excl` | min < x < max (both exclusive) | `"min;max"` |
+        | `$between_lexcl` | min < x ≤ max (left exclusive) | `"min;max"` |
+        | `$between_rexcl` | min ≤ x < max (right exclusive) | `"min;max"` |
+        | `$in` | Value in comma-separated list | `"a,b,c"` |
+        | `$nin` | Value not in comma-separated list | `"a,b,c"` |
+        | `$contains` (∋) | String contains substring (case-insensitive) | string |
+      enum:
+        - "$is_set"
+        - "$is_null"
+        - "$any"
+        - "$eq"
+        - "$ne"
+        - "$gt"
+        - "$gte"
+        - "$lt"
+        - "$lte"
+        - "$between"
+        - "$between_excl"
+        - "$between_lexcl"
+        - "$between_rexcl"
+        - "$in"
+        - "$nin"
+        - "$contains"
+      example: "$gte"
+
+    Condition:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439014"
+        field_key:
+          type: string
+          description: Must match the `key` of an existing field in the table.
+          example: "credit_score"
+        condition:
+          $ref: '#/components/schemas/ConditionOperator'
+        value:
+          description: >
+            The reference value for the comparison. For `$between*` operators,
+            format is `"min;max"` (e.g. `"300;700"`). For `$in`/`$nin`, format
+            is a comma-separated list (e.g. `"visa,mastercard"`).
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+          example: 700
+        matched:
+          type: boolean
+          description: >
+            Set by the scoring engine after evaluation. Only present in Decision
+            snapshots, not in Table definitions.
+          readOnly: true
+      required:
+        - field_key
+        - condition
+        - value
+
+    # ── Rule ─────────────────────────────────────────────────────────────────
+    Rule:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439015"
+        than:
+          description: >
+            The decision value produced when all conditions match.
+            For scoring tables this must be numeric. For `first`-matching tables
+            it can be any string matching the table's `decision_type`.
+          oneOf:
+            - type: string
+            - type: number
+          example: "approved"
+        title:
+          type: string
+          maxLength: 128
+          example: "High credit score"
+        description:
+          type: string
+          maxLength: 128
+          example: "Credit score above 700"
+        conditions:
+          type: array
+          description: All conditions must match for the rule to fire (AND logic).
+          items:
+            $ref: '#/components/schemas/Condition'
+          minItems: 1
+        decision:
+          description: >
+            Set by the scoring engine. Equal to `than` when the rule fired,
+            `null` when conditions did not match. Only present in Decision snapshots.
+          nullable: true
+          readOnly: true
+      required:
+        - than
+        - conditions
+
+    # ── Variant ──────────────────────────────────────────────────────────────
+    Variant:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439016"
+        title:
+          type: string
+          maxLength: 128
+          example: "Default"
+        description:
+          type: string
+          maxLength: 128
+          example: "Standard scoring variant"
+        default_decision:
+          description: >
+            Fallback decision value used when no rule matches (or all scoring
+            values are zero). Must match the table's `decision_type`.
+          oneOf:
+            - type: string
+            - type: number
+          example: "denied"
+        default_title:
+          type: string
+          maxLength: 128
+          description: Decision title used when falling back to the default decision.
+          example: "No match"
+        default_description:
+          type: string
+          maxLength: 512
+          description: Decision description for the default decision.
+          example: "No rule matched the submitted data."
+        probability:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: >
+            Weight percentage used when `variants_probability` is `percent`.
+            All variant probabilities should sum to 100.
+          example: 70
+        is_default:
+          type: boolean
+          description: >
+            Marks this variant as the table's default. Exactly one variant per
+            table carries `is_default: true` — when none is set, the first
+            variant is auto-promoted. The default variant is the one exported
+            under the `table` key and used for CSV/Excel export.
+          example: true
+        created_at:
+          type: string
+          format: date-time
+          description: When the variant was first created. Preserved across table updates.
+          example: "2024-01-15T10:30:00+0000"
+        created_by:
+          type: string
+          description: ObjectID of the user who created the variant.
+          example: "507f1f77bcf86cd799439011"
+        updated_at:
+          type: string
+          format: date-time
+          description: When the variant was last modified.
+          example: "2024-01-20T14:05:00+0000"
+        updated_by:
+          type: string
+          description: ObjectID of the user who last modified the variant.
+          example: "507f1f77bcf86cd799439011"
+        rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/Rule'
+      required:
+        - default_decision
+        - rules
+
+    VariantSummary:
+      type: object
+      description: Reduced variant representation returned in table list responses.
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439016"
+        title:
+          type: string
+          example: "Default"
+        description:
+          type: string
+          example: "Standard scoring variant"
+        is_default:
+          type: boolean
+          description: Whether this variant is the table's default variant.
+          example: true
+
+    # ── Table ────────────────────────────────────────────────────────────────
+    Table:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439017"
+        title:
+          type: string
+          example: "Credit Scoring"
+        description:
+          type: string
+          example: "Evaluates credit applications based on score and income."
+        matching_type:
+          type: string
+          enum: [first, scoring_sum, scoring_max, scoring_min, scoring_count]
+          description: |
+            How rules are evaluated:
+            - `first` — stop at the first fully matching rule; `than` value becomes the decision.
+            - `scoring_sum` — sum the `than` values of **all** matching rules.
+            - `scoring_max` — take the highest `than` value among matching rules.
+            - `scoring_min` — take the lowest `than` value among matching rules.
+            - `scoring_count` — count how many rules matched.
+          example: "first"
+        decision_type:
+          type: string
+          enum: [alpha_num, numeric, string, json]
+          description: >
+            Expected type of the final decision value and all `than` / `default_decision` fields.
+          example: "string"
+        variants_probability:
+          type: string
+          enum: [first, random, percent]
+          description: |
+            How a variant is selected when a decision request arrives:
+            - `first` — always use the first variant (deterministic).
+            - `random` — pick uniformly at random.
+            - `percent` — weighted random selection using each variant's `probability` field.
+          example: "first"
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/Field'
+          minItems: 1
+        variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/Variant'
+          minItems: 1
+      required:
+        - matching_type
+        - decision_type
+        - fields
+        - variants
+
+    TableListItem:
+      type: object
+      description: Reduced table representation returned in list responses.
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439017"
+        title:
+          type: string
+          example: "Credit Scoring"
+        description:
+          type: string
+          example: "Evaluates credit applications."
+        matching_type:
+          type: string
+          enum: [first, scoring_sum, scoring_max, scoring_min, scoring_count]
+          example: "first"
+        variants:
+          type: array
+          items:
+            $ref: '#/components/schemas/VariantSummary'
+
+    TableImport:
+      type: object
+      description: |
+        Table representation used for JSON export and import.
+
+        Like `Table` but with `_id` and system-managed fields stripped (timestamps,
+        `created_by`/`updated_by`) so a fresh document is always created on import.
+
+        **Variant layout.** The default variant is exported under the top-level
+        `table` key (a single variant object), while every other variant is listed
+        in the `variants` array. On import, the object under `table` is treated as
+        the default variant (`is_default: true`) and merged ahead of `variants`.
+
+        **Backward compatibility.** The legacy flat format — where *all* variants
+        (including the default) live in the `variants` array and there is no `table`
+        key — is still accepted on import. In that case the first variant is taken
+        as the default.
+      properties:
+        title:
+          type: string
+          example: "Credit Scoring"
+        description:
+          type: string
+          example: "Evaluates credit applications."
+        matching_type:
+          type: string
+          enum: [first, scoring_sum, scoring_max, scoring_min, scoring_count]
+          example: "first"
+        decision_type:
+          type: string
+          enum: [alpha_num, numeric, string, json]
+          example: "string"
+        variants_probability:
+          type: string
+          enum: [first, random, percent, ""]
+          example: ""
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/Field'
+        table:
+          description: >
+            The default variant, exported as a single object. On import this
+            variant is flagged `is_default: true`. Omitted only in the legacy flat
+            format (see schema description).
+          allOf:
+            - $ref: '#/components/schemas/Variant'
+        variants:
+          type: array
+          description: >
+            The non-default variants. In the legacy flat format this array instead
+            holds every variant, including the default one (which is then taken as
+            the first element).
+          items:
+            $ref: '#/components/schemas/Variant'
+      required:
+        - title
+        - matching_type
+        - decision_type
+        - fields
+        - table
+
+    TableCreateUpdate:
+      type: object
+      description: Request body for creating or updating a decision table.
+      properties:
+        title:
+          type: string
+          example: "Credit Scoring"
+        description:
+          type: string
+          example: "Evaluates credit applications based on score and income."
+        matching_type:
+          type: string
+          enum: [first, scoring_sum, scoring_max, scoring_min, scoring_count]
+          example: "first"
+        decision_type:
+          type: string
+          enum: [alpha_num, numeric, string, json]
+          example: "string"
+        variants_probability:
+          type: string
+          enum: [first, random, percent]
+          example: "first"
+        fields:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            properties:
+              _id:
+                type: string
+                description: Provide when updating an existing field; omit for new fields.
+                example: "507f1f77bcf86cd799439013"
+              key:
+                type: string
+                description: >
+                  Machine-readable key. Normalised to lowercase_with_underscores.
+                  Must not be `variant_id`.
+                example: "credit_score"
+              title:
+                type: string
+                example: "Credit Score"
+              type:
+                type: string
+                enum: [numeric, boolean, string]
+                example: "numeric"
+              source:
+                type: string
+                enum: [request]
+                example: "request"
+              preset:
+                type: object
+                description: >
+                  Optional pre-condition transform. Set to an empty object `{}` or
+                  omit to disable. When set, `condition` and `value` are required.
+                properties:
+                  _id:
+                    type: string
+                  condition:
+                    $ref: '#/components/schemas/ConditionOperator'
+                  value:
+                    oneOf:
+                      - type: string
+                      - type: number
+                      - type: boolean
+            required:
+              - key
+              - title
+              - type
+              - source
+              - preset
+        variants:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            properties:
+              _id:
+                type: string
+                description: Provide when updating an existing variant; omit for new variants.
+              title:
+                type: string
+                maxLength: 128
+                example: "Default"
+              description:
+                type: string
+                maxLength: 128
+              default_decision:
+                description: Fallback value when no rule matches.
+                oneOf:
+                  - type: string
+                  - type: number
+                example: "denied"
+              default_title:
+                type: string
+                maxLength: 128
+              default_description:
+                type: string
+                maxLength: 512
+              probability:
+                type: integer
+                minimum: 1
+                maximum: 100
+                description: >
+                  Only used when `variants_probability` is `percent`.
+                  All variants must sum to 100.
+              rules:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    _id:
+                      type: string
+                    than:
+                      oneOf:
+                        - type: string
+                        - type: number
+                      example: "approved"
+                    title:
+                      type: string
+                      maxLength: 128
+                    description:
+                      type: string
+                      maxLength: 128
+                    conditions:
+                      type: array
+                      minItems: 1
+                      items:
+                        type: object
+                        properties:
+                          _id:
+                            type: string
+                          field_key:
+                            type: string
+                            example: "credit_score"
+                          condition:
+                            $ref: '#/components/schemas/ConditionOperator'
+                          value:
+                            oneOf:
+                              - type: string
+                              - type: number
+                              - type: boolean
+                            example: 700
+                        required:
+                          - field_key
+                          - condition
+                          - value
+                  required:
+                    - than
+                    - conditions
+            required:
+              - default_decision
+              - rules
+      required:
+        - matching_type
+        - decision_type
+        - fields
+        - variants
+
+    # ── Decision ─────────────────────────────────────────────────────────────
+    DecisionTable:
+      type: object
+      description: Snapshot of the table metadata at the time the decision was made.
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439017"
+        title:
+          type: string
+          example: "Credit Scoring"
+        description:
+          type: string
+        matching_type:
+          type: string
+          example: "first"
+        variant:
+          type: object
+          properties:
+            _id:
+              type: string
+              example: "507f1f77bcf86cd799439016"
+            title:
+              type: string
+              example: "Default"
+            description:
+              type: string
+
+    Decision:
+      type: object
+      description: >
+        Immutable audit record of a single decision evaluation. Created by the
+        scoring engine and never modified (except for the `meta` bag).
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439018"
+        title:
+          type: string
+          description: >
+            Title of the matching rule (or the variant's `default_title` when
+            no rule matched).
+          example: "High credit score"
+        description:
+          type: string
+          description: Description of the matching rule (or variant's `default_description`).
+        table:
+          $ref: '#/components/schemas/DecisionTable'
+        application:
+          type: string
+          description: MongoDB ObjectID of the application that triggered this decision.
+          example: "507f1f77bcf86cd799439011"
+        fields:
+          type: array
+          description: Snapshot of the table's field definitions at evaluation time.
+          items:
+            $ref: '#/components/schemas/Field'
+        request:
+          type: object
+          description: >
+            Raw field values submitted by the consumer. Keys are field keys,
+            values are the submitted field values.
+          additionalProperties: true
+          example:
+            credit_score: 750
+            annual_income: 60000
+        rules:
+          type: array
+          description: >
+            Snapshot of every rule evaluated, including matched/unmatched state
+            for each condition. Only present for admin endpoints and when
+            `show_meta` is enabled for consumer endpoints.
+          items:
+            $ref: '#/components/schemas/Rule'
+        default_decision:
+          description: Fallback value from the variant.
+          oneOf:
+            - type: string
+            - type: number
+          example: "denied"
+        final_decision:
+          description: The computed decision value.
+          oneOf:
+            - type: string
+            - type: number
+          example: "approved"
+        meta:
+          type: object
+          description: >
+            Arbitrary key-value metadata attached after the fact via
+            `PUT /api/v1/admin/decisions/{id}/meta`.
+          additionalProperties:
+            type: string
+          example:
+            order_id: "ORD-12345"
+            customer_ref: "CUST-789"
+        created_at:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00+0000"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2024-01-15T10:30:00+0000"
+
+    DecisionConsumer:
+      type: object
+      description: >
+        Consumer-safe subset of a Decision. Omits internal fields and reduces
+        the rule list to title, description, and decision outcome only.
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439018"
+        table:
+          $ref: '#/components/schemas/DecisionTable'
+        application:
+          type: string
+          example: "507f1f77bcf86cd799439011"
+        title:
+          type: string
+          example: "High credit score"
+        description:
+          type: string
+        final_decision:
+          oneOf:
+            - type: string
+            - type: number
+          example: "approved"
+        request:
+          type: object
+          additionalProperties: true
+        rules:
+          type: array
+          description: >
+            Only present when the application's `show_meta` setting is enabled.
+          items:
+            type: object
+            properties:
+              title:
+                type: string
+              description:
+                type: string
+              decision:
+                nullable: true
+                oneOf:
+                  - type: string
+                  - type: number
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    # ── Invitation ────────────────────────────────────────────────────────────
+    Invitation:
+      type: object
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439019"
+        email:
+          type: string
+          format: email
+          example: "colleague@example.com"
+        role:
+          type: string
+          example: "manager"
+        scope:
+          type: array
+          items:
+            type: string
+          example: ["tables_read", "decisions_read"]
+        project:
+          type: object
+          properties:
+            _id:
+              type: string
+              example: "507f1f77bcf86cd799439011"
+            title:
+              type: string
+              example: "My Project"
+
+    # ── Analytics ────────────────────────────────────────────────────────────
+    Analytics:
+      type: object
+      description: Hit-rate statistics for rules and conditions in a table variant.
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439017"
+        variants:
+          type: array
+          items:
+            type: object
+            properties:
+              _id:
+                type: string
+              title:
+                type: string
+              rules:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    _id:
+                      type: string
+                    title:
+                      type: string
+                    probability:
+                      type: number
+                      description: Fraction of evaluated decisions where this rule fired (0.0–1.0).
+                      example: 0.42
+                    conditions:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          _id:
+                            type: string
+                          field_key:
+                            type: string
+                          condition:
+                            type: string
+                          value: {}
+                          probability:
+                            type: number
+                            description: Fraction of decisions where this condition matched.
+                            example: 0.65
+
+    # ── Changelog ────────────────────────────────────────────────────────────
+    ChangelogEntry:
+      type: object
+      properties:
+        _id:
+          type: string
+          description: Changelog entry ObjectID.
+          example: "507f1f77bcf86cd799439020"
+        action:
+          type: string
+          enum: [create, update, rollback]
+          example: "update"
+        model:
+          type: object
+          description: Snapshot of the full resource at this point in time.
+          properties:
+            type:
+              type: string
+              example: "tables"
+            id:
+              type: string
+              example: "507f1f77bcf86cd799439017"
+            attributes:
+              type: object
+              additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+
+    ChangelogDiff:
+      type: object
+      description: Structured difference between two changelog snapshots.
+      properties:
+        added:
+          type: object
+          additionalProperties: true
+        removed:
+          type: object
+          additionalProperties: true
+        changed:
+          type: object
+          additionalProperties: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Paths
+# ─────────────────────────────────────────────────────────────────────────────
+paths:
+
+  # ── Health ──────────────────────────────────────────────────────────────────
+  /:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Returns a plain `ok` string. No authentication required.
+      operationId: healthCheck
+      responses:
+        "200":
+          description: Service is up.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  # ── Auth ────────────────────────────────────────────────────────────────────
+  /oauth/token:
+    post:
+      tags: [Auth]
+      summary: Obtain an OAuth access token
+      description: |
+        Exchange client credentials or a user password for an access token.
+
+        **Grant types supported:**
+        - `client_credentials` — returns a client-level token for consumer endpoints.
+        - `password` — returns a user-level token for admin and user endpoints.
+        - `refresh_token` — exchange a refresh token for a new access token.
+      operationId: oauthToken
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials, password, refresh_token]
+                  example: "password"
+                username:
+                  type: string
+                  description: Required for `password` grant.
+                  example: "john.doe"
+                password:
+                  type: string
+                  description: Required for `password` grant.
+                  example: "s3cr3t!"
+                refresh_token:
+                  type: string
+                  description: Required for `refresh_token` grant.
+              required:
+                - grant_type
+      responses:
+        "200":
+          description: Token issued.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token_type:
+                    type: string
+                    example: "Bearer"
+                  expires_in:
+                    type: integer
+                    example: 3600
+                  access_token:
+                    type: string
+                    example: "eyJhbGciOiJSUzI1NiIsIn..."
+                  refresh_token:
+                    type: string
+                    example: "def502003b9f1d..."
+        "401":
+          description: Invalid client credentials.
+
+  # ── Users (public) ──────────────────────────────────────────────────────────
+  /api/v1/users/username:
+    get:
+      tags: [Users]
+      summary: Check username availability
+      description: |
+        Validates that a username is available and meets format requirements
+        (2–32 characters, alphanumeric/dash/dot). Returns HTTP 200 on success or
+        HTTP 422 if the username is taken or invalid.
+
+        **Authentication:** OAuth basic client credentials.
+      operationId: validateUsername
+      security:
+        - BasicAuth: []
+      parameters:
+        - name: username
+          in: query
+          required: true
+          description: The username to validate.
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 32
+            example: "john.doe"
+      responses:
+        "200":
+          description: Username is available and valid.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                    properties:
+                      code:
+                        type: integer
+                        example: 200
+                  data: {}
+        "422":
+          description: Username is taken or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/users:
+    post:
+      tags: [Users]
+      summary: Register a new user account
+      description: |
+        Creates a new user account and sends an email verification message.
+
+        After creation the user's `active` field is `false` until they verify
+        their email via `POST /api/v1/users/verify/email`.
+
+        If the registered email matches pending invitations, the user is
+        automatically added to the invited applications.
+
+        **Sandbox mode:** When `APP_ENV=local`, the response includes a `sandbox`
+        object with `token_email` containing the raw verification token so you
+        can complete the flow without an email server.
+      operationId: createUser
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  minLength: 2
+                  maxLength: 32
+                  example: "john.doe"
+                email:
+                  type: string
+                  format: email
+                  example: "john.doe@example.com"
+                password:
+                  type: string
+                  minLength: 6
+                  maxLength: 32
+                  example: "s3cr3tPass!"
+                first_name:
+                  type: string
+                  minLength: 2
+                  maxLength: 32
+                  example: "John"
+                last_name:
+                  type: string
+                  minLength: 2
+                  maxLength: 32
+                  example: "Doe"
+              required:
+                - username
+                - email
+                - password
+      responses:
+        "201":
+          description: User created. Email verification message sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                    properties:
+                      code:
+                        type: integer
+                        example: 201
+                  data:
+                    $ref: '#/components/schemas/User'
+                  sandbox:
+                    type: object
+                    description: Only present in local development environment.
+                    properties:
+                      token_email:
+                        type: object
+                        properties:
+                          token:
+                            type: string
+                          expired:
+                            type: integer
+                            description: Unix timestamp when the token expires.
+        "422":
+          description: Validation error (e.g. email already taken, weak password).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags: [Users]
+      summary: Search users by name or email
+      description: |
+        Returns a paginated list of users whose username or email matches the
+        provided prefix. Used for invitation autocomplete in the UI.
+
+        - If `name` contains `@`, search is performed on the `email` field.
+        - Otherwise, search is performed on the `username` field.
+
+        The currently authenticated user is excluded from results.
+
+        **Authentication:** OAuth 2.0 Bearer token.
+      operationId: readUserList
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: name
+          in: query
+          required: false
+          description: Username or email prefix to search for.
+          schema:
+            type: string
+            example: "john"
+        - $ref: '#/components/parameters/QuerySize'
+      responses:
+        "200":
+          description: Paginated user list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/UserListItem'
+
+  /api/v1/users/verify/email:
+    post:
+      tags: [Users]
+      summary: Verify email address
+      description: |
+        Confirms a user's email address using the one-time token sent by email.
+        On success, `temporary_email` is promoted to `email` and `active` becomes `true`.
+
+        Tokens expire after 1 hour.
+      operationId: verifyEmail
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                  description: One-time verification token from the email.
+                  example: "abc123def456..."
+              required:
+                - token
+      responses:
+        "200":
+          description: Email verified. User account activated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/User'
+        "404":
+          description: Token not found.
+        "410":
+          description: Token has expired.
+
+  /api/v1/users/verify/email/resend:
+    post:
+      tags: [Users]
+      summary: Resend email verification token
+      description: |
+        Generates a new verification token and resends the confirmation email
+        to the user's `temporary_email` address.
+
+        **Sandbox mode:** When `APP_ENV=local`, the new token is returned in the response.
+      operationId: resendVerifyEmailToken
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                  description: The unconfirmed (temporary) email address.
+                  example: "john.doe@example.com"
+              required:
+                - email
+      responses:
+        "200":
+          description: Verification email resent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data: {}
+                  sandbox:
+                    type: object
+                    description: Only present in local environment.
+                    properties:
+                      token_email:
+                        type: object
+                        properties:
+                          token:
+                            type: string
+                          expired:
+                            type: integer
+        "404":
+          description: No account found with this temporary email.
+
+  /api/v1/users/password/reset:
+    post:
+      tags: [Users]
+      summary: Request password reset
+      description: |
+        Generates a time-limited reset token and sends a recovery email.
+        The token is valid for 1 hour.
+
+        **Sandbox mode:** When `APP_ENV=local`, the token is returned in `sandbox.reset_password_token`.
+      operationId: createResetPasswordToken
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "john.doe@example.com"
+              required:
+                - email
+      responses:
+        "200":
+          description: Recovery email sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data: {}
+                  sandbox:
+                    type: object
+                    description: Only present in local environment.
+                    properties:
+                      reset_password_token:
+                        type: object
+                        properties:
+                          token:
+                            type: string
+                          expired:
+                            type: integer
+        "404":
+          description: No account found with this email address.
+
+    put:
+      tags: [Users]
+      summary: Complete password reset
+      description: |
+        Sets a new password using the token received by email.
+        The token is single-use and expires after 1 hour.
+      operationId: changePassword
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                  description: Reset token from the recovery email.
+                  example: "abc123def456..."
+                password:
+                  type: string
+                  minLength: 6
+                  maxLength: 32
+                  description: New password.
+                  example: "newS3cr3tPass!"
+              required:
+                - token
+                - password
+      responses:
+        "200":
+          description: Password changed successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/User'
+        "404":
+          description: Reset token not found.
+        "410":
+          description: Reset token has expired.
+        "422":
+          description: Password does not meet requirements.
+
+  # ── Users (authenticated) ────────────────────────────────────────────────────
+  /api/v1/users/current:
+    get:
+      tags: [Users]
+      summary: Get current user profile
+      description: |
+        Returns the authenticated user's profile. The response includes a
+        `secure_code` field for Intercom identity verification when enabled.
+      operationId: getUserInfo
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Current user profile.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/User'
+
+    put:
+      tags: [Users]
+      summary: Update current user profile
+      description: |
+        Updates the authenticated user's profile. All fields are optional.
+
+        **Changing email:** The new email is stored as `temporary_email` and a
+        new verification email is sent. The confirmed `email` field is only
+        updated after verification.
+
+        **Changing password:** Requires `current_password` to be provided
+        alongside `password`.
+
+        **Sandbox mode:** When `APP_ENV=local`, the new email verification token
+        is returned in `sandbox.token_email`.
+      operationId: updateUser
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                  minLength: 2
+                  maxLength: 32
+                  example: "john.doe2"
+                first_name:
+                  type: string
+                  minLength: 2
+                  maxLength: 32
+                  example: "John"
+                last_name:
+                  type: string
+                  minLength: 2
+                  maxLength: 32
+                  example: "Doe"
+                email:
+                  type: string
+                  format: email
+                  example: "new.email@example.com"
+                password:
+                  type: string
+                  minLength: 6
+                  maxLength: 32
+                  example: "newS3cr3tPass!"
+                current_password:
+                  type: string
+                  description: Required when changing `password`.
+                  example: "oldS3cr3tPass!"
+      responses:
+        "200":
+          description: Profile updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/User'
+        "422":
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ── Invitations ──────────────────────────────────────────────────────────────
+  /api/v1/invite:
+    post:
+      tags: [Users]
+      summary: Invite a user to the application
+      description: |
+        Sends an invitation email to the given address. The invitee is
+        granted the specified `role` and `scope` within the current application.
+
+        **Privilege escalation prevention:** The requested `scope` must be a
+        subset of the inviting user's own scope; extra scopes are rejected with
+        HTTP 422.
+
+        If the invitee already has an account, the `InvitationsObserver` adds
+        them directly to the application; otherwise they are added when they register.
+      operationId: inviteUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "colleague@example.com"
+                role:
+                  type: string
+                  example: "manager"
+                scope:
+                  type: array
+                  items:
+                    type: string
+                  example: ["tables_read", "decisions_read"]
+              required:
+                - email
+                - role
+                - scope
+      responses:
+        "200":
+          description: Invitation created and email sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Invitation'
+        "422":
+          description: Validation error or insufficient scope.
+
+  # ── Projects ─────────────────────────────────────────────────────────────────
+  /api/v1/projects:
+    delete:
+      tags: [Projects]
+      summary: Delete project
+      description: |
+        Permanently deletes the application and **all** of its associated
+        decision tables. This is a hard delete with no recovery path.
+
+        **Warning:** This action is irreversible.
+      operationId: deleteProject
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      responses:
+        "200":
+          description: Project deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data: {}
+
+  /api/v1/projects/export:
+    get:
+      tags: [Projects]
+      summary: Export project data
+      description: |
+        Runs `mongoexport` for the application's tables, decisions, and
+        changelogs, packages them into a `.tar.gz` archive, and returns a
+        download URL.
+      operationId: exportProject
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      responses:
+        "200":
+          description: Export created. Download URL returned.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        description: Public URL to the generated `.tar.gz` archive.
+                        example: "https://api.example.com/dump/export_507f1f77bcf86cd799439011.tar.gz"
+
+  # ── Tables (Admin CRUD) ──────────────────────────────────────────────────────
+  /api/v1/admin/tables:
+    get:
+      tags: [Tables]
+      summary: List decision tables
+      description: |
+        Returns a paginated list of decision tables belonging to the current
+        application. Supports optional filters on `title`, `description`,
+        and `matching_type`.
+      operationId: listTables
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/QuerySize'
+        - name: title
+          in: query
+          required: false
+          description: Case-insensitive regex filter on table title.
+          schema:
+            type: string
+            example: "Credit"
+        - name: description
+          in: query
+          required: false
+          description: Case-insensitive regex filter on table description.
+          schema:
+            type: string
+        - name: matching_type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [first, scoring_sum, scoring_max, scoring_min, scoring_count]
+      responses:
+        "200":
+          description: Paginated table list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/TableListItem'
+
+    post:
+      tags: [Tables]
+      summary: Create a decision table
+      description: |
+        Creates a new decision table with the specified fields, matching strategy,
+        and at least one variant containing at least one rule.
+
+        All variant and rule `_id` fields will be auto-generated if omitted.
+      operationId: createTable
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TableCreateUpdate'
+            examples:
+              credit_scoring:
+                summary: Simple credit scoring table
+                value:
+                  title: "Credit Scoring"
+                  description: "Approves or denies credit based on credit score."
+                  matching_type: "first"
+                  decision_type: "string"
+                  variants_probability: "first"
+                  fields:
+                    - key: "credit_score"
+                      title: "Credit Score"
+                      type: "numeric"
+                      source: "request"
+                      preset: {}
+                  variants:
+                    - title: "Default"
+                      default_decision: "denied"
+                      default_title: "Application denied"
+                      default_description: "Credit score does not meet minimum requirements."
+                      rules:
+                        - than: "approved"
+                          title: "Good credit"
+                          description: "Credit score is 700 or above."
+                          conditions:
+                            - field_key: "credit_score"
+                              condition: "$gte"
+                              value: 700
+      responses:
+        "201":
+          description: Table created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Table'
+        "422":
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/admin/tables/{id}:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+
+    get:
+      tags: [Tables]
+      summary: Get a decision table
+      description: Returns the full decision table including all fields, variants, and rules.
+      operationId: getTable
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Decision table.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Table'
+        "404":
+          description: Table not found.
+
+    put:
+      tags: [Tables]
+      summary: Update a decision table
+      description: |
+        Replaces the entire table definition. Fields and variants not present
+        in the request body will be deleted.
+
+        Provide `_id` for existing fields, variants, rules, and conditions to
+        preserve their identifiers in the changelog history.
+      operationId: updateTable
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TableCreateUpdate'
+      responses:
+        "200":
+          description: Table updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Table'
+        "404":
+          description: Table not found.
+        "422":
+          description: Validation error.
+
+    delete:
+      tags: [Tables]
+      summary: Delete a decision table
+      description: Permanently deletes the decision table and all associated data.
+      operationId: deleteTable
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Table deleted.
+
+  # ── Export ────────────────────────────────────────────────────────────────────
+  /api/v1/admin/tables/{id}/export:
+    get:
+      tags: [Tables]
+      summary: Export a decision table
+      description: |
+        Downloads a decision table as a file in the requested format.
+
+        | Format | `?format=` | Content-Type | Notes |
+        |--------|-----------|--------------|-------|
+        | JSON   | `json` (default) | `application/json` | Full export — all variants, all rules. Can be re-imported as-is. |
+        | CSV    | `csv` | `text/csv` | First variant only. Human-readable, easily editable in a spreadsheet. |
+        | Excel  | `excel` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | First variant only. Same structure as CSV, formatted as XLSX. |
+
+        ### CSV / Excel format
+
+        The CSV and Excel files use three labelled sections separated by blank rows:
+
+        ```
+        ## METADATA
+        title,<table title>
+        description,<optional>
+        matching_type,<first|scoring_sum|...>
+        decision_type,<string|numeric|alpha_num|json>
+        default_decision,<default outcome>
+
+        ## FIELDS
+        key,title,type
+        age,Age,numeric
+        country,Pays,string
+
+        ## RULES
+        age,country,decision
+        $gte:18,$eq:FR,approved
+        *,*,declined
+        ```
+
+        Each condition cell uses the format `operator:value` (e.g. `$gte:18`, `$eq:FR`).
+        A `*` cell means no condition is applied for that field in this rule.
+      operationId: exportTable
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - name: format
+          in: query
+          required: false
+          description: Export format. Defaults to `json`.
+          schema:
+            type: string
+            enum: [json, csv, excel]
+            default: json
+      responses:
+        "200":
+          description: |
+            File download. The response `Content-Type` and filename depend on the requested format.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableImport'
+            text/csv:
+              schema:
+                type: string
+                format: binary
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Table not found.
+
+  # ── Import ────────────────────────────────────────────────────────────────────
+  /api/v1/admin/tables/import:
+    post:
+      tags: [Tables]
+      summary: Import a decision table
+      description: |
+        Creates a new decision table in the current project by uploading a file
+        previously exported via `GET /api/v1/admin/tables/{id}/export`.
+
+        The format is detected automatically from the file extension:
+
+        | Extension | Format |
+        |-----------|--------|
+        | `.json`   | JSON — full table structure, all variants. |
+        | `.csv`    | CSV — three-section format (METADATA / FIELDS / RULES), one variant. |
+        | `.xlsx` / `.xls` | Excel — same three-section structure as CSV. |
+
+        A **new table is always created**, even if a table with the same title already
+        exists in the project. Existing tables are never overwritten.
+
+        The target project is determined by the `X-Application` header, exactly like
+        all other admin endpoints.
+
+        ### Validation errors
+
+        If the file cannot be parsed or contains structural errors (missing title,
+        unknown field references, etc.) the endpoint returns `422` with an `errors`
+        array describing each problem.
+      operationId: importTable
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: >
+                    The table file to import. Accepted extensions: `.json`, `.csv`, `.xlsx`, `.xls`.
+                    Maximum size: 10 MB.
+      responses:
+        "201":
+          description: Table imported and created successfully.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Table'
+        "422":
+          description: File format error or structural validation failure.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Erreurs de validation dans le fichier importé."
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                    example:
+                      - "Le titre de la table est obligatoire (section ## METADATA, ligne title)."
+                      - "Règle #2, condition #0: champ inconnu 'salary'."
+
+  # ── Analytics ─────────────────────────────────────────────────────────────────
+  /api/v1/admin/tables/{id}/{variant_id}/analytics:
+    get:
+      tags: [Tables]
+      summary: Get variant analytics
+      description: |
+        Returns rule and condition hit-rate statistics for a specific table variant.
+        Queries all Decision records created since the table's last update and
+        calculates the fraction of decisions where each rule and condition fired.
+
+        Use this to identify which rules trigger most often and tune your table accordingly.
+      operationId: getTableAnalytics
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the decision table.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: variant_id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the variant to analyse.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+      responses:
+        "200":
+          description: Analytics data.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Analytics'
+
+  # ── Copy ──────────────────────────────────────────────────────────────────────
+  /api/v1/admin/tables/{id}/copyto/{project_id}:
+    post:
+      tags: [Tables]
+      summary: Copy a decision table to another project
+      description: |
+        Clones the decision table identified by `{id}` into the project identified
+        by `{project_id}`, including all fields, variants, rules, and conditions.
+
+        A brand-new table document is created in the target project — the source
+        table is left untouched and its `_id` is not reused. The source table is
+        resolved within the project given by the `X-Application` header, exactly
+        like all other admin endpoints.
+      operationId: copyTableTo
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the source decision table.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: project_id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the destination project (application).
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+      responses:
+        "200":
+          description: The newly created table in the destination project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Table'
+        "404":
+          description: Source table not found.
+
+  # ── Decisions (Admin) ────────────────────────────────────────────────────────
+  /api/v1/admin/decisions:
+    get:
+      tags: [Decisions (Admin)]
+      summary: List decisions
+      description: |
+        Returns a paginated list of all decision records for the current application,
+        ordered by creation date (newest first).
+
+        Supports optional filtering by `table_id` and `variant_id`.
+      operationId: listDecisions
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/QuerySize'
+        - name: table_id
+          in: query
+          required: false
+          description: Filter decisions by table MongoDB ObjectID.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: variant_id
+          in: query
+          required: false
+          description: Filter decisions by variant MongoDB ObjectID.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+      responses:
+        "200":
+          description: Paginated decision list.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Decision'
+
+  /api/v1/admin/decisions/{id}:
+    get:
+      tags: [Decisions (Admin)]
+      summary: Get a decision
+      description: Returns the full admin view of a single decision record including all rules, conditions, and metadata.
+      operationId: getDecision
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: Decision record.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Decision'
+        "404":
+          description: Decision not found.
+
+  /api/v1/admin/decisions/{id}/meta:
+    put:
+      tags: [Decisions (Admin)]
+      summary: Update decision metadata
+      description: |
+        Attaches or replaces the `meta` bag on a decision record. Useful for
+        correlating a decision with an external record (order ID, payment reference, etc.).
+
+        **Constraints:**
+        - Maximum 24 keys per decision.
+        - Key: alphanumeric/dash, max 100 characters.
+        - Value: string, max 500 characters.
+      operationId: updateDecisionMeta
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                meta:
+                  type: object
+                  additionalProperties:
+                    type: string
+                    maxLength: 500
+                  maxProperties: 24
+                  example:
+                    order_id: "ORD-12345"
+                    customer_ref: "CUST-789"
+              required:
+                - meta
+      responses:
+        "200":
+          description: Metadata updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Decision'
+        "422":
+          description: Metadata validation failed.
+
+  # ── Decisions (Consumer) ─────────────────────────────────────────────────────
+  /api/v1/tables/{id}/decisions:
+    post:
+      tags: [Decisions (Consumer)]
+      summary: Evaluate a decision table
+      description: |
+        Submits field values to a decision table and returns the computed result.
+
+        The engine:
+        1. Validates submitted values against the table's field schema.
+        2. Selects a variant (based on the table's `variants_probability` strategy,
+          or the explicit `variant_id` if provided).
+        3. Evaluates rules in order, applying preset transforms before conditions.
+        4. Returns a `final_decision` based on the `matching_type`:
+          - `first` — value of the first matching rule's `than` field.
+          - `scoring_sum` — sum of all matching rules' `than` values.
+          - `scoring_max` — maximum matching `than` value.
+          - `scoring_min` — minimum matching `than` value.
+          - `scoring_count` — number of rules that matched.
+        5. Falls back to the variant's `default_decision` if no rule matched.
+
+        **Requirements:**
+        - The application must have at least one active (email-verified) admin user,
+          otherwise HTTP 403 is returned.
+        - All fields defined in the table must be present in the request body
+          (use `null` for optional/absent values).
+
+        **`rules` in response:** Only included when the application's `show_meta`
+        setting is enabled.
+      operationId: tableCheck
+      security:
+        - ConsumerAuth: []
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the decision table to evaluate.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: >
+                Key-value pairs where each key is a field `key` defined in the
+                table. All fields must be present (use `null` for absent values).
+                Optionally include `variant_id` to force a specific variant.
+              properties:
+                variant_id:
+                  type: string
+                  description: >
+                    Optional. Force a specific variant instead of auto-selection.
+                    Useful for testing a specific variant.
+                  pattern: '^[0-9a-f]{24}$'
+              additionalProperties: true
+            examples:
+              credit_check:
+                summary: Credit score decision
+                value:
+                  credit_score: 750
+                  annual_income: 60000
+                  employment_status: "employed"
+      responses:
+        "200":
+          description: Decision evaluated and persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/DecisionConsumer'
+              examples:
+                approved:
+                  summary: Approved decision
+                  value:
+                    meta:
+                      code: 200
+                    data:
+                      _id: "507f1f77bcf86cd799439018"
+                      table:
+                        _id: "507f1f77bcf86cd799439017"
+                        title: "Credit Scoring"
+                        matching_type: "first"
+                        variant:
+                          _id: "507f1f77bcf86cd799439016"
+                          title: "Default"
+                      application: "507f1f77bcf86cd799439011"
+                      title: "Good credit"
+                      description: "Credit score is 700 or above."
+                      final_decision: "approved"
+                      request:
+                        credit_score: 750
+                      created_at: "2024-01-15T10:30:00+0000"
+                      updated_at: "2024-01-15T10:30:00+0000"
+        "403":
+          description: Application has no active admin user.
+        "404":
+          description: Table not found.
+        "422":
+          description: Submitted field values are invalid or missing.
+
+  /api/v1/decisions/{id}:
+    get:
+      tags: [Decisions (Consumer)]
+      summary: Get a decision (consumer view)
+      description: |
+        Returns the consumer-safe representation of a decision. Omits internal
+        admin fields and reduces the rule list to summary columns only.
+      operationId: getDecisionConsumer
+      security:
+        - ConsumerAuth: []
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: Decision record (consumer view).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/DecisionConsumer'
+        "404":
+          description: Decision not found.
+
+  # ── Changelog ─────────────────────────────────────────────────────────────────
+  /api/v1/admin/{collection}/changelog:
+    get:
+      tags: [Changelog]
+      summary: List changelog entries for a collection
+      description: |
+        Returns all changelog entries for the given resource collection
+        (e.g. `tables`), scoped to the current application.
+      operationId: changelogAll
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: collection
+          in: path
+          required: true
+          description: Resource collection name (e.g. `tables`).
+          schema:
+            type: string
+            example: "tables"
+        - $ref: '#/components/parameters/QuerySize'
+      responses:
+        "200":
+          description: Paginated changelog entries.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ChangelogEntry'
+
+  /api/v1/admin/{collection}/{model_id}/changelog:
+    get:
+      tags: [Changelog]
+      summary: List changelog entries for a specific resource
+      description: Returns all changelog entries for a specific document within a collection.
+      operationId: changelogAllWithId
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: collection
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "tables"
+        - name: model_id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the specific resource.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - $ref: '#/components/parameters/QuerySize'
+      responses:
+        "200":
+          description: Paginated changelog entries for the resource.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ChangelogEntry'
+
+  /api/v1/admin/{collection}/{model_id}/diff:
+    get:
+      tags: [Changelog]
+      summary: Diff two changelog snapshots
+      description: |
+        Returns a structured diff between two changelog snapshots of the same document.
+        Requires `compare_with` (the changelog entry ID to compare against).
+        Optionally accepts `original` (the baseline entry; defaults to the latest).
+      operationId: changelogDiff
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: collection
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "tables"
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: compare_with
+          in: query
+          required: true
+          description: Changelog entry ID to compare against.
+          schema:
+            type: string
+        - name: original
+          in: query
+          required: false
+          description: Baseline changelog entry ID (defaults to the most recent snapshot).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Diff result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/ChangelogDiff'
+        "422":
+          description: "`compare_with` is required."
+
+  /api/v1/admin/{collection}/{model_id}/{changelog_id}/rollback:
+    put:
+      tags: [Changelog]
+      summary: Rollback a resource to a previous state
+      description: |
+        Restores a document to the state captured in the specified changelog entry.
+        A new changelog entry is created recording the rollback action.
+      operationId: changelogRollback
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: collection
+          in: path
+          required: true
+          schema:
+            type: string
+            example: "tables"
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: changelog_id
+          in: path
+          required: true
+          description: Changelog entry ID to roll back to.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Resource rolled back to the specified snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: object
+                    description: The restored resource document.
+        "404":
+          description: Changelog entry or resource not found.

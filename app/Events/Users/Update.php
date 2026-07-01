@@ -1,8 +1,12 @@
 <?php
 /**
- * Author: Paul Bardack paul.bardack@gmail.com http://paulbardack.com
- * Date: 07.07.16
- * Time: 14:48
+ * Users\Update Event
+ *
+ * Fired by UsersRepository::createOrUpdate() when an existing user's profile is
+ * updated. Carries the updated User model to the EventListener which syncs the
+ * changes to Intercom and fires a user-update track event in Mixpanel.
+ *
+ * @package App\Events\Users
  */
 
 namespace App\Events\Users;

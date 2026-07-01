@@ -1,4 +1,14 @@
 <?php
+/**
+ * AuthServiceProvider
+ *
+ * Configures Lumen's authentication system for token-based API access. The boot
+ * method registers a 'token' driver that looks up users by an api_token field in
+ * MongoDB. This driver is used as a fallback; primary authentication in production
+ * is handled by the LumenOauth2 package's OAuth2 bearer token middleware.
+ *
+ * @package App\Providers
+ */
 
 namespace App\Providers;
 

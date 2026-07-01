@@ -1,0 +1,9 @@
+--- a/src/Models/Application.php
++++ b/src/Models/Application.php
+@@ -111,7 +111,8 @@
+     public function getSettingsElem($key, $default = null)
+     {
+-        return array_key_exists($key, $this->settings) ? $this->settings[$key] : $default;
++        $settings = (array) $this->settings;
++        return array_key_exists($key, $settings) ? $settings[$key] : $default;
+     }

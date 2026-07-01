@@ -1,8 +1,15 @@
 <?php
 /**
- * Author: Paul Bardack paul.bardack@gmail.com http://paulbardack.com
- * Date: 23.02.16
- * Time: 19:30
+ * Preset Model
+ *
+ * Represents an optional pre-processing transform embedded within a Field. When a
+ * field has a preset, the Scoring service applies the preset's condition operator
+ * (e.g. '$is_set') against the raw request value before evaluating rule conditions.
+ * The result of the preset check (true/false or the transformed value) replaces the
+ * raw value for all conditions referencing that field. Presets are cached per-field
+ * within a single scoring run to avoid redundant computation.
+ *
+ * @package App\Models
  */
 
 namespace App\Models;

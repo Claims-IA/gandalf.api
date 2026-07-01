@@ -1,28 +1,60 @@
-FROM nebo15/alpine-php:php-7.0
+FROM php:8.2-fpm-alpine
 
-MAINTAINER Nebo #15 support@nebo15.com
+LABEL maintainer="Nebo #15 support@nebo15.com"
 
 ENV HOME=/app
+WORKDIR ${HOME}
+
+RUN apk add --no-cache \
+        bash \
+        git \
+        icu-dev \
+        libzip-dev \
+        oniguruma-dev \
+        freetype-dev \
+        libjpeg-turbo-dev \
+        libpng-dev \
+        unzip \
+        zip \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install \
+        bcmath \
+        gd \
+        intl \
+        mbstring \
+        opcache \
+        pdo \
+        pdo_mysql \
+        zip \
+    && pecl install mongodb-1.21.0 \
+    && docker-php-ext-enable mongodb \
+    && apk del .build-deps \
+    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
 # Setup project structure
-RUN mkdir -p ${HOME}/storage/app && \
-    mkdir ${HOME}/storage/logs && \
-    mkdir -p ${HOME}/storage/framework/cache && \
-    mkdir ${HOME}/storage/framework/sessions && \
-    mkdir ${HOME}/storage/framework/views && \
-    mkdir -p ${HOME}/public/dump
+RUN mkdir -p ${HOME}/storage/app \
+    ${HOME}/storage/logs \
+    ${HOME}/storage/framework/cache \
+    ${HOME}/storage/framework/sessions \
+    ${HOME}/storage/framework/views \
+    ${HOME}/public/dump
 
 # Prefetch dependencies
 COPY composer.* ${HOME}/
 
-RUN composer --no-ansi --no-dev --no-interaction --no-progress --no-scripts --no-autoloader -d=${HOME} install
+RUN composer --no-ansi --no-dev --no-interaction --no-progress --no-scripts --no-autoloader install
 
 # Add project sources.
 # To skip some files add them to .dockerignore file
 COPY . ${HOME}/
 
+# Fix case-sensitivity: nebo15 packages use lowercase 'exceptions/' dirs but uppercase namespaces
+RUN mv vendor/nebo15/lumen.intercom/src/exceptions vendor/nebo15/lumen.intercom/src/Exceptions && \
+    mv vendor/nebo15/lumen.mixpanel/src/exceptions vendor/nebo15/lumen.mixpanel/src/Exceptions
+
 # Install dependencies and generate autoloader
-RUN composer --no-ansi --no-dev --no-interaction --no-progress --no-scripts --optimize-autoloader -d=${HOME} install
+RUN composer --no-ansi --no-dev --no-interaction --no-progress --no-scripts --optimize-autoloader install
 
 # Fix paths access rights
 RUN chmod 777 -Rf ${HOME}/storage/ ${HOME}/public/dump/

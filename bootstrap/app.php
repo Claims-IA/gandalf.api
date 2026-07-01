@@ -1,15 +1,29 @@
 <?php
+/**
+ * Application Bootstrap
+ *
+ * Entry point for the Gandalf API Lumen application. Defines the application name
+ * and version constants, suppresses E_DEPRECATED errors for PHP 8.1+ compatibility
+ * with illuminate/5.2 packages, loads the Composer autoloader and .env file,
+ * registers all service providers (MongoDB, REST, Changelog, OAuth2, Applicationable,
+ * Bugsnag, Mixpanel, Intercom, and all custom app providers), configures global
+ * middleware (JsonMiddleware, NewRelicMiddleware, and conditionally analytics
+ * terminable middleware), binds the exception handler and console kernel, and
+ * loads the application routes. Returns the configured application instance.
+ *
+ * @package App
+ */
 
 const APPLICATION_NAME = "gandalf.api";
 const APPLICATION_VERSION = "1.1.4";
 
+// PHP 8.1+ generates E_DEPRECATED for ArrayAccess/interface implementations in illuminate/5.2
+// packages. Must be set before autoloading to avoid conversion to exceptions during class loading.
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
+
 require_once __DIR__.'/../vendor/autoload.php';
 
-try {
-    (new Dotenv\Dotenv(__DIR__ . '/../'))->load();
-} catch (Dotenv\Exception\InvalidPathException $e) {
-    //
-}
+Dotenv\Dotenv::createUnsafeMutable(__DIR__ . '/../')->safeLoad();
 
 /*
 |--------------------------------------------------------------------------
@@ -22,9 +36,11 @@ try {
 |
 */
 
+// Instantiate the custom Application class (extends Lumen to fix deprecated-error handling and logging)
 $app = new App\Application(
     realpath(__DIR__ . '/../')
 );
+// Remove the default validator binding so ValidationServiceProvider can register the custom one
 unset($app->availableBindings['validator']);
 
 $app->register('Jenssegers\Mongodb\MongodbServiceProvider');
@@ -70,12 +86,17 @@ $app->singleton(
 |
 */
 
-$app->middleware([
+$middlewares = [
     App\Http\Middleware\JsonMiddleware::class,
     App\Http\Middleware\NewRelicMiddleware::class,
-    \Nebo15\LumenIntercom\Middleware\TerminableMiddleware::class,
-    \Nebo15\LumenMixpanel\Middleware\TerminableMiddleware::class,
-]);
+];
+if (env('INTERCOM_ENABLED', false)) {
+    $middlewares[] = \Nebo15\LumenIntercom\Middleware\TerminableMiddleware::class;
+}
+if (env('MIXPANEL_ENABLED', false)) {
+    $middlewares[] = \Nebo15\LumenMixpanel\Middleware\TerminableMiddleware::class;
+}
+$app->middleware($middlewares);
 /*
 |--------------------------------------------------------------------------
 | Register Service Providers
@@ -91,12 +112,16 @@ $app->register(App\Providers\ObserverServiceProvider::class);
 $app->register(Nebo15\REST\ServiceProvider::class);
 $app->register(Nebo15\Changelog\ServiceProvider::class);
 $app->register(App\Providers\ValidationServiceProvider::class);
-if (env('APP_ENV') !== 'prod') {
+if (env('APP_ENV') !== 'prod' && class_exists(Barryvdh\LaravelIdeHelper\IdeHelperServiceProvider::class)) {
     $app->register(Barryvdh\LaravelIdeHelper\IdeHelperServiceProvider::class);
 }
 $app->register(App\Providers\BugsnagServiceProvider::class);
-$app->register(\Nebo15\LumenMixpanel\MixpanelServiceProvider::class);
-$app->register(\Nebo15\LumenIntercom\IntercomServiceProvider::class);
+if (env('MIXPANEL_ENABLED', false)) {
+    $app->register(\Nebo15\LumenMixpanel\MixpanelServiceProvider::class);
+}
+if (env('INTERCOM_ENABLED', false)) {
+    $app->register(\Nebo15\LumenIntercom\IntercomServiceProvider::class);
+}
 
 $app->register(Nebo15\LumenOauth2\Providers\ServiceProvider::class);
 $app->register(Nebo15\LumenApplicationable\ServiceProvider::class);

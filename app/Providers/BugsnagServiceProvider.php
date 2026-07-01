@@ -1,8 +1,15 @@
 <?php
 /**
- * Author: Paul Bardack paul.bardack@gmail.com http://paulbardack.com
- * Date: 25.03.16
- * Time: 14:59
+ * BugsnagServiceProvider
+ *
+ * Overrides the upstream BugsnagLumenServiceProvider to configure the Bugsnag error
+ * tracking client directly for this application. Sets the project root to app/,
+ * disables automatic exception notification (exceptions are manually reported in
+ * the Handler), and configures release stage, endpoint, filters, and proxy from the
+ * 'services.bugsnag' config key. The client is bound as the 'bugsnag' singleton in
+ * the IoC container.
+ *
+ * @package App\Providers
  */
 
 namespace App\Providers;

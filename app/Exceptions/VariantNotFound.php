@@ -1,8 +1,14 @@
 <?php
 /**
- * Author: Paul Bardack paul.bardack@gmail.com http://paulbardack.com
- * Date: 26.05.16
- * Time: 12:49
+ * VariantNotFound
+ *
+ * Thrown by Table::getVariantForCheck() when no variant can be selected for a
+ * decision check — either because the explicitly requested variant_id does not
+ * exist on the table, or because the probability-based selection algorithm fails
+ * to pick a variant (which should not happen in a correctly configured table).
+ * Returns HTTP 404 with the 'variant_not_found' error code.
+ *
+ * @package App\Exceptions
  */
 
 namespace App\Exceptions;
