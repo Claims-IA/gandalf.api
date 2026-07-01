@@ -21,8 +21,9 @@ jobs:
 
       - name: Verify nginx responds
         run: |
-          for attempt in 1 2 3 4 5; do
-            status=$(curl -s -o /tmp/response -w "%{http_code}" http://localhost || true)
+          # nginx publishes container port 80 on host port 8080 (see docker-compose.yml)
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            status=$(curl -s -o /tmp/response -w "%{http_code}" http://localhost:8080 || true)
             if [ "$status" != "000" ]; then
               echo "Received HTTP status: $status"
               exit 0
@@ -32,6 +33,10 @@ jobs:
           done
           echo "No response from nginx."
           exit 1
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose logs --no-color
 
       - name: Tear down containers
         if: always()
