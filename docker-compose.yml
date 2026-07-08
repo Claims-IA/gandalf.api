@@ -25,4 +25,9 @@ services:
     ports:
       - 27018:27017
     volumes:
-      - /data/db
+      # Named volume (not anonymous) so data survives `docker compose down`
+      # and is reused on the next `up`. Only `down -v` deletes it.
+      - gandalf_mongo_data:/data/db
+
+volumes:
+  gandalf_mongo_data:

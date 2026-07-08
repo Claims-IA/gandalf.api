@@ -46,7 +46,7 @@ class Mail
             $this->postmark->sendEmailWithTemplate(
                 config('services.postmark.sender'),
                 $email,
-                config('services.postmark.templates.welcome'),
+                self::templateId(config('services.postmark.templates.welcome')),
                 [
                     'product_name' => 'Gandalf',
                     'name' => $name,
@@ -79,7 +79,7 @@ class Mail
             $this->postmark->sendEmailWithTemplate(
                 config('services.postmark.sender'),
                 $email,
-                config('services.postmark.templates.reset_password'),
+                self::templateId(config('services.postmark.templates.reset_password')),
                 [
                     'product_name' => 'Gandalf',
                     'name' => $user->username,
@@ -108,7 +108,7 @@ class Mail
             $this->postmark->sendEmailWithTemplate(
                 config('services.postmark.sender'),
                 $invitation->email,
-                config('services.postmark.templates.invite'),
+                self::templateId(config('services.postmark.templates.invite')),
                 [
                     'email' => $invitation->email,
                     'project_name' => $invitation->project['title'],
@@ -116,5 +116,22 @@ class Mail
                 ]
             );
         }
+    }
+
+    /**
+     * Normalise a configured Postmark template reference.
+     *
+     * Template IDs read from the environment are strings (e.g. "45631871"). The
+     * Postmark SDK treats a string as a template *alias* and an integer as a
+     * template *ID*, so a numeric string is sent as an alias and rejected with
+     * "The Template's 'Alias' ... was not found". Cast numeric values to int so
+     * they are sent as an ID, while leaving genuine (non-numeric) aliases intact.
+     *
+     * @param  string $template  Configured template ID or alias.
+     * @return int|string
+     */
+    private static function templateId($template)
+    {
+        return is_numeric($template) ? (int) $template : $template;
     }
 }
