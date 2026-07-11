@@ -54,11 +54,20 @@ class UserObserver
      */
     public function created(User $user)
     {
+        // Only send the verification email when a verify_email token was actually
+        // issued. Users created already-active (e.g. the ACTIVATE_ALL_USERS bypass
+        // or an admin-confirmed invitation) have no token, and calling
+        // getVerifyEmailToken()['token'] on the resulting false would fatal.
+        $token = $user->getVerifyEmailToken();
+        if (!$token || empty($user->temporary_email)) {
+            return;
+        }
+
         /**
          * @var Mail $mail
          */
         $mail = app('\App\Services\Mail');
-        $mail->sendEmailConfirmation($user->temporary_email, $user->getVerifyEmailToken()['token'], $user->username);
+        $mail->sendEmailConfirmation($user->temporary_email, $token['token'], $user->username);
     }
 
     public function updating(User $user)

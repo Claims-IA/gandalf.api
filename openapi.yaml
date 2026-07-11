@@ -124,6 +124,42 @@ components:
   # ───────────────────────────────────────────────────────────────────────────
   schemas:
 
+    # ── Collaborator ─────────────────────────────────────────────────────────
+    Collaborator:
+      type: object
+      description: A project collaborator or pending invitation, with confirmation status.
+      properties:
+        user_id:
+          type: string
+          nullable: true
+          description: ObjectID of the user, or `null` for a not-yet-registered invitation.
+          example: "576bf5f9ce3c0c02ee2d314e"
+        email:
+          type: string
+          nullable: true
+          example: "user@example.com"
+        username:
+          type: string
+          nullable: true
+          description: '`null` for a pending invitation (no account yet).'
+          example: "jdoe"
+        role:
+          type: string
+          example: "user"
+        scope:
+          type: array
+          items:
+            type: string
+          example: ["tables_view", "decisions_make"]
+        status:
+          type: string
+          enum: [active, pending, invited]
+          description: |
+            - `active` — registered and confirmed.
+            - `pending` — registered but email not confirmed.
+            - `invited` — invitation sent, no account yet.
+          example: "pending"
+
     # ── Pagination wrapper ──────────────────────────────────────────────────
     PaginatedResponse:
       type: object
@@ -1751,6 +1787,274 @@ paths:
                         type: string
                         description: Public URL to the generated `.tar.gz` archive.
                         example: "https://api.example.com/dump/export_507f1f77bcf86cd799439011.tar.gz"
+
+  # ── Collaborators ────────────────────────────────────────────────────────────
+  /api/v1/projects/collaborators:
+    get:
+      tags: [Projects]
+      summary: List project collaborators with confirmation status
+      description: |
+        Returns the project's collaborators, each annotated with a `status`,
+        and merges in any pending invitations that have not yet been accepted.
+
+        | `status` | Meaning |
+        |----------|---------|
+        | `active`  | Registered user whose account is confirmed (`User.active = true`). |
+        | `pending` | Registered user who has not confirmed their email yet. |
+        | `invited` | An invitation was sent but the invitee has not registered — no account exists yet (identified by `email`, `user_id` is `null`). |
+
+        Requires the `users_manage` scope.
+      operationId: listCollaborators
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      responses:
+        "200":
+          description: Collaborators list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Collaborator'
+
+  /api/v1/projects/collaborators/confirm:
+    post:
+      tags: [Projects]
+      summary: Confirm a collaborator on behalf of the invitee (admin only)
+      description: |
+        Admin shortcut that confirms a collaborator without the invitee clicking
+        the email verification link. **Only a project admin** (`role = admin`)
+        may call this; other collaborators receive `403`.
+
+        Two cases are handled:
+
+        - **Pending user** — identified by `user_id` or `email` of an existing
+          account with `active = false`. The account is activated exactly like the
+          email-verification flow: `temporary_email` is promoted to `email`,
+          `active` is set to `true`, and the verification token is cleared.
+        - **Pending invitation** — identified by `email` when no account exists yet.
+          A new account is created with a generated temporary password and marked
+          active, the user is added to the project with the invitation's role and
+          scope, and the invitation is removed. The temporary password is returned
+          in `temporary_password` and, when email delivery is enabled, also emailed
+          to the invitee.
+
+        Provide **either** `user_id` **or** `email`.
+      operationId: confirmCollaborator
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                  description: ObjectID of the pending user to activate.
+                  example: "6a4f8fa0941ed4e01c591667"
+                email:
+                  type: string
+                  format: email
+                  description: >
+                    Email of the pending user or invitation to confirm. Required
+                    when confirming an invitation (no account exists yet).
+                  example: "invited.person@example.com"
+      responses:
+        "200":
+          description: Collaborator confirmed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: object
+                    properties:
+                      user_id:
+                        type: string
+                        example: "6a4f905e5b092138b30a8a58"
+                      email:
+                        type: string
+                        example: "invited.person@example.com"
+                      status:
+                        type: string
+                        enum: [active]
+                        example: "active"
+                      temporary_password:
+                        type: string
+                        description: >
+                          Only present when an invitation was confirmed (a new
+                          account was created). Show it to the admin so they can
+                          pass it on; the user must change it after first login.
+                        example: "Fbb2QQTzvWsU"
+        "403":
+          description: The caller is not a project admin.
+        "404":
+          description: No matching user or invitation found.
+        "422":
+          description: Neither `user_id` nor `email` was provided.
+
+  /api/v1/projects/collaborators/invitation:
+    delete:
+      tags: [Projects]
+      summary: Cancel a pending invitation (admin only)
+      description: |
+        Removes the pending invitation identified by `email` on the current
+        project. Only a project admin may call this. Returns `404` when no
+        matching invitation exists. Requires the `users_manage` scope.
+      operationId: cancelInvitation
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "invited.person@example.com"
+      responses:
+        "200":
+          description: Invitation cancelled.
+        "403":
+          description: The caller is not a project admin.
+        "404":
+          description: No pending invitation found for this email.
+        "422":
+          description: Missing `email`.
+
+  /api/v1/projects/collaborators/invitation/resend:
+    post:
+      tags: [Projects]
+      summary: Resend a pending invitation email (admin only)
+      description: |
+        Re-sends the invitation email for the pending invitation identified by
+        `email` on the current project. Only a project admin may call this.
+        Returns `404` when no matching invitation exists. Requires the
+        `users_manage` scope.
+      operationId: resendInvitation
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "invited.person@example.com"
+      responses:
+        "200":
+          description: Invitation email re-sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: object
+                    properties:
+                      email:
+                        type: string
+                        example: "invited.person@example.com"
+        "403":
+          description: The caller is not a project admin.
+        "404":
+          description: No pending invitation found for this email.
+        "422":
+          description: Missing `email`.
+
+  /api/v1/projects/collaborators/account:
+    delete:
+      tags: [Projects]
+      summary: Permanently delete a user account (admin only)
+      description: |
+        **Destructive and irreversible.** Deletes the user account identified by
+        `user_id` and removes it from the current project.
+
+        Guarded by several conditions:
+        - only a project admin may call this (`403` otherwise);
+        - a user cannot delete their own account (`403`);
+        - the account must exist (`404`);
+        - the account must **not** be a member of any project other than the
+          current one — otherwise `409` is returned with the blocking projects,
+          and the account must first be removed from those.
+
+        Requires the `users_manage` scope.
+      operationId: deleteAccount
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id:
+                  type: string
+                  example: "6a4f905e5b092138b30a8a58"
+      responses:
+        "200":
+          description: Account deleted.
+        "403":
+          description: The caller is not an admin, or is trying to delete their own account.
+        "404":
+          description: No account found for this id.
+        "409":
+          description: The account belongs to other projects.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      message:
+                        type: string
+                        example: "This account is a member of other projects. Remove it from those first."
+                      projects:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            _id:
+                              type: string
+                            title:
+                              type: string
+        "422":
+          description: Missing `user_id`.
 
   # ── Tables (Admin CRUD) ──────────────────────────────────────────────────────
   /api/v1/admin/tables:

@@ -104,6 +104,34 @@ $app->get('api/v1/projects/export', [
     'uses' => 'App\Http\Controllers\ProjectsController@export',
     'middleware' => ['oauth', 'applicationable', 'applicationable.acl'],
 ]);
+// GET lists project collaborators enriched with a confirmation status
+// (active / pending / invited), merging in unaccepted invitations
+$app->get('api/v1/projects/collaborators', [
+    'uses' => 'App\Http\Controllers\ProjectsController@collaborators',
+    'middleware' => ['oauth', 'applicationable', 'applicationable.acl'],
+]);
+// POST confirms a collaborator on behalf of the invitee (project admin only):
+// activates a pending user, or creates an account from a pending invitation
+$app->post('api/v1/projects/collaborators/confirm', [
+    'uses' => 'App\Http\Controllers\ProjectsController@confirmCollaborator',
+    'middleware' => ['oauth', 'applicationable', 'applicationable.acl'],
+]);
+// DELETE cancels a pending invitation by email (project admin only)
+$app->delete('api/v1/projects/collaborators/invitation', [
+    'uses' => 'App\Http\Controllers\ProjectsController@cancelInvitation',
+    'middleware' => ['oauth', 'applicationable', 'applicationable.acl'],
+]);
+// POST resends the invitation email for a pending invitation (project admin only)
+$app->post('api/v1/projects/collaborators/invitation/resend', [
+    'uses' => 'App\Http\Controllers\ProjectsController@resendInvitation',
+    'middleware' => ['oauth', 'applicationable', 'applicationable.acl'],
+]);
+// DELETE permanently deletes a user account (project admin only); refused when
+// the account still belongs to other projects
+$app->delete('api/v1/projects/collaborators/account', [
+    'uses' => 'App\Http\Controllers\ProjectsController@deleteAccount',
+    'middleware' => ['oauth', 'applicationable', 'applicationable.acl'],
+]);
 
 // Admin-only routes — full OAuth token, application context, and ACL middleware required
 // These endpoints expose internal decision records and table analytics to project admins

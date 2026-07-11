@@ -52,6 +52,7 @@ return [
 
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_get'],
             '~^\/api\/v1\/projects\/current$~' => ['tables_view'],
+            '~^\/api\/v1\/projects\/collaborators$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['tables_view'],
         ],
         'post' => [
@@ -59,6 +60,8 @@ return [
             '~^\/api\/v1\/admin\/tables\/(.+)\/copy$~' => ['tables_create'],
             '~^\/api\/v1\/admin\/changelog\/(.+)\/(.+)\/rollback\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/tables\/(.+)\/decisions$~' => ['decisions_make'],
+            '~^\/api\/v1\/projects\/collaborators\/confirm$~' => ['users_manage'],
+            '~^\/api\/v1\/projects\/collaborators\/invitation\/resend$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_manage'],
         ],
@@ -69,6 +72,8 @@ return [
             '~^\/api\/v1\/projects\/(.+)$~' => ['project_update'],
         ],
         'delete' => [
+            '~^\/api\/v1\/projects\/collaborators\/invitation$~' => ['users_manage'],
+            '~^\/api\/v1\/projects\/collaborators\/account$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_manage'],
             '~^\/api\/v1\/projects$~' => ['project_delete'],
