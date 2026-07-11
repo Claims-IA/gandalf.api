@@ -119,6 +119,46 @@ class Mail
     }
 
     /**
+     * Email a freshly generated temporary password to a collaborator whose
+     * account was confirmed by a project admin (invitation shortcut).
+     *
+     * Sent as a plain message rather than a template, since no Postmark template
+     * is provisioned for this flow. A no-op when email delivery is disabled — the
+     * caller always also returns the password to the admin for manual delivery.
+     *
+     * @param  string $email     The recipient's email address.
+     * @param  string $password  The generated temporary password (plain text).
+     * @param  string $name      The recipient's username, for personalisation.
+     * @return void|null
+     */
+    public function sendTemporaryPassword($email, $password, $name)
+    {
+        if (false == config('services.email.enabled')) {
+            return null;
+        }
+
+        $loginUrl = config('services.link.invite');
+        $htmlBody = '<p>Bonjour ' . htmlspecialchars($name) . ',</p>'
+            . '<p>Un administrateur a confirmé votre compte Gandalf. '
+            . 'Voici votre mot de passe temporaire :</p>'
+            . '<p><strong>' . htmlspecialchars($password) . '</strong></p>'
+            . '<p>Connectez-vous sur <a href="' . htmlspecialchars($loginUrl) . '">' . htmlspecialchars($loginUrl) . '</a> '
+            . 'puis changez ce mot de passe dès que possible.</p>';
+        $textBody = "Bonjour $name,\n\n"
+            . "Un administrateur a confirmé votre compte Gandalf.\n"
+            . "Mot de passe temporaire : $password\n\n"
+            . "Connectez-vous sur $loginUrl puis changez ce mot de passe dès que possible.";
+
+        $this->postmark->sendEmail(
+            config('services.postmark.sender'),
+            $email,
+            'Votre compte Gandalf a été confirmé',
+            $htmlBody,
+            $textBody
+        );
+    }
+
+    /**
      * Normalise a configured Postmark template reference.
      *
      * Template IDs read from the environment are strings (e.g. "45631871"). The
