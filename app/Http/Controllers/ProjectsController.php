@@ -185,7 +185,9 @@ class ProjectsController extends AbstractController
         $userId = $this->request->input('user_id');
         $email = $this->request->input('email');
 
-        // Resolve an existing user, either by id or (temporary_)email.
+        // Resolve an existing user, either by id or email. A confirmed email
+        // (email column) takes precedence; only fall back to temporary_email
+        // (an unconfirmed, pending address) when no confirmed account matches.
         $user = null;
         if ($userId) {
             $user = User::find($userId);
@@ -242,13 +244,25 @@ class ProjectsController extends AbstractController
             throw new IdNotFoundException('No user or invitation found to confirm.');
         }
 
+        // Reject if an account already exists for this email — mirror the
+        // uniqueness UsersController@create enforces, which this direct-create
+        // path would otherwise bypass.
+        if (User::where('email', $email)->first()
+            || User::where('temporary_email', $email)->first()) {
+            return $this->response->json(
+                ['message' => 'An account already exists for this email.'],
+                422
+            );
+        }
+
         // Generate a readable, unambiguous temporary password (CSPRNG) that the
         // invitee must change after first login. Avoids look-alike characters.
         $temporaryPassword = $this->generateTemporaryPassword();
 
         $newUser = new User();
         $newUser->fill([
-            'username' => strstr($email, '@', true),
+            // Derive a unique, length-valid username from the email local part.
+            'username' => $this->uniqueUsernameFromEmail($email),
             'email'    => $email,
             'password' => $temporaryPassword,
         ]);
@@ -439,6 +453,37 @@ class ProjectsController extends AbstractController
         return Invitation::where('email', $email)->get()->filter(function ($inv) use ($appId) {
             return isset($inv->project['_id']) && (string) $inv->project['_id'] === $appId;
         })->first();
+    }
+
+    /**
+     * Derive a unique, length-valid username from an email address.
+     *
+     * The application enforces usernames of 2-32 characters and requires them to
+     * be unique. The email local part alone satisfies neither guarantee, so pad
+     * short parts, truncate long ones, and append a numeric suffix on collision.
+     *
+     * @param  string $email
+     * @return string
+     */
+    private function uniqueUsernameFromEmail($email)
+    {
+        $base = strstr($email, '@', true) ?: 'user';
+        // Keep only characters the username validator accepts; fall back to 'user'.
+        $base = preg_replace('/[^A-Za-z0-9._-]/', '', $base);
+        if (strlen($base) < 2) {
+            $base = str_pad($base, 2, 'x');
+        }
+        $base = substr($base, 0, 32);
+
+        $candidate = $base;
+        $suffix = 1;
+        while (User::where('username', $candidate)->first()) {
+            $suffix++;
+            // Keep the whole thing within 32 chars while appending the suffix.
+            $candidate = substr($base, 0, 32 - strlen((string) $suffix)) . $suffix;
+        }
+
+        return $candidate;
     }
 
     /**
