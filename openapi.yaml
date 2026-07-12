@@ -1000,6 +1000,20 @@ components:
                 - type: number
               example: "approved"
           additionalProperties: true
+        answer_types:
+          type: object
+          description: >
+            Type of each output variable in `answer` (name → type). A DRG uses
+            this to check that an upstream output may feed a downstream field.
+            Derived from the table: `scoring_*` tables are `numeric` by nature;
+            a first-match table carries its declared `decision_type`. A `json`
+            output cannot be wired into another table's typed input.
+          properties:
+            final_decision:
+              type: string
+              enum: [numeric, string, alpha_num, json]
+              example: "numeric"
+          additionalProperties: true
         decision_kind:
           type: string
           description: >

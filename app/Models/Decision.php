@@ -152,6 +152,13 @@ class Decision extends Base implements Applicationable
             'answer' => [
                 'final_decision' => $this->final_decision,
             ],
+            // Type of each output variable (name => type). Lets a DRG validate
+            // that an upstream output can feed a downstream field. Derived, not
+            // stored: scoring_* tables are numeric by nature; a first-match
+            // table carries its declared decision_type.
+            'answer_types' => [
+                'final_decision' => $this->getOutputType(),
+            ],
             'decision_kind' => $this->getDecisionKind(),
             'request' => $this->request,
             self::CREATED_AT => $this->getAttribute(self::CREATED_AT)->toIso8601String(),
@@ -222,5 +229,31 @@ class Decision extends Base implements Applicationable
         $matchingType = isset($table['matching_type']) ? $table['matching_type'] : 'first';
 
         return $matchingType === 'first' ? 'table_simple' : 'table_advanced';
+    }
+
+    /**
+     * Type of this decision's `final_decision` output, derived from the table.
+     *
+     * A `scoring_*` table aggregates rule values arithmetically, so its output is
+     * `numeric` by nature — and structurally single. A `first`-match table's
+     * output carries the table's declared `decision_type`
+     * (`alpha_num` | `numeric` | `string` | `json`).
+     *
+     * A DRG uses this to decide whether an upstream output may feed a downstream
+     * field. A `json` output cannot be wired into another table's typed input.
+     *
+     * @return string  numeric | string | alpha_num | json
+     */
+    public function getOutputType()
+    {
+        $table = $this->getAttribute('table');
+        $matchingType = isset($table['matching_type']) ? $table['matching_type'] : 'first';
+
+        if ($matchingType !== 'first') {
+            // scoring_sum / scoring_max / scoring_min / scoring_count → always numeric.
+            return 'numeric';
+        }
+
+        return isset($table['decision_type']) ? $table['decision_type'] : 'string';
     }
 }

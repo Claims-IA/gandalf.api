@@ -81,6 +81,7 @@ class Scoring
                 'title' => $table->title,
                 'description' => $table->description,
                 'matching_type' => $table->matching_type,
+                'decision_type' => $table->decision_type,
                 'variant' => [
                     '_id' => new ObjectID($variant->getId()),
                     'title' => $variant->title,
