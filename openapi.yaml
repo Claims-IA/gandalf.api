@@ -978,10 +978,36 @@ components:
         description:
           type: string
         final_decision:
+          description: >
+            The decision's primary output value. Kept at the root for backward
+            compatibility; also available under `answer.final_decision`.
           oneOf:
             - type: string
             - type: number
           example: "approved"
+        answer:
+          type: object
+          description: >
+            Unified output envelope grouping the decision's output variables.
+            Today it holds `{ final_decision }`; it is designed to carry several
+            named outputs (for advanced tables and Decision Requirement Graphs)
+            without changing the response contract. Tables and graphs share this
+            same envelope so they can be consumed interchangeably.
+          properties:
+            final_decision:
+              oneOf:
+                - type: string
+                - type: number
+              example: "approved"
+          additionalProperties: true
+        decision_kind:
+          type: string
+          description: >
+            How the decision was produced. `table_simple` — first matching rule
+            wins (`matching_type = first`); `table_advanced` — a `scoring_*`
+            aggregation. `drg` is reserved for Decision Requirement Graph runs.
+          enum: [table_simple, table_advanced, drg]
+          example: "table_simple"
         request:
           type: object
           additionalProperties: true

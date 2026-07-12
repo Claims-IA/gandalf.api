@@ -130,6 +130,13 @@ class Decision extends Base implements Applicationable
      * line with the live decision endpoint (POST /tables/{id}/decisions): when
      * `show_meta` is disabled the key is omitted entirely.
      *
+     * The response also carries a unified `answer` envelope and a `decision_kind`
+     * discriminant. `answer` groups the decision's output variables — today just
+     * `{ final_decision }`, but the structure is future-proof for tables that
+     * expose several outputs and for Decision Requirement Graphs. `final_decision`
+     * remains at the root for backward compatibility. This is the shared contract
+     * that lets tables and graphs be consumed interchangeably.
+     *
      * @param  bool $showMeta  Whether to include the per-rule summary.
      * @return array
      */
@@ -142,6 +149,10 @@ class Decision extends Base implements Applicationable
             'title' => $this->title,
             'description' => $this->description,
             'final_decision' => $this->final_decision,
+            'answer' => [
+                'final_decision' => $this->final_decision,
+            ],
+            'decision_kind' => $this->getDecisionKind(),
             'request' => $this->request,
             self::CREATED_AT => $this->getAttribute(self::CREATED_AT)->toIso8601String(),
             self::UPDATED_AT => $this->getAttribute(self::UPDATED_AT)->toIso8601String(),
@@ -192,5 +203,24 @@ class Decision extends Base implements Applicationable
         $data['variant']['_id'] = strval($data['variant']['_id']);
 
         return $data;
+    }
+
+    /**
+     * Classify how this decision was produced, for the `decision_kind` field.
+     *
+     * Derived from the table snapshot's `matching_type` (no extra stored field):
+     *   - `table_simple`   — `matching_type = first` (first matching rule wins).
+     *   - `table_advanced` — any `scoring_*` aggregation.
+     * A future Decision Requirement Graph run will report `drg` from its own
+     * serialiser; this method only covers single-table decisions.
+     *
+     * @return string
+     */
+    public function getDecisionKind()
+    {
+        $table = $this->getAttribute('table');
+        $matchingType = isset($table['matching_type']) ? $table['matching_type'] : 'first';
+
+        return $matchingType === 'first' ? 'table_simple' : 'table_advanced';
     }
 }
