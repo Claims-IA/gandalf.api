@@ -34,6 +34,10 @@ $app->get('/', function () {
 $api = $app->make('Nebo15\REST\Router');
 $api->api('tables', 'TablesController', ['oauth', 'applicationable', 'applicationable.acl']);
 
+// Register full REST CRUD routes for the flows (Decision Requirement Graph)
+// resource under api/v1/admin/flows, same protection as tables
+$api->api('flows', 'FlowsController', ['oauth', 'applicationable', 'applicationable.acl']);
+
 
 // Register changelog routes (list, diff, rollback) for all admin-scoped resources
 /** @var Nebo15\Changelog\Router $changelog */

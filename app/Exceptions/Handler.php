@@ -80,6 +80,15 @@ class Handler extends ExceptionHandler
                 ],
                 'data' => $e->errors(),
             ], 422, ['Content-Type' => 'application/json']);
+        } elseif ($e instanceof \App\Exceptions\FlowValidationException) {
+            return response()->json([
+                'meta' => [
+                    'code' => 422,
+                    'error' => 'flow_validation',
+                    'error_message' => 'Flow graph validation failed',
+                ],
+                'data' => ['errors' => $e->getErrors()],
+            ], 422, ['Content-Type' => 'application/json']);
         } elseif ($e instanceof AuthorizationException) {
             $http_code = 401;
             $error_code = 'unauthorized';
