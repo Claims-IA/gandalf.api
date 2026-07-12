@@ -179,6 +179,8 @@ $app->group(
         $app->get('/decisions/{id:[0-9a-z]{24}}', ['uses' => 'ConsumerController@decision']);
         // Submit field values to a decision table and receive a decision result
         $app->post('/tables/{id:[0-9a-z]{24}}/decisions', ['uses' => 'ConsumerController@tableCheck']);
+        // Run a Decision Requirement Graph (flow) against its inputs
+        $app->post('/flows/{id:[0-9a-z]{24}}/decisions', ['uses' => 'ConsumerController@flowCheck']);
         // Invite another user to join the current application/project
         $app->post('/invite', ['uses' => 'UsersController@invite']);
     }

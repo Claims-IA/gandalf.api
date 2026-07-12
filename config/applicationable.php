@@ -64,6 +64,7 @@ return [
             '~^\/api\/v1\/admin\/tables\/(.+)\/copy$~' => ['tables_create'],
             '~^\/api\/v1\/admin\/changelog\/(.+)\/(.+)\/rollback\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/tables\/(.+)\/decisions$~' => ['decisions_make'],
+            '~^\/api\/v1\/flows\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v1\/projects\/collaborators\/confirm$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/collaborators\/invitation\/resend$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['users_manage'],
