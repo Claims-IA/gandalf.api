@@ -482,7 +482,7 @@ class ApiTester extends \Codeception\Actor
         return [
             'title' => 'Scoring sums to zero',
             'description' => 'Two matching rules that cancel out',
-            'matching_type' => 'scoring',
+            'matching_type' => 'scoring_sum',
             'decision_type' => 'numeric',
             'variants_probability' => 'first',
             'fields' => [
@@ -522,6 +522,78 @@ class ApiTester extends \Codeception\Actor
                             'than' => -10,
                             'title' => 'Minus ten',
                             'description' => 'Subtracts ten',
+                            'conditions' => [
+                                [
+                                    'field_key' => 'trigger',
+                                    'condition' => '$eq',
+                                    'value' => 'go',
+                                    'preset' => null,
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+    }
+
+    /**
+     * A first-match (decision) table whose FIRST matching rule decides 0 and a
+     * LATER matching rule decides 500, both matching the same request. The
+     * correct outcome is 0 (first match wins). Guards the other half of the fix:
+     * the first-match guard used `!$final_decision`, so a first rule deciding 0
+     * was treated as "no decision yet" and overwritten by the later rule (500) —
+     * "first non-empty match" instead of "first match". With `=== null` the 0 is
+     * kept. default_decision is a distinct sentinel (99) so a no-match is
+     * distinguishable from a real 0.
+     *
+     * @return array
+     */
+    public function getFirstMatchDecidingZero()
+    {
+        return [
+            'title' => 'First match decides zero',
+            'description' => 'First matching rule decides 0, a later one 500',
+            'matching_type' => 'first',
+            'decision_type' => 'numeric',
+            'variants_probability' => 'first',
+            'fields' => [
+                [
+                    '_id' => $this->getMongoId(),
+                    'key' => 'trigger',
+                    'title' => 'trigger',
+                    'source' => 'request',
+                    'type' => 'string',
+                    'preset' => null,
+                ],
+            ],
+            'variants' => [
+                [
+                    'title' => 'Variant',
+                    'description' => 'Variant',
+                    'default_title' => 'Default title',
+                    'default_description' => 'Default description',
+                    'default_decision' => 99,
+                    'rules' => [
+                        [
+                            '_id' => $this->getMongoId(),
+                            'than' => 0,
+                            'title' => 'Decides zero',
+                            'description' => 'First matching rule, decides 0',
+                            'conditions' => [
+                                [
+                                    'field_key' => 'trigger',
+                                    'condition' => '$eq',
+                                    'value' => 'go',
+                                    'preset' => null,
+                                ],
+                            ],
+                        ],
+                        [
+                            '_id' => $this->getMongoId(),
+                            'than' => 500,
+                            'title' => 'Decides five hundred',
+                            'description' => 'Later matching rule, must NOT win',
                             'conditions' => [
                                 [
                                     'field_key' => 'trigger',
