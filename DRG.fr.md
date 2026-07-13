@@ -207,7 +207,6 @@ seule `FlowValidationException` (rendue en un unique 422 avec un tableau
 | La sortie source est `final_decision` | `Edge #2 sources output 'x'; only 'final_decision' is available today.` |
 | Une sortie `json` ne peut alimenter une entrée de table | `Edge #2: node 'n_risk' outputs json, which cannot feed a table input.` |
 | Types source et cible compatibles | `Edge #2: output of 'n_risk' (numeric) is not compatible with field 'name' (string).` |
-| **Couverture des champs** — chaque champ de table est alimenté par une arête ou une entrée de même nom | `Field 'salary' of node 'n_risk' is not fed by any edge or flow input.` |
 | Le graphe est acyclique | `The graph contains a cycle; a decision graph must be acyclic.` |
 | Au moins une sortie, nommée uniquement, résolvant vers un nœud connu | `The flow must declare at least one output.` / `Duplicate output name 'verdict'.` / `Output #0 references an unknown node.` |
 
@@ -216,10 +215,12 @@ qu'un graphe qui comporte à la fois un cycle et, disons, une sortie erronée
 signale les deux en une seule réponse au lieu de ne révéler le cycle qu'au second
 save.
 
-> La **couverture des champs** est la raison pour laquelle une exécution partielle
-> n'échoue jamais silencieusement sur un champ manquant : si un champ de table
-> n'est ni câblé ni couvert par une entrée de même nom, le flow est rejeté au save
-> plutôt que de renvoyer un 422 à une exécution ultérieure.
+> La **couverture des champs n'est pas imposée.** La table d'un nœud peut
+> déclarer de nombreux champs alors qu'un flow ne câble que ceux dont ses règles
+> ont besoin — c'est le choix du concepteur. Un champ non câblé est passé à `null`
+> à l'exécution (`FlowEngine::buildNodeInput`), ce que la règle `present` de
+> Scoring accepte et que l'évaluateur de conditions gère via `$is_null` /
+> `$is_set` ; l'exécution n'échoue donc pas dessus.
 
 ---
 
@@ -247,8 +248,10 @@ save.
      échoue clairement si elle a été supprimée depuis la sauvegarde du flow.
    - `buildNodeInput()` assemble **uniquement les champs propres à cette table** :
      chaque champ est alimenté par son arête câblée si elle existe, sinon par une
-     entrée de flow de même nom. Les entrées non liées — y compris `variant_id`,
-     qui est local à la table — ne sont jamais transmises à un nœud.
+     entrée de flow de même nom, sinon passé à `null` (un champ non câblé est
+     autorisé — voir la couverture des champs ci-dessus). Les entrées non liées —
+     y compris `variant_id`, qui est local à la table — ne sont jamais transmises
+     à un nœud.
    - `Scoring::check()` évalue la table sans modification et renvoie l'enveloppe
      unifiée (portant `answer`, `answer_types`, `_id`).
 3. **Assembler** — `assembleOutputs()` lit le `from_node` / `from_output` de
