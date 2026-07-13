@@ -1,6 +1,7 @@
 /vendor
 .env
 .idea
+.history
 tests/_output/*
 dump.tar.gz
 .DS_Store

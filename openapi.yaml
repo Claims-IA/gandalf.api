@@ -160,6 +160,161 @@ components:
             - `invited` — invitation sent, no account yet.
           example: "pending"
 
+    # ── Flow (Decision Requirement Graph) ────────────────────────────────────
+    Flow:
+      type: object
+      description: >
+        A Decision Requirement Graph: several decision tables wired together so
+        one table's output feeds another's input field. A node references an
+        existing Table by id (not embedded), so a table can belong to several
+        flows and still be called directly.
+      properties:
+        _id:
+          type: string
+          example: "6a5437d8ad556857e10c1380"
+        title:
+          type: string
+          example: "Credit approval"
+        description:
+          type: string
+        inputs:
+          type: array
+          description: The flow's public input contract.
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+                example: "salary"
+              type:
+                type: string
+                enum: [numeric, boolean, string]
+        outputs:
+          type: array
+          description: The flow's public output contract (named, each from a node).
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                example: "verdict"
+              from_node:
+                type: string
+                example: "n_final"
+              from_output:
+                type: string
+                description: Output variable of the source node; today always `final_decision`.
+                example: "final_decision"
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id:
+                type: string
+                example: "n_final"
+              table_id:
+                type: string
+                example: "69b29698c33fe7db7106c697"
+        edges:
+          type: array
+          description: >
+            Wiring. Each edge's `from` is a declared input (`{input}`) or an
+            upstream node output (`{node, output}`); its `into` is a downstream
+            field (`{node, field}`).
+          items:
+            type: object
+            properties:
+              from:
+                type: object
+                properties:
+                  input:
+                    type: string
+                  node:
+                    type: string
+                  output:
+                    type: string
+              into:
+                type: object
+                properties:
+                  node:
+                    type: string
+                  field:
+                    type: string
+
+    FlowResult:
+      type: object
+      description: Result of running a flow (POST /flows/{id}/decisions).
+      properties:
+        flow_run_id:
+          type: string
+          example: "6a5437d895812a10c20a7630"
+        answer:
+          type: object
+          description: The flow's declared outputs, by name.
+          additionalProperties: true
+          example: { verdict: "approved", risk_score: 40 }
+        answer_types:
+          type: object
+          additionalProperties: true
+          example: { verdict: "string", risk_score: "numeric" }
+        decision_kind:
+          type: string
+          enum: [drg]
+          example: "drg"
+        nodes:
+          type: array
+          description: Per-node trace of the run.
+          items:
+            $ref: '#/components/schemas/FlowRunNode'
+
+    FlowRunNode:
+      type: object
+      properties:
+        node_id:
+          type: string
+        table_id:
+          type: string
+        input:
+          type: object
+          additionalProperties: true
+        decision_id:
+          type: string
+        answer:
+          type: object
+          additionalProperties: true
+
+    FlowRun:
+      type: object
+      description: A recorded flow execution, linking the decisions it produced.
+      properties:
+        _id:
+          type: string
+        flow:
+          type: object
+          properties:
+            _id:
+              type: string
+            title:
+              type: string
+        inputs:
+          type: object
+          additionalProperties: true
+        answer:
+          type: object
+          additionalProperties: true
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlowRunNode'
+        error:
+          type: object
+          nullable: true
+          description: Present only for a failed/partial run.
+          properties:
+            error:
+              type: string
+
     # ── Pagination wrapper ──────────────────────────────────────────────────
     PaginatedResponse:
       type: object
@@ -2095,6 +2250,212 @@ paths:
                               type: string
         "422":
           description: Missing `user_id`.
+
+  # ── Flows (Decision Requirement Graph) ───────────────────────────────────────
+  /api/v1/admin/flows:
+    get:
+      tags: [Flows]
+      summary: List flows
+      description: Paginated list of the project's decision-requirement-graph flows.
+      operationId: listFlows
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      responses:
+        "200":
+          description: Flows list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Flow'
+    post:
+      tags: [Flows]
+      summary: Create a flow
+      description: >
+        Creates a flow. The graph is validated: table references exist in the
+        project, every node field is fed by an edge or a same-named input,
+        types are compatible (a `json` output cannot feed a typed input), output
+        names are unique, and the graph is acyclic. Requires `tables_create`.
+      operationId: createFlow
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Flow'
+      responses:
+        "201":
+          description: Flow created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Flow'
+        "422":
+          description: Graph validation failed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: object
+                    properties:
+                      errors:
+                        type: array
+                        items:
+                          type: string
+
+  /api/v1/admin/flows/{id}:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Flows]
+      summary: Get a flow
+      operationId: getFlow
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: The flow.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Flow'
+        "404":
+          description: Flow not found.
+    put:
+      tags: [Flows]
+      summary: Update a flow
+      description: >
+        Updates a flow. Only the keys present in the body override the stored
+        graph — a partial update never wipes the topology. The merged graph is
+        re-validated. Requires `tables_update`.
+      operationId: updateFlow
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Flow'
+      responses:
+        "200":
+          description: Flow updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Flow'
+        "404":
+          description: Flow not found.
+        "422":
+          description: Graph validation failed.
+    delete:
+      tags: [Flows]
+      summary: Delete a flow
+      operationId: deleteFlow
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Flow deleted.
+
+  /api/v1/admin/flows/{id}/runs:
+    get:
+      tags: [Flows]
+      summary: List a flow's run history
+      description: Paginated executions of the flow, most recent first. Requires `tables_view`.
+      operationId: listFlowRuns
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: Run history.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FlowRun'
+        "404":
+          description: Flow not found.
+
+  /api/v1/flows/{id}/decisions:
+    post:
+      tags: [Flows]
+      summary: Run a flow
+      description: >
+        Executes the flow against the supplied inputs and returns the assembled
+        outputs. Nodes run in topological order; each node's decision is
+        persisted and linked by a FlowRun. Requires `decisions_make`.
+      operationId: runFlow
+      security:
+        - BearerAuth: []
+        - BasicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: Flow input values, keyed by input key.
+              example: { salary: 1500, country: "FR" }
+      responses:
+        "200":
+          description: Flow result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowResult'
+        "422":
+          description: A wiring error or a missing/invalid input at run time.
 
   # ── Tables (Admin CRUD) ──────────────────────────────────────────────────────
   /api/v1/admin/tables:

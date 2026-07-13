@@ -153,6 +153,8 @@ $app->group(
         $app->get('/decisions/{id:[0-9a-z]{24}}', ['uses' => 'DecisionsController@read']);
         // Attach arbitrary key-value metadata to a decision (e.g. customer reference)
         $app->put('/decisions/{id:[0-9a-z]{24}}/meta', ['uses' => 'DecisionsController@updateMeta']);
+        // Paginated run history for a decision-requirement-graph flow
+        $app->get('/flows/{id:[0-9a-z]{24}}/runs', ['uses' => 'FlowsController@runs']);
         // Return rule/condition hit-rate analytics for a specific table variant
         $app->get('/tables/{id:[0-9a-z]{24}}/{variant_id:[0-9a-z]{24}}/analytics', ['uses' => 'TablesController@analytics']);
         // Copy a decision table into a different project

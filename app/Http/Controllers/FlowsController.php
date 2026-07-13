@@ -15,6 +15,9 @@ namespace App\Http\Controllers;
 
 use Nebo15\REST\AbstractController;
 
+/**
+ * @method \App\Repositories\FlowRepository getRepository()
+ */
 class FlowsController extends AbstractController
 {
     protected $repositoryClassName = 'App\Repositories\FlowRepository';
@@ -38,4 +41,17 @@ class FlowsController extends AbstractController
             'title' => 'sometimes|min:1',
         ],
     ];
+
+    /**
+     * Paginated run history for a flow (most recent first).
+     *
+     * @param  string $id  Flow ObjectID.
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function runs($id)
+    {
+        return $this->response->jsonPaginator(
+            $this->getRepository()->getRuns($id, $this->request->input('size'))
+        );
+    }
 }

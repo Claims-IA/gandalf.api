@@ -13,6 +13,7 @@ namespace App\Repositories;
 
 use App\Models\Flow;
 use App\Models\Table;
+use App\Models\FlowRun;
 use App\Services\GraphSort;
 use App\Exceptions\FlowValidationException;
 use Nebo15\REST\AbstractRepository;
@@ -59,6 +60,30 @@ class FlowRepository extends AbstractRepository
         $model->save();
 
         return $model;
+    }
+
+    /**
+     * Paginated run history for a flow, most recent first.
+     *
+     * The flow is resolved first through read() (application-scoped by the CRUD),
+     * so its runs inherit that scope — runs are always requested per flow, never
+     * across the whole application.
+     *
+     * @param  string   $flowId
+     * @param  int|null $size
+     * @return \Illuminate\Pagination\LengthAwarePaginator
+     */
+    public function getRuns($flowId, $size = null)
+    {
+        // Ensures the flow exists in the current project (throws 404 otherwise).
+        $this->read($flowId);
+
+        // whereRaw with the dotted key is how Jenssegers matches an embedded
+        // field (a plain where('flow._id', ...) does not traverse it).
+        $query = FlowRun::whereRaw(['flow._id' => (string) $flowId])
+            ->orderBy('created_at', 'desc');
+
+        return $this->paginateQuery($query, $size);
     }
 
     /**
