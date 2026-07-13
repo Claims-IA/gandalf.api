@@ -16,6 +16,7 @@ namespace App\Http\Controllers;
 use App\Exceptions\AdminIsNotActivatedException;
 use App\Models\User;
 use App\Services\Scoring;
+use App\Services\FlowEngine;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
 use Nebo15\LumenApplicationable\Models\Application;
 use Nebo15\REST\Response;
@@ -59,26 +60,60 @@ class ConsumerController extends Controller
      */
     public function tableCheck(Request $request, Scoring $scoring, Application $application, $id)
     {
-        // Retrieve all admin-role users associated with this application
-        $users = $application->users()->where('role', 'admin')->all();
-        if (!$users) {
-            throw new AdminIsNotActivatedException;
-        }
-        // Collect their user IDs so we can check activation status in the users collection
-        $userIds = [];
-        foreach ($users as $user) {
-            $userIds[] = strval($user['user_id']);
-        }
-        // At least one admin must have verified their email (active = true)
-        $users = User::whereIn('_id', $userIds)->where('active', true);
-        if ($users->count() == 0) {
-            throw new AdminIsNotActivatedException;
-        }
+        $this->assertActiveAdmin($application);
 
         // The show_meta application setting controls whether rule details are included in the response
         return $this->response->json(
             $scoring->check($id, $request->all(), $application->_id, $application->getSettingsElem('show_meta', false))
         );
+    }
+
+    /**
+     * Execute a Decision Requirement Graph (Flow) against the provided inputs.
+     *
+     * Same activation guard as tableCheck — applied once for the whole flow, not
+     * per node — then delegates orchestration to the FlowEngine, which runs the
+     * graph's tables in topological order and assembles the declared outputs.
+     *
+     * @param  Request     $request
+     * @param  FlowEngine  $flowEngine
+     * @param  Application $application  Resolved from the X-Application header.
+     * @param  string      $id           MongoDB ObjectID of the flow to run.
+     * @return \Illuminate\Http\JsonResponse
+     * @throws AdminIsNotActivatedException if the application has no active admin users.
+     */
+    public function flowCheck(Request $request, FlowEngine $flowEngine, Application $application, $id)
+    {
+        $this->assertActiveAdmin($application);
+
+        return $this->response->json(
+            $flowEngine->run($id, $request->all(), $application->_id, $application->getSettingsElem('show_meta', false))
+        );
+    }
+
+    /**
+     * Ensure the application has at least one active (email-verified) admin.
+     *
+     * Shared by tableCheck and flowCheck to block orphaned/unverified projects
+     * from consuming the decision engine.
+     *
+     * @param  Application $application
+     * @return void
+     * @throws AdminIsNotActivatedException
+     */
+    private function assertActiveAdmin(Application $application)
+    {
+        $users = $application->users()->where('role', 'admin')->all();
+        if (!$users) {
+            throw new AdminIsNotActivatedException;
+        }
+        $userIds = [];
+        foreach ($users as $user) {
+            $userIds[] = strval($user['user_id']);
+        }
+        if (User::whereIn('_id', $userIds)->where('active', true)->count() == 0) {
+            throw new AdminIsNotActivatedException;
+        }
     }
 
     /**

@@ -34,6 +34,10 @@ $app->get('/', function () {
 $api = $app->make('Nebo15\REST\Router');
 $api->api('tables', 'TablesController', ['oauth', 'applicationable', 'applicationable.acl']);
 
+// Register full REST CRUD routes for the flows (Decision Requirement Graph)
+// resource under api/v1/admin/flows, same protection as tables
+$api->api('flows', 'FlowsController', ['oauth', 'applicationable', 'applicationable.acl']);
+
 
 // Register changelog routes (list, diff, rollback) for all admin-scoped resources
 /** @var Nebo15\Changelog\Router $changelog */
@@ -149,6 +153,8 @@ $app->group(
         $app->get('/decisions/{id:[0-9a-z]{24}}', ['uses' => 'DecisionsController@read']);
         // Attach arbitrary key-value metadata to a decision (e.g. customer reference)
         $app->put('/decisions/{id:[0-9a-z]{24}}/meta', ['uses' => 'DecisionsController@updateMeta']);
+        // Paginated run history for a decision-requirement-graph flow
+        $app->get('/flows/{id:[0-9a-z]{24}}/runs', ['uses' => 'FlowsController@runs']);
         // Return rule/condition hit-rate analytics for a specific table variant
         $app->get('/tables/{id:[0-9a-z]{24}}/{variant_id:[0-9a-z]{24}}/analytics', ['uses' => 'TablesController@analytics']);
         // Copy a decision table into a different project
@@ -175,6 +181,8 @@ $app->group(
         $app->get('/decisions/{id:[0-9a-z]{24}}', ['uses' => 'ConsumerController@decision']);
         // Submit field values to a decision table and receive a decision result
         $app->post('/tables/{id:[0-9a-z]{24}}/decisions', ['uses' => 'ConsumerController@tableCheck']);
+        // Run a Decision Requirement Graph (flow) against its inputs
+        $app->post('/flows/{id:[0-9a-z]{24}}/decisions', ['uses' => 'ConsumerController@flowCheck']);
         // Invite another user to join the current application/project
         $app->post('/invite', ['uses' => 'UsersController@invite']);
     }
