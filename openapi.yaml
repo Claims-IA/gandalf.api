@@ -2455,7 +2455,27 @@ paths:
                   data:
                     $ref: '#/components/schemas/FlowResult'
         "422":
-          description: A wiring error or a missing/invalid input at run time.
+          description: >
+            A wiring error or a missing/invalid input at run time. The partial
+            run is still recorded; its id is returned as `data.flow_run_id` so
+            the failure can be correlated with the persisted trace.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: object
+                    properties:
+                      errors:
+                        type: array
+                        items:
+                          type: string
+                      flow_run_id:
+                        type: string
+                        description: Id of the FlowRun that recorded this failed execution.
 
   # ── Tables (Admin CRUD) ──────────────────────────────────────────────────────
   /api/v1/admin/tables:

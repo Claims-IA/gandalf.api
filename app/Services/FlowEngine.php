@@ -20,6 +20,7 @@ use App\Models\Table;
 use App\Models\FlowRun;
 use App\Repositories\FlowRepository;
 use App\Exceptions\FlowValidationException;
+use Nebo15\LumenApplicationable\ApplicationableHelper;
 
 class FlowEngine
 {
@@ -88,9 +89,17 @@ class FlowEngine
             }
         } catch (\Exception $e) {
             // Record the partial run so the decisions already produced are linked
-            // and traceable, then rethrow for the caller's error response.
-            $this->persistRun($flow, $appId, $inputs, [], $nodeTrace, ['error' => $e->getMessage()]);
-            throw $e;
+            // and traceable, then surface its id on the error so the caller can
+            // correlate the 422 with the persisted trace.
+            $failedRun = $this->persistRun($flow, $appId, $inputs, [], $nodeTrace, ['error' => $e->getMessage()]);
+
+            if ($e instanceof FlowValidationException) {
+                throw $e->setFlowRunId($failedRun->getId());
+            }
+            // Any other failure (e.g. a node's missing-field ValidationException)
+            // becomes a flow validation error carrying the same message plus the
+            // run id — from the DRG consumer's point of view it is one flow error.
+            throw (new FlowValidationException([$e->getMessage()]))->setFlowRunId($failedRun->getId());
         }
 
         list($answer, $answerTypes) = $this->assembleOutputs($outputs, $nodeResults);
@@ -234,6 +243,10 @@ class FlowEngine
             'nodes' => array_values($nodeTrace),
             'error' => $error,
         ]);
+        // Scope the run to the current application the standard Applicationable way
+        // (the `applications` array), so getRuns can filter on it like every other
+        // resource. The `application` scalar above stays as a human-readable trace.
+        ApplicationableHelper::addApplication($flowRun);
         $flowRun->save();
 
         return $flowRun;

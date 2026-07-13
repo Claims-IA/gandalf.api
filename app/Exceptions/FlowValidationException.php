@@ -20,6 +20,13 @@ class FlowValidationException extends \Exception
     private $errors;
 
     /**
+     * @var string|null  Id of the FlowRun recorded for a failed run, so the
+     *                   client can correlate the 422 with the persisted trace.
+     *                   Null for write-time (save) validation, which has no run.
+     */
+    private $flowRunId;
+
+    /**
      * @param  array $errors
      */
     public function __construct(array $errors)
@@ -34,5 +41,26 @@ class FlowValidationException extends \Exception
     public function getErrors()
     {
         return $this->errors;
+    }
+
+    /**
+     * Attach the id of the FlowRun that recorded this failed execution.
+     *
+     * @param  string|null $flowRunId
+     * @return $this
+     */
+    public function setFlowRunId($flowRunId)
+    {
+        $this->flowRunId = $flowRunId;
+
+        return $this;
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getFlowRunId()
+    {
+        return $this->flowRunId;
     }
 }

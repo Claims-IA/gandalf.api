@@ -81,13 +81,20 @@ class Handler extends ExceptionHandler
                 'data' => $e->errors(),
             ], 422, ['Content-Type' => 'application/json']);
         } elseif ($e instanceof \App\Exceptions\FlowValidationException) {
+            $data = ['errors' => $e->getErrors()];
+            // A run-time failure records a partial FlowRun; expose its id so the
+            // client can correlate this 422 with the persisted trace.
+            if ($e->getFlowRunId() !== null) {
+                $data['flow_run_id'] = $e->getFlowRunId();
+            }
+
             return response()->json([
                 'meta' => [
                     'code' => 422,
                     'error' => 'flow_validation',
                     'error_message' => 'Flow graph validation failed',
                 ],
-                'data' => ['errors' => $e->getErrors()],
+                'data' => $data,
             ], 422, ['Content-Type' => 'application/json']);
         } elseif ($e instanceof AuthorizationException) {
             $http_code = 401;

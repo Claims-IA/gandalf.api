@@ -78,9 +78,13 @@ class FlowRepository extends AbstractRepository
         // Ensures the flow exists in the current project (throws 404 otherwise).
         $this->read($flowId);
 
-        // whereRaw with the dotted key is how Jenssegers matches an embedded
-        // field (a plain where('flow._id', ...) does not traverse it).
-        $query = FlowRun::whereRaw(['flow._id' => (string) $flowId])
+        // Scope to the current application in its own right (defence in depth),
+        // rather than relying solely on the read() gate above and on flow ids
+        // being globally unique. whereRaw with the dotted key is how Jenssegers
+        // matches an embedded field (a plain where('flow._id', ...) does not
+        // traverse it).
+        $query = FlowRun::where('applications', ApplicationableHelper::getApplicationId())
+            ->whereRaw(['flow._id' => (string) $flowId])
             ->orderBy('created_at', 'desc');
 
         return $this->paginateQuery($query, $size);
@@ -231,8 +235,13 @@ class FlowRepository extends AbstractRepository
         }
 
         // Acyclicity: a null topological order means a cycle remains. Shared with
-        // the FlowEngine via GraphSort so the invariant lives in one place.
-        if (empty($errors) && GraphSort::order($nodeIds, $adjacency) === null) {
+        // the FlowEngine via GraphSort so the invariant lives in one place. Run it
+        // regardless of other errors: $adjacency only ever links known nodes (a
+        // dependency is recorded only after both endpoints are resolved), so it is
+        // a valid graph even when unrelated edge/output errors were collected. This
+        // reports a cycle alongside those errors instead of hiding it until they
+        // are fixed and the flow is re-submitted.
+        if (GraphSort::order($nodeIds, $adjacency) === null) {
             $errors[] = 'The graph contains a cycle; a decision graph must be acyclic.';
         }
 
