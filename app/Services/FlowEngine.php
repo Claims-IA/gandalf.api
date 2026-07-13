@@ -20,6 +20,7 @@ use App\Models\Table;
 use App\Models\FlowRun;
 use App\Repositories\FlowRepository;
 use App\Exceptions\FlowValidationException;
+use Illuminate\Contracts\Validation\ValidationException;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
 
 class FlowEngine
@@ -88,18 +89,22 @@ class FlowEngine
                 ];
             }
         } catch (\Exception $e) {
+            // Extract meaningful messages BEFORE persisting so the recorded trace
+            // and the client response carry the same, non-empty errors.
+            $messages = $this->errorMessages($e);
+
             // Record the partial run so the decisions already produced are linked
             // and traceable, then surface its id on the error so the caller can
             // correlate the 422 with the persisted trace.
-            $failedRun = $this->persistRun($flow, $appId, $inputs, [], $nodeTrace, ['error' => $e->getMessage()]);
+            $failedRun = $this->persistRun($flow, $appId, $inputs, [], $nodeTrace, ['errors' => $messages]);
 
             if ($e instanceof FlowValidationException) {
                 throw $e->setFlowRunId($failedRun->getId());
             }
-            // Any other failure (e.g. a node's missing-field ValidationException)
-            // becomes a flow validation error carrying the same message plus the
-            // run id — from the DRG consumer's point of view it is one flow error.
-            throw (new FlowValidationException([$e->getMessage()]))->setFlowRunId($failedRun->getId());
+            // Any other failure (e.g. a node's per-field ValidationException)
+            // becomes a flow validation error carrying its messages plus the run
+            // id — from the DRG consumer's point of view it is one flow error.
+            throw (new FlowValidationException($messages))->setFlowRunId($failedRun->getId());
         }
 
         list($answer, $answerTypes) = $this->assembleOutputs($outputs, $nodeResults);
@@ -250,6 +255,34 @@ class FlowEngine
         $flowRun->save();
 
         return $flowRun;
+    }
+
+    /**
+     * Turn an exception raised during a run into human-readable error messages.
+     *
+     * A Lumen ValidationException (thrown by Scoring::check for a missing/ill-typed
+     * node field) carries its messages in errors(), NOT in getMessage() — its
+     * constructor never sets a message, so getMessage() is empty. Flatten the
+     * MessageBag so the 422 body and the persisted trace are actually useful.
+     * A FlowValidationException already exposes getErrors(); anything else falls
+     * back to its message (or class name when that too is empty).
+     *
+     * @param  \Exception $e
+     * @return string[]
+     */
+    private function errorMessages(\Exception $e)
+    {
+        if ($e instanceof ValidationException) {
+            $messages = $e->errors()->all();
+            return !empty($messages) ? $messages : ['Validation failed.'];
+        }
+
+        if ($e instanceof FlowValidationException) {
+            return $e->getErrors();
+        }
+
+        $message = $e->getMessage();
+        return [$message !== '' ? $message : get_class($e)];
     }
 
     /**

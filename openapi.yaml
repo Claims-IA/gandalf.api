@@ -312,8 +312,11 @@ components:
           nullable: true
           description: Present only for a failed/partial run.
           properties:
-            error:
-              type: string
+            errors:
+              type: array
+              description: The same messages returned in the run's 422 response.
+              items:
+                type: string
 
     # ── Pagination wrapper ──────────────────────────────────────────────────
     PaginatedResponse:
