@@ -232,7 +232,7 @@ class FlowRepository extends AbstractRepository
 
         // Acyclicity: a null topological order means a cycle remains. Shared with
         // the FlowEngine via GraphSort so the invariant lives in one place.
-        if (empty($errors) && \App\Services\GraphSort::order($nodeIds, $adjacency) === null) {
+        if (empty($errors) && GraphSort::order($nodeIds, $adjacency) === null) {
             $errors[] = 'The graph contains a cycle; a decision graph must be acyclic.';
         }
 
@@ -349,29 +349,62 @@ class FlowRepository extends AbstractRepository
     /**
      * Whether a source value type can feed a target field type.
      *
-     * Permissive by design: json is rejected upstream; numeric feeds numeric;
-     * everything textual feeds a string field; a numeric can be read as a string.
-     * Boolean fields accept only boolean-ish sources.
+     * Strict by design: a DRG wire is only valid when the two ends belong to the
+     * same type family. Connecting variables of different families (e.g. a
+     * numeric score into a string field, or an integer into a boolean) is
+     * rejected — if a node needs a boolean input, the upstream output must itself
+     * be boolean-typed. This makes a flow self-documenting and catches wiring
+     * mistakes at save time rather than on a later run.
      *
-     * @param  string $sourceType  numeric | string | alpha_num | boolean
+     * Families:
+     *   - text    : string, alpha_num  (equivalent — input fields only know 'string')
+     *   - numeric : numeric  (with the synonyms number/integer)
+     *   - boolean : boolean  (with the synonym bool)
+     *   - json    : never wireable, in or out.
+     *
+     * @param  string $sourceType  numeric | string | alpha_num | boolean | json
      * @param  string $targetType  numeric | boolean | string
      * @return bool
      */
     private function typesCompatible($sourceType, $targetType)
     {
-        if ($sourceType === 'json') {
+        $sourceFamily = $this->typeFamily($sourceType);
+        $targetFamily = $this->typeFamily($targetType);
+
+        // json (or any unknown type) is never a valid wire endpoint.
+        if ($sourceFamily === null || $targetFamily === null) {
             return false;
         }
-        if ($targetType === 'string') {
-            return true; // any scalar can be read as a string
-        }
-        if ($targetType === 'numeric') {
-            return $sourceType === 'numeric';
-        }
-        if ($targetType === 'boolean') {
-            return $sourceType === 'boolean';
-        }
 
-        return true;
+        return $sourceFamily === $targetFamily;
+    }
+
+    /**
+     * Normalise a declared type to its family, or null when it cannot be wired.
+     *
+     * Collapses synonyms (number/integer → numeric, bool → boolean) and treats
+     * alpha_num as text, so 'string' and 'alpha_num' are the same family. Returns
+     * null for 'json' and any unrecognised type, which makes them un-wireable.
+     *
+     * @param  string $type
+     * @return string|null  'text' | 'numeric' | 'boolean' | null
+     */
+    private function typeFamily($type)
+    {
+        switch (strtolower((string) $type)) {
+            case 'string':
+            case 'alpha_num':
+                return 'text';
+            case 'numeric':
+            case 'number':
+            case 'integer':
+                return 'numeric';
+            case 'boolean':
+            case 'bool':
+                return 'boolean';
+            default:
+                // json and anything unrecognised: not a valid wire endpoint.
+                return null;
+        }
     }
 }
