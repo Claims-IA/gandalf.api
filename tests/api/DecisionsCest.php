@@ -95,6 +95,54 @@ class DecisionsCest
         }
     }
 
+    /**
+     * A scoring_sum decision whose matching rules cancel out must return the
+     * real total (0), not the variant's default_decision. Guards the fix that
+     * replaced `$final_decision ?: $default` with a strict `=== null` check —
+     * a legitimate 0 output is preserved (it can then be wired into a DRG node),
+     * while a request that matches no rule still falls back to the default.
+     */
+    public function createScoringZero(ApiTester $I)
+    {
+        $I->createAndLoginUser();
+        $I->createProjectAndSetHeader();
+        $table = $I->createTable($I->getScoringTableSummingToZero());
+
+        // Both rules match ($eq 'go'): +10 and -10 sum to 0, NOT the default (99).
+        // assertEquals (loose) because a scoring_sum total is a float (0.0) that
+        // may round-trip through Mongo/JSON as int 0 or float 0.0.
+        $matched = $I->makeDecision($table->_id, ['trigger' => 'go'], 'scoring');
+        $I->assertEquals(0, $matched->final_decision);
+        $I->assertNotEquals(99, $matched->final_decision);
+
+        // No rule matches => the running total stays null => default (99).
+        $unmatched = $I->makeDecision($table->_id, ['trigger' => 'nope'], 'scoring');
+        $I->assertEquals(99, $unmatched->final_decision);
+    }
+
+    /**
+     * A first-match table whose first matching rule decides 0 must return 0, not
+     * let a later matching rule (500) overwrite it. Guards the other half of the
+     * fix (the first-match guard `!$final_decision` -> `=== null`): "first match"
+     * must not silently become "first non-empty match".
+     */
+    public function createFirstMatchZero(ApiTester $I)
+    {
+        $I->createAndLoginUser();
+        $I->createProjectAndSetHeader();
+        $table = $I->createTable($I->getFirstMatchDecidingZero());
+
+        // First rule (than=0) matches first, so it wins; the later rule (500) must
+        // not overwrite the 0. The old `!$final_decision` guard returned 500.
+        $matched = $I->makeDecision($table->_id, ['trigger' => 'go'], 'scoring');
+        $I->assertEquals(0, $matched->final_decision);
+        $I->assertNotEquals(500, $matched->final_decision);
+
+        // No rule matches => default (99).
+        $unmatched = $I->makeDecision($table->_id, ['trigger' => 'nope'], 'scoring');
+        $I->assertEquals(99, $unmatched->final_decision);
+    }
+
     public function checkDecisionAccess(ApiTester $I)
     {
         $user = $I->createAndLoginUser();

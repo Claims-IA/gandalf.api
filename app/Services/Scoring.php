@@ -81,6 +81,7 @@ class Scoring
                 'title' => $table->title,
                 'description' => $table->description,
                 'matching_type' => $table->matching_type,
+                'decision_type' => $table->decision_type,
                 'variant' => [
                     '_id' => new ObjectID($variant->getId()),
                     'title' => $variant->title,
@@ -159,8 +160,11 @@ class Scoring
                     $final_decision = ($final_decision === null) ? 1 : $final_decision + 1;
                 }
             } else {
-                // Decision mode: use the first matching rule's outcome (no further rules checked)
-                if (!$final_decision and $conditions_matched) {
+                // Decision mode: use the first matching rule's outcome (no further rules checked).
+                // Guard on `=== null`, not falsiness: a first rule that decides 0/""/false is a
+                // real match and must not be overwritten by a later rule ("first match", not
+                // "first non-empty match").
+                if ($final_decision === null and $conditions_matched) {
                     $final_decision = $rule->than;
                     // Override the default title/description with the matching rule's values
                     $scoring_data['title'] = $rule->title;
@@ -172,8 +176,13 @@ class Scoring
             $scoring_rule['decision'] = $conditions_matched ? $rule->than : null;
             $scoring_data['rules'][] = $scoring_rule;
         }
-        // Use the variant's default_decision when no rule matched (or score is zero)
-        $scoring_data['final_decision'] = $final_decision ?: $variant->default_decision;
+        // Fall back to the variant's default_decision only when no rule produced a
+        // value ($final_decision stays null). A rule that legitimately decides 0,
+        // "" or false is a real output, not an absence — it must be preserved,
+        // especially so a DRG can wire that exact value into a downstream node.
+        $scoring_data['final_decision'] = $final_decision === null
+            ? $variant->default_decision
+            : $final_decision;
 
         // Persist the decision and notify analytics services
         $decision = (new Decision())->fill($scoring_data)->save();
