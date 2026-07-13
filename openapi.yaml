@@ -189,6 +189,10 @@ components:
               type:
                 type: string
                 enum: [numeric, boolean, string]
+                description: >
+                  The `string` type also accepts an upstream `alpha_num` table
+                  output — both belong to the same `text` family (see the edge
+                  wiring rules).
         outputs:
           type: array
           description: The flow's public output contract (named, each from a node).
@@ -222,6 +226,22 @@ components:
             Wiring. Each edge's `from` is a declared input (`{input}`) or an
             upstream node output (`{node, output}`); its `into` is a downstream
             field (`{node, field}`).
+
+
+            Type compatibility is strict: an edge is valid only when its source
+            and target belong to the same type family. The families are `text`
+            (`string`, `alpha_num`), `numeric` (`numeric`, `number`, `integer`)
+            and `boolean` (`boolean`, `bool`). A `json` output — or any
+            unrecognised type — can never be wired, in or out. So a numeric
+            score cannot feed a `string` field, and a `boolean` field can only
+            be fed by a `boolean` source. A mismatch is rejected at save time
+            with a 422 listing the offending edge.
+
+
+            Note: a table output is always `numeric` (for a scoring table) or the
+            table's `decision_type` (`alpha_num`, `numeric`, `string` or `json`)
+            — never `boolean`. So a downstream `boolean` field can only be fed by
+            a flow input declared `boolean`, not by an upstream node.
           items:
             type: object
             properties:
