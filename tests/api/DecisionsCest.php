@@ -95,6 +95,28 @@ class DecisionsCest
         }
     }
 
+    /**
+     * A scoring_sum decision whose matching rules cancel out must return the
+     * real total (0), not the variant's default_decision. Guards the fix that
+     * replaced `$final_decision ?: $default` with a strict `=== null` check —
+     * a legitimate 0 output is preserved (it can then be wired into a DRG node),
+     * while a request that matches no rule still falls back to the default.
+     */
+    public function createScoringZero(ApiTester $I)
+    {
+        $I->createAndLoginUser();
+        $I->createProjectAndSetHeader();
+        $table = $I->createTable($I->getScoringTableSummingToZero());
+
+        // Both rules match ($eq 'go'): +10 and -10 => 0, NOT the default (99).
+        $matched = $I->makeDecision($table->_id, ['trigger' => 'go'], 'scoring');
+        $I->assertSame(0, $matched->final_decision);
+
+        // No rule matches => the running total stays null => default (99).
+        $unmatched = $I->makeDecision($table->_id, ['trigger' => 'nope'], 'scoring');
+        $I->assertSame(99, $unmatched->final_decision);
+    }
+
     public function checkDecisionAccess(ApiTester $I)
     {
         $user = $I->createAndLoginUser();

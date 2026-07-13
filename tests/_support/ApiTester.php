@@ -467,6 +467,76 @@ class ApiTester extends \Codeception\Actor
         return $tableData;
     }
 
+    /**
+     * A scoring_sum table with two rules that both match the same request and
+     * whose values cancel out (+10 and -10), so the legitimate final_decision
+     * is exactly 0 — while default_decision is a non-zero sentinel. Used to
+     * prove that a real 0 output survives instead of being replaced by the
+     * default (the `?:` falsiness bug). The single field has no preset so the
+     * raw request value drives the conditions unmodified.
+     *
+     * @return array
+     */
+    public function getScoringTableSummingToZero()
+    {
+        return [
+            'title' => 'Scoring sums to zero',
+            'description' => 'Two matching rules that cancel out',
+            'matching_type' => 'scoring',
+            'decision_type' => 'numeric',
+            'variants_probability' => 'first',
+            'fields' => [
+                [
+                    '_id' => $this->getMongoId(),
+                    'key' => 'trigger',
+                    'title' => 'trigger',
+                    'source' => 'request',
+                    'type' => 'string',
+                    'preset' => null,
+                ],
+            ],
+            'variants' => [
+                [
+                    'title' => 'Variant',
+                    'description' => 'Variant',
+                    'default_title' => 'Default title',
+                    'default_description' => 'Default description',
+                    'default_decision' => 99,
+                    'rules' => [
+                        [
+                            '_id' => $this->getMongoId(),
+                            'than' => 10,
+                            'title' => 'Plus ten',
+                            'description' => 'Adds ten',
+                            'conditions' => [
+                                [
+                                    'field_key' => 'trigger',
+                                    'condition' => '$eq',
+                                    'value' => 'go',
+                                    'preset' => null,
+                                ],
+                            ],
+                        ],
+                        [
+                            '_id' => $this->getMongoId(),
+                            'than' => -10,
+                            'title' => 'Minus ten',
+                            'description' => 'Subtracts ten',
+                            'conditions' => [
+                                [
+                                    'field_key' => 'trigger',
+                                    'condition' => '$eq',
+                                    'value' => 'go',
+                                    'preset' => null,
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ];
+    }
+
     public function getTableData()
     {
         if (!$this->tableData) {
