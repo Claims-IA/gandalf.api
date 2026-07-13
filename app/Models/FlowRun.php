@@ -35,6 +35,7 @@ class FlowRun extends Base implements Applicationable
         'inputs' => [],
         'answer' => [],
         'nodes' => [],
+        'error' => null,
     ];
 
     protected $visible = [
@@ -44,6 +45,7 @@ class FlowRun extends Base implements Applicationable
         'inputs',
         'answer',
         'nodes',
+        'error',
         self::CREATED_AT,
         self::UPDATED_AT,
     ];
@@ -54,5 +56,6 @@ class FlowRun extends Base implements Applicationable
         'inputs',
         'answer',
         'nodes',
+        'error',
     ];
 }

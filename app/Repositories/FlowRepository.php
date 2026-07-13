@@ -13,6 +13,7 @@ namespace App\Repositories;
 
 use App\Models\Flow;
 use App\Models\Table;
+use App\Services\GraphSort;
 use App\Exceptions\FlowValidationException;
 use Nebo15\REST\AbstractRepository;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
@@ -25,6 +26,10 @@ class FlowRepository extends AbstractRepository
     /**
      * Create or update a flow after validating its graph.
      *
+     * On update, the submitted values are merged over the existing graph so a
+     * partial PUT (e.g. title only) never silently wipes nodes/edges/outputs.
+     * The merged graph is what gets validated and persisted.
+     *
      * @param  array       $values
      * @param  string|null $id
      * @return Flow
@@ -32,10 +37,21 @@ class FlowRepository extends AbstractRepository
      */
     public function createOrUpdate($values, $id = null)
     {
-        $this->validateGraph($values);
-
         /** @var Flow $model */
         $model = $id ? $this->read($id) : $this->getModel()->newInstance();
+
+        if ($id) {
+            // Only the graph-shaping keys present in the request override the
+            // existing document; missing keys keep their stored value.
+            foreach (['title', 'description', 'inputs', 'outputs', 'nodes', 'edges'] as $key) {
+                if (!array_key_exists($key, $values)) {
+                    $values[$key] = $model->{$key};
+                }
+            }
+        }
+
+        $this->validateGraph($values);
+
         if ($model instanceof Applicationable) {
             ApplicationableHelper::addApplication($model);
         }
@@ -168,16 +184,48 @@ class FlowRepository extends AbstractRepository
             }
         }
 
-        // Acyclicity (Kahn): if a topological order can't consume every node, a cycle remains.
-        if (empty($errors) && $this->hasCycle($nodeIds, $adjacency)) {
+        // Field coverage: every field of every node's table must be fed at run
+        // time — by a wired edge, or by a flow input of the same key. A field
+        // that is neither would fail Scoring's `present` check at execution, so
+        // reject it here instead of surfacing the error only on a run.
+        foreach ($nodeIds as $nid) {
+            if (!isset($nodeTable[$nid])) {
+                continue;
+            }
+            foreach (($nodeTable[$nid]->fields ?: []) as $field) {
+                $key = isset($field['key']) ? $field['key'] : null;
+                if ($key === null) {
+                    continue;
+                }
+                $fedByEdge = isset($wiredFields[$nid . ':' . $key]);
+                $fedByInput = isset($inputKeys[$key]);
+                if (!$fedByEdge && !$fedByInput) {
+                    $errors[] = "Field '$key' of node '$nid' is not fed by any edge or flow input.";
+                }
+            }
+        }
+
+        // Acyclicity: a null topological order means a cycle remains. Shared with
+        // the FlowEngine via GraphSort so the invariant lives in one place.
+        if (empty($errors) && \App\Services\GraphSort::order($nodeIds, $adjacency) === null) {
             $errors[] = 'The graph contains a cycle; a decision graph must be acyclic.';
         }
 
-        // Outputs: at least one, each resolving to a known node/output.
+        // Outputs: at least one, each named uniquely and resolving to a known node/output.
         if (empty($outputs)) {
             $errors[] = 'The flow must declare at least one output.';
         } else {
+            $outputNames = [];
             foreach ($outputs as $j => $output) {
+                $name = isset($output['name']) ? $output['name'] : null;
+                if (!$name) {
+                    $errors[] = "Output #$j is missing a name.";
+                } elseif (in_array($name, $outputNames, true)) {
+                    $errors[] = "Duplicate output name '$name'.";
+                } else {
+                    $outputNames[] = $name;
+                }
+
                 $fromNode = isset($output['from_node']) ? $output['from_node'] : null;
                 $fromOutput = isset($output['from_output']) ? $output['from_output'] : 'final_decision';
                 if (!$fromNode || !isset($nodeTable[$fromNode])) {
@@ -196,64 +244,30 @@ class FlowRepository extends AbstractRepository
     }
 
     /**
-     * Detect a cycle via Kahn's algorithm over the dependency adjacency.
+     * Find a table by id, strictly scoped to the current application.
      *
-     * @param  array $nodeIds
-     * @param  array $adjacency  node_id => [nodes it depends on]
-     * @return bool  True when a cycle remains.
-     */
-    private function hasCycle(array $nodeIds, array $adjacency)
-    {
-        // In-degree = number of dependencies each node has.
-        $inDegree = [];
-        foreach ($nodeIds as $n) {
-            $inDegree[$n] = count($adjacency[$n]);
-        }
-        // Nodes with no dependency are ready first.
-        $queue = [];
-        foreach ($inDegree as $n => $d) {
-            if ($d === 0) {
-                $queue[] = $n;
-            }
-        }
-        $processed = 0;
-        while (!empty($queue)) {
-            $current = array_shift($queue);
-            $processed++;
-            // Every node depending on $current loses one dependency.
-            foreach ($nodeIds as $n) {
-                if (in_array($current, $adjacency[$n], true)) {
-                    $inDegree[$n]--;
-                    if ($inDegree[$n] === 0) {
-                        $queue[] = $n;
-                    }
-                }
-            }
-        }
-
-        return $processed !== count($nodeIds);
-    }
-
-    /**
-     * Find a table by id, scoped to the current application.
+     * Returns null when no application context is resolvable rather than falling
+     * back to an unscoped lookup, so a flow can never reference a table from
+     * another project. Public so the FlowEngine can re-check a table still exists
+     * at run time.
      *
      * @param  string $tableId
      * @return Table|null
      */
-    private function findProjectTable($tableId)
+    public function findProjectTable($tableId)
     {
         try {
             $appId = ApplicationableHelper::getApplicationId();
         } catch (\Exception $e) {
-            $appId = null;
+            return null;
+        }
+        if (!$appId) {
+            return null;
         }
 
-        $query = Table::where('_id', $tableId);
-        if ($appId) {
-            $query->where('applications', $appId);
-        }
-
-        return $query->first();
+        return Table::where('_id', $tableId)
+            ->where('applications', $appId)
+            ->first();
     }
 
     /**
