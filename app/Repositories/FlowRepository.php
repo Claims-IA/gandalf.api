@@ -213,26 +213,12 @@ class FlowRepository extends AbstractRepository
             }
         }
 
-        // Field coverage: every field of every node's table must be fed at run
-        // time — by a wired edge, or by a flow input of the same key. A field
-        // that is neither would fail Scoring's `present` check at execution, so
-        // reject it here instead of surfacing the error only on a run.
-        foreach ($nodeIds as $nid) {
-            if (!isset($nodeTable[$nid])) {
-                continue;
-            }
-            foreach (($nodeTable[$nid]->fields ?: []) as $field) {
-                $key = isset($field['key']) ? $field['key'] : null;
-                if ($key === null) {
-                    continue;
-                }
-                $fedByEdge = isset($wiredFields[$nid . ':' . $key]);
-                $fedByInput = isset($inputKeys[$key]);
-                if (!$fedByEdge && !$fedByInput) {
-                    $errors[] = "Field '$key' of node '$nid' is not fed by any edge or flow input.";
-                }
-            }
-        }
+        // Note: we deliberately do NOT require every table field to be fed by an
+        // edge or input. Which fields a node receives is the flow designer's
+        // choice — a table may declare many fields while a given flow only wires
+        // the few its rules need. Unwired fields are passed as null at run time
+        // (see FlowEngine::buildNodeInput), which Scoring's `present` validation
+        // accepts and the condition evaluator handles via $is_null / $is_set.
 
         // Acyclicity: a null topological order means a cycle remains. Shared with
         // the FlowEngine via GraphSort so the invariant lives in one place. Run it

@@ -153,10 +153,14 @@ class FlowEngine
                 $values[$key] = $this->resolveEdgeValue($edgeByField[$key], $inputs, $nodeResults);
             } elseif (array_key_exists($key, $inputs)) {
                 $values[$key] = $inputs[$key];
+            } else {
+                // A field the flow doesn't wire is passed as null (not omitted):
+                // Scoring's `present` rule accepts null, and a rule that uses the
+                // field simply doesn't match (handled via $is_null / $is_set),
+                // rather than the whole run failing on a missing key. Wiring only
+                // the fields a flow needs is the designer's choice.
+                $values[$key] = null;
             }
-            // A field with neither a wire nor a matching input is left absent;
-            // Scoring's `present` validation surfaces it as a clear error. Graph
-            // validation already flags this at write time (field coverage).
         }
 
         return $values;
