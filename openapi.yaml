@@ -546,9 +546,13 @@ components:
         | `$between_excl` | min < x < max (both exclusive) | `"min;max"` |
         | `$between_lexcl` | min < x ≤ max (left exclusive) | `"min;max"` |
         | `$between_rexcl` | min ≤ x < max (right exclusive) | `"min;max"` |
+        | `$not_between` | x < min or x > max (outside inclusive interval) | `"min;max"` |
         | `$in` | Value in comma-separated list | `"a,b,c"` |
         | `$nin` | Value not in comma-separated list | `"a,b,c"` |
         | `$contains` (∋) | String contains substring (case-insensitive) | string |
+        | `$not_contains` | String does not contain substring (case-insensitive) | string |
+        | `$starts_with` | String starts with substring (case-insensitive) | string |
+        | `$ends_with` | String ends with substring (case-insensitive) | string |
       enum:
         - "$is_set"
         - "$is_null"
@@ -563,9 +567,13 @@ components:
         - "$between_excl"
         - "$between_lexcl"
         - "$between_rexcl"
+        - "$not_between"
         - "$in"
         - "$nin"
         - "$contains"
+        - "$not_contains"
+        - "$starts_with"
+        - "$ends_with"
       example: "$gte"
 
     Condition:
@@ -2698,35 +2706,33 @@ paths:
 
         | Format | `?format=` | Content-Type | Notes |
         |--------|-----------|--------------|-------|
-        | JSON   | `json` (default) | `application/json` | Full export — all variants, all rules. Can be re-imported as-is. |
-        | CSV    | `csv` | `text/csv` | First variant only. Human-readable, easily editable in a spreadsheet. |
-        | Excel  | `excel` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | First variant only. Same structure as CSV, formatted as XLSX. |
+        | JSON   | `json` (default) | `application/json` | Full export — all variants, all rules. Can be re-imported as-is (creates a new table). |
+        | CSV    | `csv` | `text/csv` | Default variant only, legacy 3-section format (create-only re-import). |
+        | Excel  | `excel` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | **Round-trip workbook** — one variant per file (`?variant_id=` selects it, default variant when omitted). Re-importing UPDATES the original table. |
 
-        ### CSV / Excel format
+        ### Excel round-trip workbook (format `gandalf-xlsx-v2`)
 
-        The CSV and Excel files use three labelled sections separated by blank rows:
+        Three sheets:
+        - `Rules` — the editable grid: row 1 title, row 2 field keys (+ `DECISION`,
+          `RULE_TITLE`, `RULE_DESC` sentinel columns), row 3 field types, row 4 field
+          titles, then one rule per row. Hidden column A carries the rule ids (blank =
+          new rule, removed row = deleted rule). Add a field by inserting a column and
+          filling rows 2–4; remove a field by deleting its column.
+        - `_meta` — hidden: table/variant ids, `exported_at` optimistic-lock token,
+          matching_type, decision_type, default_decision.
+        - `_help` — grammar cheat-sheet.
 
-        ```
-        ## METADATA
-        title,<table title>
-        description,<optional>
-        matching_type,<first|scoring_sum|...>
-        decision_type,<string|numeric|alpha_num|json>
-        default_decision,<default outcome>
+        Condition cells use a human-readable grammar:
+        `*` (any), `+` (is set), `null` (is null), bare value or `= x` (equals),
+        `!= x`, `> x`, `>= x`, `< x`, `<= x`, `[a..b]` / `]a..b[` / `]a..b]` / `[a..b[`
+        (intervals), `not [a..b]`, `in: a, b`, `not in: a, b`, `contains: x`,
+        `not contains: x`, `starts: x`, `ends: x`. Quote a literal value that looks
+        like an operator: `'>= 3'`.
 
-        ## FIELDS
-        key,title,type
-        age,Age,numeric
-        country,Pays,string
+        ### Legacy CSV format
 
-        ## RULES
-        age,country,decision
-        $gte:18,$eq:FR,approved
-        *,*,declined
-        ```
-
-        Each condition cell uses the format `operator:value` (e.g. `$gte:18`, `$eq:FR`).
-        A `*` cell means no condition is applied for that field in this rule.
+        Three labelled sections (`## METADATA`, `## FIELDS`, `## RULES`) with
+        `operator:value` cells (e.g. `$gte:18`); `*` = no condition.
       operationId: exportTable
       security:
         - BearerAuth: []
@@ -2741,6 +2747,15 @@ paths:
             type: string
             enum: [json, csv, excel]
             default: json
+        - name: variant_id
+          in: query
+          required: false
+          description: >
+            Excel only — MongoDB ObjectID of the variant to export.
+            Defaults to the table's default variant.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
       responses:
         "200":
           description: |
@@ -2758,36 +2773,41 @@ paths:
                 type: string
                 format: binary
         "404":
-          description: Table not found.
+          description: Table or variant not found.
+        "422":
+          description: Invalid `variant_id` format.
 
   # ── Import ────────────────────────────────────────────────────────────────────
   /api/v1/admin/tables/import:
     post:
       tags: [Tables]
-      summary: Import a decision table
+      summary: Import a decision table (create or round-trip update)
       description: |
-        Creates a new decision table in the current project by uploading a file
-        previously exported via `GET /api/v1/admin/tables/{id}/export`.
+        Imports a decision table file into the current project (`X-Application` header).
 
-        The format is detected automatically from the file extension:
+        **Round-trip Excel workbooks** (exported via `?format=excel`, carrying the
+        hidden `_meta` sheet) **update the original table** by default:
+        - the target variant's rules are replaced by the sheet rows (hidden rule ids
+          preserve analytics continuity; removed rows delete rules);
+        - fields are merged: new columns become new fields, kept fields take their
+          title/type from the sheet (server-side presets are preserved), removed
+          columns delete the field **only** when no other variant still uses it
+          (`422` otherwise);
+        - other variants are left untouched (rules of other variants get an
+          automatic `$any` condition for newly added fields — a semantic no-op);
+        - an optimistic lock compares the file's `exported_at` with the table's
+          `updated_at`: `409` when the table changed since export, `force=1` overrides;
+        - the payload runs through the exact same validation as `POST /tables`.
 
-        | Extension | Format |
-        |-----------|--------|
-        | `.json`   | JSON — full table structure, all variants. |
-        | `.csv`    | CSV — three-section format (METADATA / FIELDS / RULES), one variant. |
-        | `.xlsx` / `.xls` | Excel — same three-section structure as CSV. |
-
-        A **new table is always created**, even if a table with the same title already
-        exists in the project. Existing tables are never overwritten.
-
-        The target project is determined by the `X-Application` header, exactly like
-        all other admin endpoints.
+        **All other files** (JSON, legacy 3-section CSV/Excel, or round-trip files
+        sent with `mode=create`) create a new table; existing tables are never
+        overwritten on that path.
 
         ### Validation errors
 
-        If the file cannot be parsed or contains structural errors (missing title,
-        unknown field references, etc.) the endpoint returns `422` with an `errors`
-        array describing each problem.
+        Round-trip imports return `422` with cell-addressed errors
+        (`{cell, row, column, field, message}`) so every problem can be fixed in one
+        pass. Legacy imports keep the flat string-array error shape.
       operationId: importTable
       security:
         - BearerAuth: []
@@ -2807,7 +2827,33 @@ paths:
                   description: >
                     The table file to import. Accepted extensions: `.json`, `.csv`, `.xlsx`, `.xls`.
                     Maximum size: 10 MB.
+                mode:
+                  type: string
+                  enum: [auto, create, update]
+                  default: auto
+                  description: >
+                    Round-trip Excel only. `auto` updates when the file embeds
+                    table/variant ids, creates otherwise. `create` forces a new
+                    table (ids are dropped). `update` fails with 422 when the file
+                    carries no ids.
+                force:
+                  type: boolean
+                  default: false
+                  description: >
+                    Round-trip Excel only. Skip the optimistic-lock check and
+                    overwrite even if the table changed since the export.
       responses:
+        "200":
+          description: Round-trip import — existing table updated in place.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Table'
         "201":
           description: Table imported and created successfully.
           content:
@@ -2819,8 +2865,14 @@ paths:
                     type: object
                   data:
                     $ref: '#/components/schemas/Table'
-        "422":
-          description: File format error or structural validation failure.
+        "404":
+          description: >
+            Round-trip update — the embedded table id does not exist in the
+            current project (deleted, or exported from another project).
+        "409":
+          description: >
+            Round-trip update — the table changed on the server since the file
+            was exported (optimistic lock). Re-export, or resubmit with `force=1`.
           content:
             application/json:
               schema:
@@ -2828,14 +2880,54 @@ paths:
                 properties:
                   message:
                     type: string
-                    example: "Erreurs de validation dans le fichier importé."
+                  error:
+                    type: string
+                    example: table_conflict
+                  server_updated_at:
+                    type: string
+                    example: "2026-07-16T14:47:05+00:00"
+                  file_exported_at:
+                    type: string
+                    example: "2026-07-16T14:47:04+00:00"
+                  hint:
+                    type: string
+        "422":
+          description: File format error or validation failure.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Le fichier importé contient des erreurs de validation."
                   errors:
                     type: array
+                    description: >
+                      Cell-addressed entries for round-trip imports; plain strings
+                      for legacy formats.
                     items:
-                      type: string
-                    example:
-                      - "Le titre de la table est obligatoire (section ## METADATA, ligne title)."
-                      - "Règle #2, condition #0: champ inconnu 'salary'."
+                      type: object
+                      properties:
+                        cell:
+                          type: string
+                          nullable: true
+                          example: "B5"
+                        row:
+                          type: integer
+                          nullable: true
+                          example: 5
+                        column:
+                          type: string
+                          nullable: true
+                          example: "B"
+                        field:
+                          type: string
+                          nullable: true
+                          example: "age"
+                        message:
+                          type: string
+                          example: "Ligne 5, colonne B (age) : Opérateur inconnu '=>' — vouliez-vous dire '>=' ?"
 
   # ── Analytics ─────────────────────────────────────────────────────────────────
   /api/v1/admin/tables/{id}/{variant_id}/analytics:
