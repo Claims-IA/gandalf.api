@@ -131,17 +131,8 @@ class ConditionCellCodec
         }
 
         // Fully quoted cell → $eq with the literal value ('' escapes ')
-        if (strlen($cell) >= 2 && $cell[0] === "'" && substr($cell, -1) === "'") {
-            $inner = substr($cell, 1, -1);
-            // A lone escaped quote boundary like 'a'b' is malformed: after
-            // unescaping, no unpaired quote may remain.
-            $unescaped = str_replace("''", "\x00", $inner);
-            if (strpos($unescaped, "'") !== false) {
-                throw new ConditionCellParseException(
-                    "Valeur quotée mal formée : \"$cell\". Doublez les apostrophes internes ('')."
-                );
-            }
-            return ['condition' => '$eq', 'value' => str_replace("\x00", "'", $unescaped)];
+        if ($this->looksQuoted($cell)) {
+            return ['condition' => '$eq', 'value' => $this->unquote($cell)];
         }
 
         // Keyword cells ($any / $is_set / $is_null shortcuts)
@@ -185,11 +176,17 @@ class ConditionCellCodec
 
         // Prefix operators, longest first
         foreach (self::PREFIXES as $prefix => $operator) {
-            if ($this->matchPrefix($lower, $prefix)) {
+            if (str_starts_with($lower, $prefix)) {
                 $value = trim(substr($cell, strlen($prefix)));
-                if ($value === '') {
+                // A quoted value after the prefix carries the exact literal —
+                // including leading/trailing spaces or an empty string — so
+                // any operator's value survives a round trip, not just $eq's.
+                if ($this->looksQuoted($value)) {
+                    $value = $this->unquote($value);
+                } elseif ($value === '') {
                     throw new ConditionCellParseException(
-                        "\"$cell\" : l'opérateur \"$prefix\" attend une valeur."
+                        "\"$cell\" : l'opérateur \"$prefix\" attend une valeur "
+                        . "(utilisez '' pour une valeur vide)."
                     );
                 }
                 if (in_array($operator, ['$gt', '$gte', '$lt', '$lte'], true)) {
@@ -227,27 +224,30 @@ class ConditionCellCodec
             case '$eq':
                 return $this->encodeEq($this->stringify($value));
             case '$ne':
-                return '!= ' . $this->stringify($value);
+                return '!= ' . $this->quoteIfNeeded($this->stringify($value));
+            // Comparison values are stored normalized ('.' decimal separator) —
+            // legacy comma values converge to the dot form on their first
+            // round trip (deterministic, one-time; see normalizeNumeric).
             case '$gt':
-                return '> ' . $this->stringify($value);
+                return '> ' . $this->normalizeStoredNumeric($value);
             case '$gte':
-                return '>= ' . $this->stringify($value);
+                return '>= ' . $this->normalizeStoredNumeric($value);
             case '$lt':
-                return '< ' . $this->stringify($value);
+                return '< ' . $this->normalizeStoredNumeric($value);
             case '$lte':
-                return '<= ' . $this->stringify($value);
+                return '<= ' . $this->normalizeStoredNumeric($value);
             case '$in':
-                return 'in: ' . $this->stringify($value);
+                return 'in: ' . $this->quoteIfNeeded($this->stringify($value));
             case '$nin':
-                return 'not in: ' . $this->stringify($value);
+                return 'not in: ' . $this->quoteIfNeeded($this->stringify($value));
             case '$contains':
-                return 'contains: ' . $this->stringify($value);
+                return 'contains: ' . $this->quoteIfNeeded($this->stringify($value));
             case '$not_contains':
-                return 'not contains: ' . $this->stringify($value);
+                return 'not contains: ' . $this->quoteIfNeeded($this->stringify($value));
             case '$starts_with':
-                return 'starts: ' . $this->stringify($value);
+                return 'starts: ' . $this->quoteIfNeeded($this->stringify($value));
             case '$ends_with':
-                return 'ends: ' . $this->stringify($value);
+                return 'ends: ' . $this->quoteIfNeeded($this->stringify($value));
             case '$between':
             case '$between_excl':
             case '$between_lexcl':
@@ -303,14 +303,51 @@ class ConditionCellCodec
     }
 
     /**
-     * Check whether the lowercased cell starts with the given operator prefix.
-     * Word-like prefixes (ending in ':') match as-is; symbol prefixes must not
-     * be immediately followed by another operator symbol (already handled by
-     * longest-first ordering).
+     * True when the text is a complete single-quoted literal ('...').
      */
-    private function matchPrefix(string $lowerCell, string $prefix): bool
+    private function looksQuoted(string $text): bool
     {
-        return str_starts_with($lowerCell, $prefix);
+        return strlen($text) >= 2 && $text[0] === "'" && substr($text, -1) === "'";
+    }
+
+    /**
+     * Strip one layer of single quotes and unescape '' → '.
+     *
+     * @throws ConditionCellParseException  When an unpaired quote remains.
+     */
+    private function unquote(string $text): string
+    {
+        $inner = substr($text, 1, -1);
+        // A lone escaped quote boundary like 'a'b' is malformed: after
+        // unescaping, no unpaired quote may remain.
+        $unescaped = str_replace("''", "\x00", $inner);
+        if (strpos($unescaped, "'") !== false) {
+            throw new ConditionCellParseException(
+                "Valeur quotée mal formée : \"$text\". Doublez les apostrophes internes ('')."
+            );
+        }
+        return str_replace("\x00", "'", $unescaped);
+    }
+
+    /**
+     * Wrap a value in single quotes ('' escapes ').
+     */
+    private function quote(string $value): string
+    {
+        return "'" . str_replace("'", "''", $value) . "'";
+    }
+
+    /**
+     * Quote a prefix-operator value when its bare form would not survive the
+     * decode round trip: empty, leading/trailing whitespace (decode trims),
+     * or looking like a quoted literal (decode would strip the quotes).
+     */
+    private function quoteIfNeeded(string $value): string
+    {
+        if ($value === '' || trim($value) !== $value || $this->looksQuoted($value)) {
+            return $this->quote($value);
+        }
+        return $value;
     }
 
     /**
@@ -328,6 +365,16 @@ class ConditionCellCodec
             );
         }
         return $normalized;
+    }
+
+    /**
+     * Emit a stored comparison value with the decimal comma pre-normalized so
+     * that encode → decode is a fixed point (legacy "0,5" converges to "0.5"
+     * on export instead of drifting on import).
+     */
+    private function normalizeStoredNumeric($value): string
+    {
+        return str_replace(',', '.', $this->stringify($value));
     }
 
     /**
@@ -363,10 +410,12 @@ class ConditionCellCodec
 
     /**
      * Serialize the engine's "min;max" interval value into "min..max".
+     * Decimal commas are pre-normalized (same fixed-point rationale as
+     * normalizeStoredNumeric).
      */
     private function encodeIntervalBounds($value): string
     {
-        $parts = explode(';', $this->stringify($value), 2);
+        $parts = explode(';', str_replace(',', '.', $this->stringify($value)), 2);
         $min = trim($parts[0]);
         $max = trim($parts[1] ?? '');
         return $min . '..' . $max;

@@ -151,6 +151,21 @@ class TableMergeService
     // Private helpers
     // -------------------------------------------------------------------------
 
+    /**
+     * Deterministic fingerprint of the table content (fields + variants).
+     * Shared by the writer (stamped into _meta) and the optimistic-lock check:
+     * it closes the race window left by updated_at's 1-second resolution — a
+     * concurrent edit within the same second still changes the content hash.
+     */
+    public static function contentHash(Table $table): string
+    {
+        $snapshot = [
+            'fields' => $table->fields()->get()->toArray(),
+            'variants' => $table->variants()->get()->toArray(),
+        ];
+        return sha1(json_encode($snapshot));
+    }
+
     private function checkOptimisticLock(Table $existing, ExcelImportResult $result, bool $force): void
     {
         if ($force) {
@@ -168,6 +183,13 @@ class TableMergeService
         $fileTs = $fileExportedAt !== '' ? strtotime($fileExportedAt) : false;
 
         if ($serverTs === false || $fileTs === false || $serverTs !== $fileTs) {
+            throw new TableConflictException($serverUpdatedAt, $fileExportedAt);
+        }
+
+        // Same-second concurrent edits: the timestamp matches but the content
+        // differs. Only enforced when the file carries a hash (older v2 files
+        // without one keep the timestamp-only behavior).
+        if ($result->contentHash !== '' && $result->contentHash !== self::contentHash($existing)) {
             throw new TableConflictException($serverUpdatedAt, $fileExportedAt);
         }
     }
@@ -281,10 +303,13 @@ class TableMergeService
         ];
 
         // Optional scalars: only include when non-empty (they carry a
-        // between:2,x validation constraint that rejects empty strings)
+        // between:2,x validation constraint that rejects empty strings).
+        // Title/description fall back to the database values when the _meta
+        // cells are blank, so a damaged/emptied _meta sheet never silently
+        // erases the variant's name.
         foreach ([
-            'title' => $result->variantTitle,
-            'description' => $result->variantDescription,
+            'title' => $result->variantTitle !== '' ? $result->variantTitle : (string) ($variant->title ?? ''),
+            'description' => $result->variantDescription !== '' ? $result->variantDescription : (string) ($variant->description ?? ''),
             'default_title' => (string) ($variant->default_title ?? ''),
             'default_description' => (string) ($variant->default_description ?? ''),
         ] as $attr => $value) {

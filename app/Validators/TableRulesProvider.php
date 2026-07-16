@@ -21,10 +21,13 @@ use App\Services\ConditionsTypes;
 class TableRulesProvider
 {
     /**
-     * Field keys that would collide with reserved column headers of the Excel
-     * export format (plus the historical 'variant_id' check-time parameter).
+     * Field keys that collide with the reserved column headers of the Excel
+     * round-trip format. NOT enforced by the generic table validation (that
+     * would freeze pre-existing tables using these names): the Excel writer
+     * refuses to export such a table, and the Excel reader can never produce
+     * them (row-2 sentinels are consumed before field parsing).
      */
-    public const RESERVED_FIELD_KEYS = ['variant_id', 'decision', '_rule_id', 'rule_title', 'rule_description'];
+    public const EXCEL_RESERVED_FIELD_KEYS = ['decision', '_rule_id', 'rule_title', 'rule_description'];
 
     /**
      * Return the full validation rule set for a decision table payload.
@@ -45,7 +48,9 @@ class TableRulesProvider
             'fields' => 'required|array',
             'fields.*._id' => 'sometimes|mongoId',
             'fields.*.title' => 'required|string',
-            'fields.*.key' => 'required|string|not_in:' . implode(',', self::RESERVED_FIELD_KEYS),
+            // Only 'variant_id' is globally reserved (historical check-time
+            // parameter); Excel sentinel collisions are handled at export time.
+            'fields.*.key' => 'required|string|not_in:variant_id',
             'fields.*.type' => 'required|in:numeric,boolean,string',
             'fields.*.source' => 'required|in:request',
             'fields.*.preset' => 'present|array',

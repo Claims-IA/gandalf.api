@@ -21,8 +21,10 @@
 
 namespace App\Services\Excel;
 
+use App\Exceptions\ExcelImportException;
 use App\Models\Table;
 use App\Models\Variant;
+use App\Validators\TableRulesProvider;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\Cell\DataValidation;
@@ -55,12 +57,27 @@ class ExcelTableWriter
      */
     public function write(Table $table, Variant $variant): string
     {
+        $fields = $table->fields()->get();
+
+        // A field key colliding with a sentinel header would make the workbook
+        // ambiguous on re-import (the reader consumes DECISION/RULE_* markers
+        // in row 2 before parsing field columns) — refuse loudly instead.
+        foreach ($fields as $field) {
+            if (in_array(strtolower($field->key), TableRulesProvider::EXCEL_RESERVED_FIELD_KEYS, true)) {
+                throw new ExcelImportException([[
+                    'cell' => null, 'row' => null, 'column' => null, 'field' => $field->key,
+                    'message' => "Le champ \"{$field->key}\" porte un nom réservé du format Excel "
+                        . '(' . implode(', ', TableRulesProvider::EXCEL_RESERVED_FIELD_KEYS) . ') '
+                        . '— renommez-le avant d\'exporter cette table en Excel.',
+                ]], 'Export Excel impossible.');
+            }
+        }
+
         $spreadsheet = new Spreadsheet();
 
         $rulesSheet = $spreadsheet->getActiveSheet();
         $rulesSheet->setTitle(ExcelLayout::SHEET_RULES);
 
-        $fields = $table->fields()->get();
         $this->writeRulesSheet($rulesSheet, $table, $variant, $fields);
 
         $metaSheet = $spreadsheet->createSheet();
@@ -74,10 +91,29 @@ class ExcelTableWriter
 
         $spreadsheet->setActiveSheetIndex(0);
 
+        // Opportunistic cleanup: deleteFileAfterSend only covers the happy
+        // path, so exports interrupted mid-stream leave orphans behind —
+        // sweep stale ones (>1h) whenever a new export is produced.
+        $this->cleanupStaleExports();
+
         $tmpPath = sys_get_temp_dir() . '/' . uniqid('table_export_', true) . '.xlsx';
         (new Xlsx($spreadsheet))->save($tmpPath);
 
         return $tmpPath;
+    }
+
+    /**
+     * Remove table_export_*.xlsx temp files older than one hour.
+     */
+    private function cleanupStaleExports(): void
+    {
+        $pattern = sys_get_temp_dir() . '/table_export_*.xlsx';
+        $cutoff = time() - 3600;
+        foreach (glob($pattern) ?: [] as $file) {
+            if (@filemtime($file) < $cutoff) {
+                @unlink($file);
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -263,6 +299,7 @@ class ExcelTableWriter
             'table_id' => (string) $table->_id,
             'variant_id' => (string) $variant->_id,
             'exported_at' => $exportedAt,
+            'content_hash' => TableMergeService::contentHash($table),
             'matching_type' => (string) ($table->matching_type ?? 'first'),
             'decision_type' => (string) ($table->decision_type ?? 'string'),
             'variant_title' => (string) ($variant->title ?? ''),
@@ -306,6 +343,7 @@ class ExcelTableWriter
             ['starts: FR', 'Commence par'],
             ['ends: 75', 'Se termine par'],
             ["'>= 3'", 'Valeur littérale ">= 3" (les quotes protègent les valeurs qui ressemblent à un opérateur)'],
+            ["!= ' x '", 'Les quotes marchent aussi après un opérateur : valeur exacte " x " (espaces conservés)'],
             ['', ''],
             ['Lignes', 'Ajoutez des lignes pour créer des règles (laissez la colonne cachée _rule_id vide).'],
             ['Colonnes', 'Ajoutez une colonne de champ : remplissez la clé (ligne 2), le type (ligne 3) et le titre (ligne 4).'],

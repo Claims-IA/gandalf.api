@@ -107,9 +107,25 @@ class ExcelErrorTranslator
      * Replace the most common English Lumen messages (and the terse custom
      * rule names) with actionable French wording. Unknown messages pass through.
      */
+    /**
+     * Table-level scalar paths whose values live on the hidden _meta sheet —
+     * their errors must name the sheet, not fall back to generic wording.
+     */
+    private const META_PATHS = [
+        'matching_type' => 'matching_type invalide ou absent (feuille _meta) — valeurs acceptées : first, scoring_sum, scoring_max, scoring_min, scoring_count. Ré-exportez le fichier si la feuille _meta est endommagée.',
+        'decision_type' => 'decision_type invalide ou absent (feuille _meta) — valeurs acceptées : alpha_num, numeric, string, json. Ré-exportez le fichier si la feuille _meta est endommagée.',
+        'title' => 'titre de table invalide ou absent (feuille _meta, ligne table_title).',
+    ];
+
     private function frenchify(string $path, string $message, ExcelImportResult $result): string
     {
         $lower = strtolower($message);
+
+        // _meta-sourced scalars first: their generic "required"/"invalid"
+        // wording would otherwise hide WHERE the value lives.
+        if (isset(self::META_PATHS[$path])) {
+            return self::META_PATHS[$path];
+        }
 
         if (str_contains($lower, 'condition type')) {
             return 'la valeur n\'est pas compatible avec l\'opérateur (les opérateurs >, >=, <, <= et les intervalles attendent des nombres).';
@@ -128,16 +144,13 @@ class ExcelErrorTranslator
             return 'la somme des probabilités des variantes doit faire exactement 100.';
         }
         if (str_ends_with($path, '.key') && str_contains($lower, 'invalid')) {
-            return 'clé de champ réservée ou invalide (interdits : variant_id, decision, _rule_id, rule_title, rule_description).';
+            return 'clé de champ invalide (le nom "variant_id" est réservé).';
         }
         if (str_contains($lower, 'required')) {
             return 'valeur obligatoire manquante.';
         }
         if (str_contains($lower, 'must be a number') || str_contains($lower, 'numeric')) {
             return 'valeur numérique attendue.';
-        }
-        if (str_contains($lower, 'invalid') && str_contains($path, 'matching_type')) {
-            return 'matching_type invalide (feuille _meta) — valeurs acceptées : first, scoring_sum, scoring_max, scoring_min, scoring_count.';
         }
 
         return $message;

@@ -22,6 +22,9 @@ class ExcelImportResult
     /** @var string ISO-8601 Table.updated_at at export time (optimistic-lock token) */
     public string $exportedAt = '';
 
+    /** @var string Content hash of the table at export time ('' on older files) */
+    public string $contentHash = '';
+
     /** @var string Format identifier from _meta (e.g. 'gandalf-xlsx-v2') */
     public string $formatVersion = '';
 

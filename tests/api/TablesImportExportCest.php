@@ -397,4 +397,70 @@ class TablesImportExportCest
         $I->seeResponseCodeIs(404);
         unlink($path);
     }
+
+    public function legacyFileWithUpdateModeIs422(ApiTester $I)
+    {
+        // mode=update only makes sense for round-trip workbooks: honoring it
+        // silently as a creation would mislead the caller
+        $csv = "## METADATA\ntitle,Legacy\nmatching_type,first\ndecision_type,string\ndefault_decision,no\n\n"
+            . "## FIELDS\nkey,title,type\nage,Age,numeric\n\n"
+            . "## RULES\nage,decision\n\$gte:18,yes\n";
+        $path = codecept_output_dir() . uniqid('legacy_') . '.csv';
+        file_put_contents($path, $csv);
+
+        $this->importFile($I, $path, ['mode' => 'update']);
+        $I->seeResponseCodeIs(422);
+        $I->seeResponseContains('round-trip');
+        unlink($path);
+    }
+
+    public function partialMetaIdsAre422(ApiTester $I)
+    {
+        // A _meta sheet with only one of the two ids is damaged — reject
+        // explicitly instead of silently creating a duplicate table
+        $table = $this->createTable($I);
+        $path = $this->exportToFile($I, $table->_id);
+
+        $spreadsheet = IOFactory::load($path);
+        $meta = $spreadsheet->getSheetByName('_meta');
+        for ($r = 1; $r <= 20; $r++) {
+            if (trim((string) $meta->getCell('A' . $r)->getValue()) === 'variant_id') {
+                $meta->setCellValueExplicit('B' . $r, '', DataType::TYPE_STRING);
+                break;
+            }
+        }
+        (new XlsxWriter($spreadsheet))->save($path);
+
+        $this->importFile($I, $path);
+        $I->seeResponseCodeIs(422);
+        $I->seeResponseContains('_meta');
+        unlink($path);
+    }
+
+    public function reservedFieldKeyBlocksExcelExportOnly(ApiTester $I)
+    {
+        // A field named "decision" is legal for the table itself (pre-existing
+        // data must stay editable) but collides with the Excel sentinel headers,
+        // so only the Excel export is refused
+        $payload = $this->tablePayload();
+        $payload['fields'][] = ['key' => 'decision', 'title' => 'Decision field',
+            'type' => 'string', 'source' => 'request', 'preset' => null];
+        foreach ($payload['variants'][0]['rules'] as &$rule) {
+            $rule['conditions'][] = ['field_key' => 'decision', 'condition' => '$any', 'value' => true];
+        }
+        unset($rule);
+        $table = $this->createTable($I); // sanity: default payload still fine
+        $I->sendPOST('api/v1/admin/tables', $payload);
+        $I->seeResponseCodeIs(201); // creation allowed
+        $reserved = $I->getResponseFields()->data;
+
+        $I->sendGET(sprintf(self::EXPORT_URL, $reserved->_id));
+        $I->seeResponseCodeIs(422); // Excel export refused loudly
+        $I->seeResponseContains('réservé');
+
+        // JSON export of the same table still works
+        $I->sendGET("api/v1/admin/tables/{$reserved->_id}/export?format=json");
+        $I->seeResponseCodeIs(200);
+        unset($table);
+    }
 }

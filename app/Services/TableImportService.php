@@ -113,6 +113,18 @@ class TableImportService
     {
         $result = $this->excelReader->read($path);
 
+        // A file with only one of the two ids is damaged (a _meta cell was
+        // erased): creating a duplicate table silently would hide the problem,
+        // so reject explicitly unless the caller opted into mode=create.
+        $hasPartialIds = ($result->tableId === null) !== ($result->variantId === null);
+        if ($hasPartialIds && $mode !== 'create') {
+            throw new ExcelImportException([[
+                'cell' => null, 'row' => null, 'column' => null, 'field' => null,
+                'message' => 'La feuille _meta est incomplète (table_id ou variant_id manquant). '
+                    . 'Ré-exportez le fichier, ou importez avec mode=create pour créer une nouvelle table.',
+            ]]);
+        }
+
         $update = match ($mode) {
             'create' => false,
             'update' => true,

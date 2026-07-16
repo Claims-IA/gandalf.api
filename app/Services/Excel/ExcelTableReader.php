@@ -105,18 +105,25 @@ class ExcelTableReader
     {
         // Read by label (column A) rather than by fixed row, tolerating reordering
         $values = [];
+        $labelRows = [];
         $highestRow = min($sheet->getHighestDataRow(), 50);
         for ($row = 1; $row <= $highestRow; $row++) {
             $label = trim($this->cellToString($sheet, 'A' . $row));
             if ($label !== '') {
                 $values[$label] = trim($this->cellToString($sheet, 'B' . $row));
+                $labelRows[$label] = $row;
             }
         }
 
         $result->formatVersion = $values['format_version'] ?? '';
         $result->tableId = $this->normalizeId($values['table_id'] ?? '');
         $result->variantId = $this->normalizeId($values['variant_id'] ?? '');
-        $result->exportedAt = $this->normalizeExportedAt($sheet, $values['exported_at'] ?? '');
+        $result->exportedAt = $this->normalizeExportedAt(
+            $sheet,
+            $values['exported_at'] ?? '',
+            $labelRows['exported_at'] ?? null
+        );
+        $result->contentHash = $values['content_hash'] ?? '';
         $result->matchingType = $values['matching_type'] ?? 'first';
         $result->decisionType = $values['decision_type'] ?? 'string';
         $result->variantTitle = $values['variant_title'] ?? '';
@@ -149,12 +156,17 @@ class ExcelTableReader
      * The exported_at token is written as an explicit string, but a user who
      * re-saved the file may have let Excel coerce it into a date serial.
      * Recover the ISO string in that case.
+     *
+     * @param int|null $row  Actual row of the exported_at label (found by the
+     *                       label scan — NOT the canonical position, so a
+     *                       reordered _meta sheet still resolves correctly).
      */
-    private function normalizeExportedAt(Worksheet $sheet, string $value): string
+    private function normalizeExportedAt(Worksheet $sheet, string $value, ?int $row): string
     {
-        $row = ExcelLayout::META_ROWS['exported_at'];
-        $cell = $sheet->getCell('B' . $row);
-        $raw = $cell->getValue();
+        if ($row === null) {
+            return $value;
+        }
+        $raw = $sheet->getCell('B' . $row)->getValue();
         if (is_float($raw) || is_int($raw)) {
             try {
                 return ExcelDate::excelToDateTimeObject((float) $raw)->format(DATE_ATOM);
@@ -427,18 +439,16 @@ class ExcelTableReader
         return $this->rawToString($cell->getValue());
     }
 
+    /**
+     * Delegate to the codec's canonical stringification so the reader always
+     * undoes Excel's type coercion exactly the way the writer serialized it.
+     */
     private function rawToString($value): string
     {
         if ($value === null) {
             return '';
         }
-        if (is_bool($value)) {
-            return $value ? 'true' : 'false';
-        }
-        if (is_float($value) && $value == (int) $value) {
-            return (string) (int) $value;
-        }
-        return (string) $value;
+        return $this->codec->stringify($value);
     }
 
     private function makeError(?string $column, ?int $row, ?string $fieldKey, string $message): array

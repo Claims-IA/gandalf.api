@@ -76,6 +76,10 @@ class ConditionCellCodecTest extends \Codeception\TestCase\Test
             'ends'                 => ['ends: 75', '$ends_with', '75'],
             'ends with'            => ['ends with: 75', '$ends_with', '75'],
             'quoted literal op'    => ["'>= 3'", '$eq', '>= 3'],
+            // Quoted values after prefix operators carry exact literals
+            'ne quoted spaces'     => ["!= ' x '", '$ne', ' x '],
+            'contains quoted empty' => ["contains: ''", '$contains', ''],
+            'in quoted whole'      => ["in: '''visa'''", '$in', "'visa'"],
             'quoted star'          => ["'*'", '$eq', '*'],
             'quoted plus'          => ["'+'", '$eq', '+'],
             'quoted null'          => ["'null'", '$eq', 'null'],
@@ -220,6 +224,13 @@ class ConditionCellCodecTest extends \Codeception\TestCase\Test
             ['$eq', 'not [1..2]'],
             ['$eq', '~ tilde'],
             ['$ne', 'FR'],
+            // Prefix-operator values that only survive thanks to quoting
+            ['$ne', ' x '],
+            ['$contains', '  '],
+            ['$contains', ''],
+            ['$starts_with', ' FR'],
+            ['$in', "'visa'"],
+            ['$nin', ' a, b '],
             ['$gt', '21'],
             ['$gte', '21.5'],
             ['$lt', '0'],
@@ -270,5 +281,27 @@ class ConditionCellCodecTest extends \Codeception\TestCase\Test
         // PHPUnit 4 syntax (expectException() arrived in PHPUnit 5.2)
         $this->setExpectedException(\InvalidArgumentException::class);
         $this->codec->encode('$unknown', 'x');
+    }
+
+    /**
+     * Legacy comma-decimal values converge to the dot form on the FIRST encode
+     * and then stay stable: decode(encode(x)) must be a fixed point of the
+     * encode/decode cycle (no per-import drift).
+     */
+    public function testLegacyCommaValuesConverge()
+    {
+        foreach ([
+            ['$gt', '0,5', '0.5'],
+            ['$between', '0,5;1,5', '0.5;1.5'],
+            ['$not_between', '1,1;2,2', '1.1;2.2'],
+        ] as [$op, $legacy, $normalized]) {
+            $cell = $this->codec->encode($op, $legacy);
+            $decoded = $this->codec->decode($cell);
+            $this->assertSame($normalized, $decoded['value'], "first-pass convergence for $op");
+            // Second cycle is the identity
+            $cell2 = $this->codec->encode($op, $decoded['value']);
+            $this->assertSame($cell, $cell2, "fixed point for $op");
+            $this->assertSame($normalized, $this->codec->decode($cell2)['value']);
+        }
     }
 }

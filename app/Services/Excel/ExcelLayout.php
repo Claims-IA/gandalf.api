@@ -71,5 +71,8 @@ class ExcelLayout
         'default_decision' => 9,
         'table_title' => 10,
         'table_description' => 11,
+        // Content hash of the table at export time — closes the 1-second
+        // resolution window of the updated_at optimistic-lock token.
+        'content_hash' => 12,
     ];
 }

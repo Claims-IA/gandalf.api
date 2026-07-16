@@ -1,0 +1,23 @@
+# Environnement Codeception "local" — exécute la suite API contre la stack
+# Docker locale au lieu du domaine historique gandalf.dev (qui est un vrai
+# domaine Internet : la config par défaut n'est PAS exécutable).
+#
+# ⚠ PRÉREQUIS avant de lancer :
+#   1. Pointer l'app conteneurisée sur la base de test (sinon `cleanup: true`
+#      DROPPERAIT la base de dev `gandalf` à chaque run) :
+#        docker compose exec ou éditer .env : DB_DATABASE=gandalf_test
+#      puis redémarrer le conteneur gandalf_api.
+#   2. Vérifier le port du Mongo Docker (docker ps → gandalf_mongodb).
+#
+# Lancement :
+#   vendor/bin/codecept run api --env local
+#
+modules:
+    config:
+        PhpBrowser:
+            url: 'http://localhost:8007/'
+        MongoDb:
+            dsn: 'mongodb://localhost:27018/gandalf_test'
+            user: ''
+            password: ''
+            cleanup: true

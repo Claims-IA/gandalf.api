@@ -167,8 +167,16 @@ class TablesController extends AbstractController
                 if ($variantId !== null && !preg_match('/^[0-9a-f]{24}$/i', $variantId)) {
                     return $this->response->json(['message' => 'variant_id invalide.'], 422);
                 }
-                // Throws VariantNotFound (→404) when the variant does not exist
-                $tmpPath = $this->exportService->toExcel($table, $variantId);
+                try {
+                    // Throws VariantNotFound (→404) when the variant does not exist
+                    $tmpPath = $this->exportService->toExcel($table, $variantId);
+                } catch (ExcelImportException $e) {
+                    // e.g. a field key colliding with a reserved sentinel header
+                    return $this->response->json([
+                        'message' => $e->getMessage(),
+                        'errors'  => $e->getErrors(),
+                    ], 422);
+                }
                 return response()->download($tmpPath, $filename . '.xlsx', [
                     'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 ])->deleteFileAfterSend(true);
@@ -228,7 +236,14 @@ class TablesController extends AbstractController
                 );
             }
 
-            // Legacy formats always create a new table
+            // Legacy formats (JSON, 3-section CSV, flat Excel) can only create:
+            // honoring mode=update silently as a creation would mislead the caller.
+            if ($this->request->input('mode') === 'update') {
+                return $this->response->json([
+                    'message' => 'mode=update requiert un classeur Excel round-trip '
+                        . '(exporté via ?format=excel) — ce fichier ne peut que créer une nouvelle table.',
+                ], 422);
+            }
             $table = $this->importService->fromFile($file);
         } catch (TableConflictException $e) {
             return $this->response->json([
