@@ -56,15 +56,18 @@ class User extends Base implements
         'last_name',
     ];
 
-    protected $visible = ['_id', 'username', 'temporary_email', 'email', 'first_name', 'last_name', 'active'];
+    protected $visible = ['_id', 'username', 'temporary_email', 'email', 'first_name', 'last_name', 'active', 'settings'];
 
-    protected $fillable = ['username', 'temporary_email', 'email', 'password', 'first_name', 'last_name'];
+    protected $fillable = ['username', 'temporary_email', 'email', 'password', 'first_name', 'last_name', 'settings'];
 
     protected $attributes = [
         'active' => false,
         'email' => '',
         'temporary_email' => '',
         'tokens' => [],
+        // Free-form per-user UI preferences (e.g. flow editor input mode).
+        // Stored verbatim; the API never interprets it.
+        'settings' => [],
     ];
 
     /**
