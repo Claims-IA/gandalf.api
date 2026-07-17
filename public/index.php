@@ -2,6 +2,26 @@
 
 /*
 |--------------------------------------------------------------------------
+| PHP 8.1 $_FILES compatibility shim
+|--------------------------------------------------------------------------
+|
+| PHP 8.1 added a 'full_path' key to every $_FILES entry. The bundled
+| Symfony HttpFoundation 3.0 (FileBag::FILE_KEYS) predates it: the extra key
+| makes fixPhpFilesArray treat the entry as a nested array instead of a
+| file, so Request::file() returns raw strings and file uploads crash.
+| Stripping the key restores the exact shape Symfony 3 expects.
+|
+*/
+
+foreach ($_FILES as &$phpUploadedFile) {
+    if (is_array($phpUploadedFile)) {
+        unset($phpUploadedFile['full_path']);
+    }
+}
+unset($phpUploadedFile);
+
+/*
+|--------------------------------------------------------------------------
 | Create The Application
 |--------------------------------------------------------------------------
 |

@@ -1,0 +1,6 @@
+# Unit test suite — pure PHP tests without HTTP/DB (grammar codec, merge logic).
+# Run with: vendor/bin/codecept run unit
+class_name: UnitTester
+modules:
+    enabled:
+        - Asserts

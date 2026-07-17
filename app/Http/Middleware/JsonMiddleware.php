@@ -26,10 +26,14 @@ class JsonMiddleware
      */
     public function handle($request, Closure $next)
     {
-        if (!$request->has('accept')) {
+        // NB: headers must be checked with headers->has(), not $request->has()
+        // ($request->has() looks up INPUT parameters). The old code always
+        // overwrote Content-Type — including "multipart/form-data; boundary=…"
+        // on file uploads, which made Lumen drop the form fields.
+        if (!$request->headers->has('Accept') || $request->headers->get('Accept') === '') {
             $request->headers->set('Accept', 'application/json');
         }
-        if (!$request->has('content-type')) {
+        if (!$request->headers->has('Content-Type') || $request->headers->get('Content-Type') === '') {
             $request->headers->set('Content-Type', 'application/json');
         }
 

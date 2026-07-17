@@ -15,9 +15,12 @@ namespace App\Http\Controllers;
 
 use Nebo15\REST\Response;
 use Illuminate\Http\Request;
+use App\Exceptions\ExcelImportException;
+use App\Exceptions\TableConflictException;
 use App\Services\ConditionsTypes;
 use App\Services\TableExportService;
 use App\Services\TableImportService;
+use App\Validators\TableRulesProvider;
 use Nebo15\REST\AbstractController;
 use Nebo15\REST\Interfaces\ListableInterface;
 
@@ -63,44 +66,8 @@ class TablesController extends AbstractController
     ) {
         $this->exportService = $exportService;
         $this->importService = $importService;
-        // Build the comma-separated list of valid condition operators for use in "in:" rules
-        $condRules = $conditionsTypes->getConditionsRules();
-        $rules = [
-            'title' => 'sometimes|string',
-            'description' => 'sometimes|string',
-            'matching_type' => 'required|in:first,scoring_sum,scoring_max,scoring_min,scoring_count',
-            'decision_type' => 'required|in:alpha_num,numeric,string,json|decision_type',
-            'fields' => 'required|array',
-            'fields.*._id' => 'sometimes|mongoId',
-            'fields.*.title' => 'required|string',
-            'fields.*.key' => 'required|string|not_in:variant_id',
-            'fields.*.type' => 'required|in:numeric,boolean,string',
-            'fields.*.source' => 'required|in:request',
-            'fields.*.preset' => 'present|array',
-            'fields.*.preset._id' => 'mongoId',
-            'fields.*.preset.value' => 'required_with:fields.*.preset',
-            'fields.*.preset.condition' => 'required_with:fields.*.preset|in:' . $condRules,
-            'variants_probability' => 'sometimes|in:first,random,percent|probabilitySum',
-            'variants' => 'required|array',
-            'variants.*._id' => 'mongoId',
-            'variants.*.is_default' => 'sometimes|boolean',
-            'variants.*.default_decision' => 'required|ruleThanType',
-            'variants.*.title' => 'sometimes|string|between:2,128',
-            'variants.*.description' => 'sometimes|string|between:2,128',
-            'variants.*.default_title' => 'sometimes|string|between:2,128',
-            'variants.*.default_description' => 'sometimes|string|between:2,512',
-            'variants.*.probability,' => 'sometimes|integer|between:1,100',
-            'variants.*.rules' => 'required|array',
-            'variants.*.rules.*._id' => 'mongoId',
-            'variants.*.rules.*.than' => 'required|ruleThanType',
-            'variants.*.rules.*.description' => 'string|between:2,128',
-            'variants.*.rules.*.conditions' => 'required|array|conditionsCount',
-            'variants.*.rules.*.conditions.*._id' => 'mongoId',
-            'variants.*.rules.*.conditions.*.field_key' => 'required|string',
-            'variants.*.rules.*.conditions.*.condition' => 'required|in:' . $condRules,
-            'variants.*.rules.*.conditions.*.value' => 'required|conditionType',
-        ];
 
+        $rules = TableRulesProvider::rules($conditionsTypes);
         $this->validationRules['create'] = $rules;
         $this->validationRules['update'] = $rules;
 
@@ -173,7 +140,10 @@ class TablesController extends AbstractController
      * Export a decision table as a downloadable file.
      *
      * Accepts a ?format=csv|excel|json query parameter (defaults to json).
-     * For CSV and Excel only the first variant is exported. JSON exports all variants.
+     * Excel exports ONE variant as a round-trip workbook: ?variant_id=... selects
+     * it (default variant when omitted); re-importing the file updates the table.
+     * CSV exports the default variant (legacy 3-section format). JSON exports
+     * all variants.
      *
      * @param  string $id  MongoDB ObjectID of the table
      * @return \Symfony\Component\HttpFoundation\Response
@@ -193,7 +163,20 @@ class TablesController extends AbstractController
                 ]);
 
             case 'excel':
-                $tmpPath = $this->exportService->toExcel($table);
+                $variantId = $this->request->query('variant_id');
+                if ($variantId !== null && !preg_match('/^[0-9a-f]{24}$/i', $variantId)) {
+                    return $this->response->json(['message' => 'variant_id invalide.'], 422);
+                }
+                try {
+                    // Throws VariantNotFound (→404) when the variant does not exist
+                    $tmpPath = $this->exportService->toExcel($table, $variantId);
+                } catch (ExcelImportException $e) {
+                    // e.g. a field key colliding with a reserved sentinel header
+                    return $this->response->json([
+                        'message' => $e->getMessage(),
+                        'errors'  => $e->getErrors(),
+                    ], 422);
+                }
                 return response()->download($tmpPath, $filename . '.xlsx', [
                     'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 ])->deleteFileAfterSend(true);
@@ -212,14 +195,23 @@ class TablesController extends AbstractController
      * Import a decision table from an uploaded CSV, Excel, or JSON file.
      *
      * The file is imported into the current project (X-Application header).
-     * A new table is always created — existing tables are never overwritten.
+     *
+     * Round-trip Excel exports (hidden _meta sheet with table/variant ids)
+     * UPDATE the original table by default, protected by an optimistic lock
+     * (409 when the table changed since export; force=1 overrides). Optional
+     * form fields: mode=create|update (default: auto), force=1.
+     *
+     * All other files (JSON, CSV, legacy Excel dumps, or round-trip files
+     * imported with mode=create) create a new table.
      *
      * @return \Illuminate\Http\JsonResponse
      */
     public function import()
     {
         $this->validate($this->request, [
-            'file' => 'required|file|max:10240',
+            'file'  => 'required|file|max:10240',
+            'force' => 'sometimes|boolean',
+            'mode'  => 'sometimes|in:auto,create,update',
         ]);
 
         $file = $this->request->file('file');
@@ -232,9 +224,42 @@ class TablesController extends AbstractController
         }
 
         try {
+            if ($this->importService->isRoundTripExcel($file)) {
+                $outcome = $this->importService->fromExcelRoundTrip(
+                    $file->getRealPath(),
+                    $this->request->input('mode', 'auto'),
+                    (bool) $this->request->input('force', false)
+                );
+                return $this->response->json(
+                    $outcome['table']->toArray(),
+                    $outcome['updated'] ? 200 : 201
+                );
+            }
+
+            // Legacy formats (JSON, 3-section CSV, flat Excel) can only create:
+            // honoring mode=update silently as a creation would mislead the caller.
+            if ($this->request->input('mode') === 'update') {
+                return $this->response->json([
+                    'message' => 'mode=update requiert un classeur Excel round-trip '
+                        . '(exporté via ?format=excel) — ce fichier ne peut que créer une nouvelle table.',
+                ], 422);
+            }
             $table = $this->importService->fromFile($file);
+        } catch (TableConflictException $e) {
+            return $this->response->json([
+                'message'           => $e->getMessage(),
+                'error'             => 'table_conflict',
+                'server_updated_at' => $e->getServerUpdatedAt(),
+                'file_exported_at'  => $e->getFileExportedAt(),
+                'hint'              => 'Ré-exportez le fichier ou renvoyez l\'import avec force=1.',
+            ], 409);
+        } catch (ExcelImportException $e) {
+            return $this->response->json([
+                'message' => $e->getMessage(),
+                'errors'  => $e->getErrors(),
+            ], 422);
         } catch (\RuntimeException $e) {
-            // Structural validation errors from the import service
+            // Structural validation errors from the legacy import paths
             return $this->response->json([
                 'message' => 'Erreurs de validation dans le fichier importé.',
                 'errors'  => json_decode($e->getMessage(), true) ?? [$e->getMessage()],

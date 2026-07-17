@@ -100,6 +100,32 @@ class ConditionsTypes
                     return stripos((string) $field_value, (string) $condition_value) !== false;
                 }
             ],
+            '$not_contains' => [
+                // Vrai si la valeur du champ NE contient PAS la sous-chaîne (insensible à la casse)
+                'input_type' => '',
+                'function' => function ($condition_value, $field_value) {
+                    return stripos((string) $field_value, (string) $condition_value) === false;
+                }
+            ],
+            '$starts_with' => [
+                // Vrai si la valeur du champ commence par la sous-chaîne (insensible à la casse)
+                'input_type' => '',
+                'function' => function ($condition_value, $field_value) {
+                    return stripos((string) $field_value, (string) $condition_value) === 0;
+                }
+            ],
+            '$ends_with' => [
+                // Vrai si la valeur du champ se termine par la sous-chaîne (insensible à la casse)
+                'input_type' => '',
+                'function' => function ($condition_value, $field_value) {
+                    $needle = (string) $condition_value;
+                    $haystack = (string) $field_value;
+                    if ($needle === '') {
+                        return true;
+                    }
+                    return strripos($haystack, $needle) === strlen($haystack) - strlen($needle);
+                }
+            ],
             '$any' => [
                 // Toujours vrai, quelle que soit la valeur (y compris null)
                 'input_type' => '',
@@ -135,6 +161,16 @@ class ConditionsTypes
                         return floatval(str_replace(',', '.', $item));
                     }, explode(';', $condition_value));
                     return ($between[0] <= $field_value and $between[1] > $field_value);
+                }
+            ],
+            '$not_between' => [
+                // x < min ou x > max (inverse de $between, bornes incluses dans l'exclusion)
+                'input_type' => 'betweenString',
+                'function' => function ($condition_value, $field_value) {
+                    $between = array_map(function ($item) {
+                        return floatval(str_replace(',', '.', $item));
+                    }, explode(';', $condition_value));
+                    return ($field_value < $between[0] or $field_value > $between[1]);
                 }
             ],
         ];

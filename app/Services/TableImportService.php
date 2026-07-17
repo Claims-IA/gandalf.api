@@ -2,10 +2,18 @@
 /**
  * TableImportService
  *
- * Parses an uploaded CSV, Excel (XLSX/XLS), or JSON file and creates a new
- * decision table in the current application (project).
+ * Parses an uploaded CSV, Excel (XLSX/XLS), or JSON file and creates — or,
+ * for round-trip Excel exports, updates — a decision table in the current
+ * application (project).
  *
- * Expected CSV/Excel format — three named sections:
+ * Two Excel paths coexist:
+ *  - round-trip workbooks (gandalf-xlsx-v2, hidden _meta sheet) go through
+ *    fromExcelRoundTrip(): update-in-place with optimistic locking, full
+ *    shared Lumen validation, cell-addressed errors;
+ *  - legacy flat Excel dumps (no _meta sheet) fall back to the 3-section
+ *    parser below and always create a new table.
+ *
+ * Expected legacy CSV/Excel format — three named sections:
  *
  *   ## METADATA
  *   title,<table title>
@@ -36,22 +44,122 @@
 
 namespace App\Services;
 
+use App\Exceptions\ExcelImportException;
 use App\Models\Table;
 use App\Repositories\TablesRepository;
+use App\Services\Excel\ExcelErrorTranslator;
+use App\Services\Excel\ExcelTableReader;
+use App\Services\Excel\TableMergeService;
+use App\Validators\TableRulesProvider;
 use Illuminate\Http\UploadedFile;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
 class TableImportService
 {
     private TablesRepository $repository;
+    private ExcelTableReader $excelReader;
+    private TableMergeService $mergeService;
+    private ExcelErrorTranslator $errorTranslator;
+    private ConditionsTypes $conditionsTypes;
 
-    public function __construct(TablesRepository $repository)
-    {
+    public function __construct(
+        TablesRepository $repository,
+        ExcelTableReader $excelReader,
+        TableMergeService $mergeService,
+        ExcelErrorTranslator $errorTranslator,
+        ConditionsTypes $conditionsTypes
+    ) {
         $this->repository = $repository;
+        $this->excelReader = $excelReader;
+        $this->mergeService = $mergeService;
+        $this->errorTranslator = $errorTranslator;
+        $this->conditionsTypes = $conditionsTypes;
     }
 
     /**
-     * Parse the uploaded file and persist it as a new decision table.
+     * True when the uploaded file is a round-trip Excel export (v2 format,
+     * detected by the presence of the hidden _meta sheet).
+     */
+    public function isRoundTripExcel(UploadedFile $file): bool
+    {
+        $ext = strtolower($file->getClientOriginalExtension());
+        if (!in_array($ext, ['xlsx', 'xls'], true)) {
+            return false;
+        }
+        return $this->excelReader->isRoundTripFile($file->getRealPath());
+    }
+
+    /**
+     * Import a round-trip Excel workbook (gandalf-xlsx-v2).
+     *
+     * Update flow (default when the file embeds table/variant ids): the
+     * existing table is loaded, the sheet content is merged into it (fields
+     * merged, target variant's rules replaced, other variants untouched), the
+     * full payload runs through the SAME Lumen validation as the create/update
+     * endpoints, and the table is persisted in place.
+     *
+     * Create flow (mode=create, or a file without embedded ids): all ids are
+     * dropped and a fresh single-variant table is created.
+     *
+     * @param  string $path   Absolute path of the uploaded workbook.
+     * @param  string $mode   'auto' (ids → update, else create), 'create', 'update'.
+     * @param  bool   $force  Skip the optimistic-lock check on update.
+     * @return array{table: Table, updated: bool}
+     * @throws ExcelImportException                    422 — parse/merge/validation errors.
+     * @throws \App\Exceptions\TableConflictException  409 — stale export.
+     * @throws \Illuminate\Database\Eloquent\ModelNotFoundException 404 — table gone/other tenant.
+     */
+    public function fromExcelRoundTrip(string $path, string $mode = 'auto', bool $force = false): array
+    {
+        $result = $this->excelReader->read($path);
+
+        // A file with only one of the two ids is damaged (a _meta cell was
+        // erased): creating a duplicate table silently would hide the problem,
+        // so reject explicitly unless the caller opted into mode=create.
+        $hasPartialIds = ($result->tableId === null) !== ($result->variantId === null);
+        if ($hasPartialIds && $mode !== 'create') {
+            throw new ExcelImportException([[
+                'cell' => null, 'row' => null, 'column' => null, 'field' => null,
+                'message' => 'La feuille _meta est incomplète (table_id ou variant_id manquant). '
+                    . 'Ré-exportez le fichier, ou importez avec mode=create pour créer une nouvelle table.',
+            ]]);
+        }
+
+        $update = match ($mode) {
+            'create' => false,
+            'update' => true,
+            default => $result->hasOrigin(),
+        };
+
+        if ($update && !$result->hasOrigin()) {
+            throw new ExcelImportException([[
+                'cell' => null, 'row' => null, 'column' => null, 'field' => null,
+                'message' => 'Le fichier ne contient pas d\'identifiants de table/variante — impossible de mettre à jour. Importez en mode création.',
+            ]]);
+        }
+
+        if ($update) {
+            // ModelNotFoundException (→404) when the id is unknown or belongs
+            // to another application (repository is tenant-scoped)
+            $existing = $this->repository->read($result->tableId);
+            $payload = $this->mergeService->mergeIntoTable($existing, $result, $force);
+            $tableId = $result->tableId;
+        } else {
+            $payload = $this->mergeService->buildCreatePayload($result);
+            $tableId = null;
+        }
+
+        $this->validatePayload($payload, $result);
+
+        return [
+            'table' => $this->repository->createOrUpdate($payload, $tableId),
+            'updated' => $update,
+        ];
+    }
+
+    /**
+     * Parse the uploaded file and persist it as a new decision table
+     * (legacy formats: JSON, 3-section CSV, and pre-v2 Excel dumps).
      *
      * Format is detected from the file extension. The caller must already have
      * validated that a file was uploaded and that its extension is one of
@@ -84,6 +192,32 @@ class TableImportService
         $this->validateTableData($data);
 
         return $this->repository->createOrUpdate($data);
+    }
+
+    /**
+     * Run the full shared Lumen validation (same rules as the create/update
+     * endpoints) on the assembled payload, translating failures into
+     * cell-addressed errors.
+     *
+     * @throws ExcelImportException
+     */
+    private function validatePayload(array $payload, \App\Services\Excel\ExcelImportResult $result): void
+    {
+        $validator = \Validator::make($payload, TableRulesProvider::rules($this->conditionsTypes));
+
+        if ($validator->fails()) {
+            $variantTitles = [];
+            foreach ($payload['variants'] as $i => $variant) {
+                $variantTitles[$i] = $variant['title'] ?? '';
+            }
+            $errors = $this->errorTranslator->translate(
+                $validator->errors()->toArray(),
+                $result,
+                $this->mergeService->targetVariantIndex,
+                $variantTitles
+            );
+            throw new ExcelImportException($errors, 'Le fichier importé contient des erreurs de validation.');
+        }
     }
 
     // -------------------------------------------------------------------------

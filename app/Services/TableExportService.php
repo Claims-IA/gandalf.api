@@ -4,29 +4,41 @@
  *
  * Serializes a decision table into CSV, Excel (XLSX), or JSON format for download.
  *
- * CSV/Excel format uses three named sections:
+ * CSV format uses three named sections (legacy, create-only round trip):
  *   ## METADATA  — table-level properties (title, matching_type, etc.)
  *   ## FIELDS    — field definitions (key, title, type)
  *   ## RULES     — one row per rule; columns = field keys + "decision"
  *                  Conditions are encoded as "operator:value" (e.g. "$gte:18").
  *                  "*" means no condition for that field in the rule.
  *
- * The default variant (is_default = true) is exported for CSV/Excel.
- * JSON exports all variants: the default variant under the "table" key,
- * and the others under the "variants" key.
+ * Excel format is the round-trip workbook built by Excel\ExcelTableWriter:
+ * one variant per file, human-readable condition grammar, hidden _meta sheet
+ * carrying table/variant ids and the optimistic-lock token. Re-importing an
+ * Excel export updates the original table.
+ *
+ * The default variant (is_default = true) is exported for CSV (and for Excel
+ * when no variant id is given). JSON exports all variants: the default variant
+ * under the "table" key, and the others under the "variants" key.
  *
  * @package App\Services
  */
 
 namespace App\Services;
 
+use App\Exceptions\VariantNotFound;
 use App\Models\Rule;
 use App\Models\Table;
-use PhpOffice\PhpSpreadsheet\Spreadsheet;
-use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use App\Services\Excel\ExcelTableWriter;
 
 class TableExportService
 {
+    private ExcelTableWriter $excelWriter;
+
+    public function __construct(ExcelTableWriter $excelWriter)
+    {
+        $this->excelWriter = $excelWriter;
+    }
+
     /**
      * Serialize the table to a pretty-printed JSON string.
      * _id fields and runtime analytics fields are stripped so the output
@@ -118,52 +130,30 @@ class TableExportService
     }
 
     /**
-     * Serialize the table to an XLSX file and return the temporary file path.
-     * The caller is responsible for streaming the file and deleting it afterward.
+     * Serialize one variant of the table to a round-trip XLSX file and return
+     * the temporary file path. The caller is responsible for streaming the
+     * file and deleting it afterward.
      *
-     * @param  Table  $table
+     * The workbook embeds the table/variant ids and the table's updated_at
+     * timestamp (hidden _meta sheet) so that re-importing the file updates the
+     * original table with optimistic-lock protection.
+     *
+     * @param  Table       $table
+     * @param  string|null $variantId  Variant to export; null = default variant.
      * @return string  Absolute path to the generated .xlsx temp file
+     * @throws VariantNotFound  When $variantId does not exist on the table.
      */
-    public function toExcel(Table $table): string
+    public function toExcel(Table $table, ?string $variantId = null): string
     {
-        $spreadsheet = new Spreadsheet();
-        $sheet = $spreadsheet->getActiveSheet();
+        $variant = $variantId === null
+            ? $this->getDefaultVariant($table)
+            : $this->getVariantById($table, $variantId);
 
-        // Sheet title: max 31 chars, no special characters
-        $sheetTitle = preg_replace('/[\/\\\?\*\[\]:]/', '', $table->title ?? 'Table');
-        $sheet->setTitle(mb_substr($sheetTitle ?: 'Table', 0, 31));
-
-        // Build the same rows as the CSV and write them into the spreadsheet
-        $csv     = $this->toCsv($table);
-        $stream  = fopen('php://memory', 'r+');
-        fwrite($stream, $csv);
-        rewind($stream);
-
-        $rowIndex = 1;
-        while (($row = fgetcsv($stream)) !== false) {
-            $colIndex = 1;
-            foreach ($row as $cellValue) {
-                $sheet->setCellValueByColumnAndRow($colIndex, $rowIndex, $cellValue);
-                $colIndex++;
-            }
-            // Bold section header rows
-            if (isset($row[0]) && str_starts_with((string)$row[0], '##')) {
-                $sheet->getStyle('A' . $rowIndex)->getFont()->setBold(true);
-            }
-            $rowIndex++;
-        }
-        fclose($stream);
-
-        // Auto-size columns for readability
-        foreach (range('A', $sheet->getHighestColumn()) as $col) {
-            $sheet->getColumnDimension($col)->setAutoSize(true);
+        if (!$variant) {
+            throw new VariantNotFound();
         }
 
-        $tmpPath = sys_get_temp_dir() . '/' . uniqid('table_export_', true) . '.xlsx';
-        $writer  = new Xlsx($spreadsheet);
-        $writer->save($tmpPath);
-
-        return $tmpPath;
+        return $this->excelWriter->write($table, $variant);
     }
 
     // -------------------------------------------------------------------------
@@ -182,6 +172,21 @@ class TableExportService
             }
         }
         return count($variants) > 0 ? $variants[0] : null;
+    }
+
+    /**
+     * Return the variant with the given _id, or null when it does not exist.
+     *
+     * @return \App\Models\Variant|null
+     */
+    private function getVariantById(Table $table, string $variantId)
+    {
+        foreach ($table->variants()->get() as $variant) {
+            if ((string) $variant->_id === $variantId) {
+                return $variant;
+            }
+        }
+        return null;
     }
 
     /**
