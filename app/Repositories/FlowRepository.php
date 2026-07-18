@@ -16,6 +16,7 @@ use App\Models\Table;
 use App\Models\FlowRun;
 use App\Services\GraphSort;
 use App\Exceptions\FlowValidationException;
+use MongoDB\BSON\Regex;
 use Nebo15\REST\AbstractRepository;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
 use Nebo15\LumenApplicationable\Contracts\Applicationable;
@@ -23,6 +24,41 @@ use Nebo15\LumenApplicationable\Contracts\Applicationable;
 class FlowRepository extends AbstractRepository
 {
     protected $modelClassName = 'App\Models\Flow';
+
+    protected $observerClassName = 'App\Observers\FlowObserver';
+
+    /**
+     * Return a paginated, application-scoped list of flows with optional filters.
+     *
+     * Mirrors TablesRepository::readListWithFilters: case-insensitive regex
+     * search on 'title' and 'description', always scoped to the current
+     * application. Unknown filter keys are ignored to prevent arbitrary queries.
+     *
+     * @param  array $filters  Associative array of filter keys and values.
+     * @return \Illuminate\Pagination\LengthAwarePaginator
+     */
+    public function readListWithFilters(array $filters = [])
+    {
+        // Query-string values arrive as strings; MongoDB's $limit needs an int.
+        $size = isset($filters['size']) ? (int) $filters['size'] : null;
+        if (!$filters) {
+            return $this->readList($size);
+        }
+
+        // Whitelist filterable fields to prevent arbitrary MongoDB queries.
+        $available = ['title', 'description'];
+
+        $where = [];
+        foreach ($filters as $field => $filter) {
+            if (in_array($field, $available) && $filter !== '' && $filter !== null) {
+                $where[$field] = new Regex($filter, 'i');
+            }
+        }
+        // Always scope to the authenticated application for tenant isolation.
+        $where['applications'] = ApplicationableHelper::getApplicationId();
+
+        return $this->getModel()->query()->where($where)->paginate($size);
+    }
 
     /**
      * Create or update a flow after validating its graph.

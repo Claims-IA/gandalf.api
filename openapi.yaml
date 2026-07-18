@@ -61,7 +61,7 @@ tags:
   - name: Decisions (Consumer)
     description: Consumer-facing decision evaluation and retrieval
   - name: Changelog
-    description: Audit trail — history, diff, and rollback for decision tables
+    description: Audit trail — history, diff, and rollback for decision tables and flows
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Security schemes
@@ -261,6 +261,22 @@ components:
                     type: string
                   field:
                     type: string
+
+    FlowListItem:
+      type: object
+      description: >
+        Reduced flow representation returned in list responses (GET /flows).
+        The graph (inputs/outputs/nodes/edges) is omitted — fetch a single flow
+        by id to get the full topology.
+      properties:
+        _id:
+          type: string
+          example: "6a5437d8ad556857e10c1380"
+        title:
+          type: string
+          example: "Credit approval"
+        description:
+          type: string
 
     FlowResult:
       type: object
@@ -2287,26 +2303,44 @@ paths:
     get:
       tags: [Flows]
       summary: List flows
-      description: Paginated list of the project's decision-requirement-graph flows.
+      description: >
+        Paginated list of the project's decision-requirement-graph flows.
+        Each item is a reduced representation (`_id`, `title`, `description`);
+        fetch a single flow by id to get its full graph. Supports
+        case-insensitive `title`/`description` filters.
       operationId: listFlows
       security:
         - BearerAuth: []
       parameters:
         - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/QuerySize'
+        - name: title
+          in: query
+          required: false
+          description: Case-insensitive regex filter on flow title.
+          schema:
+            type: string
+            example: "Credit"
+        - name: description
+          in: query
+          required: false
+          description: Case-insensitive regex filter on flow description.
+          schema:
+            type: string
       responses:
         "200":
-          description: Flows list.
+          description: Paginated flow list (reduced items).
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  meta:
-                    type: object
-                  data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Flow'
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/FlowListItem'
     post:
       tags: [Flows]
       summary: Create a flow
@@ -2420,6 +2454,34 @@ paths:
       responses:
         "200":
           description: Flow deleted.
+
+  /api/v1/admin/flows/{id}/copy:
+    post:
+      tags: [Flows]
+      summary: Copy a flow
+      description: >
+        Duplicates the flow (its graph is re-validated on save) into the same
+        project and returns the new flow. Requires `tables_create`.
+      operationId: copyFlow
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: The copied flow.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Flow'
+        "404":
+          description: Flow not found.
 
   /api/v1/admin/flows/{id}/runs:
     get:
@@ -2695,6 +2757,35 @@ paths:
       responses:
         "200":
           description: Table deleted.
+
+  /api/v1/admin/tables/{id}/copy:
+    post:
+      tags: [Tables]
+      summary: Copy a decision table
+      description: >
+        Duplicates the table (fields, variants, rules, conditions) into the same
+        project and returns the new table. To copy into a DIFFERENT project use
+        `/tables/{id}/copyto/{project_id}`. Requires `tables_create`.
+      operationId: copyTable
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: The copied table.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Table'
+        "404":
+          description: Table not found.
 
   # ── Export ────────────────────────────────────────────────────────────────────
   /api/v1/admin/tables/{id}/export:
@@ -3275,13 +3366,13 @@ paths:
           description: Decision not found.
 
   # ── Changelog ─────────────────────────────────────────────────────────────────
-  /api/v1/admin/{collection}/changelog:
+  /api/v1/admin/changelog/{collection}:
     get:
       tags: [Changelog]
       summary: List changelog entries for a collection
       description: |
         Returns all changelog entries for the given resource collection
-        (e.g. `tables`), scoped to the current application.
+        (`tables` or `flows`), scoped to the current application.
       operationId: changelogAll
       security:
         - BearerAuth: []
@@ -3290,10 +3381,11 @@ paths:
         - name: collection
           in: path
           required: true
-          description: Resource collection name (e.g. `tables`).
+          description: Resource collection name — `tables` or `flows`.
           schema:
             type: string
-            example: "tables"
+            enum: [tables, flows]
+            example: "flows"
         - $ref: '#/components/parameters/QuerySize'
       responses:
         "200":
@@ -3310,7 +3402,7 @@ paths:
                         items:
                           $ref: '#/components/schemas/ChangelogEntry'
 
-  /api/v1/admin/{collection}/{model_id}/changelog:
+  /api/v1/admin/changelog/{collection}/{model_id}:
     get:
       tags: [Changelog]
       summary: List changelog entries for a specific resource
@@ -3323,9 +3415,11 @@ paths:
         - name: collection
           in: path
           required: true
+          description: Resource collection name — `tables` or `flows`.
           schema:
             type: string
-            example: "tables"
+            enum: [tables, flows]
+            example: "flows"
         - name: model_id
           in: path
           required: true
@@ -3349,7 +3443,7 @@ paths:
                         items:
                           $ref: '#/components/schemas/ChangelogEntry'
 
-  /api/v1/admin/{collection}/{model_id}/diff:
+  /api/v1/admin/changelog/{collection}/{model_id}/diff:
     get:
       tags: [Changelog]
       summary: Diff two changelog snapshots
@@ -3365,9 +3459,11 @@ paths:
         - name: collection
           in: path
           required: true
+          description: Resource collection name — `tables` or `flows`.
           schema:
             type: string
-            example: "tables"
+            enum: [tables, flows]
+            example: "flows"
         - name: model_id
           in: path
           required: true
@@ -3401,8 +3497,8 @@ paths:
         "422":
           description: "`compare_with` is required."
 
-  /api/v1/admin/{collection}/{model_id}/{changelog_id}/rollback:
-    put:
+  /api/v1/admin/changelog/{collection}/{model_id}/rollback/{changelog_id}:
+    post:
       tags: [Changelog]
       summary: Rollback a resource to a previous state
       description: |
@@ -3416,9 +3512,11 @@ paths:
         - name: collection
           in: path
           required: true
+          description: Resource collection name — `tables` or `flows`.
           schema:
             type: string
-            example: "tables"
+            enum: [tables, flows]
+            example: "flows"
         - name: model_id
           in: path
           required: true
