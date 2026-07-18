@@ -2,8 +2,8 @@
 /**
  * ObserverServiceProvider
  *
- * Attaches Eloquent model observers to the Table, User, and Invitation models
- * during application boot. Observers are used in preference to inline model events
+ * Attaches Eloquent model observers to the Table, Flow, User, and Invitation
+ * models during application boot. Observers are used in preference to inline events
  * to keep side-effect logic (sending emails, writing changelog entries, hashing
  * passwords) in dedicated classes rather than in the models or repositories
  * themselves.
@@ -13,9 +13,11 @@
 
 namespace App\Providers;
 
+use App\Models\Flow;
 use App\Models\Invitation;
 use App\Models\Table;
 use App\Models\User;
+use App\Observers\FlowObserver;
 use App\Observers\InvitationsObserver;
 use App\Observers\TableObserver;
 use App\Observers\UserObserver;
@@ -32,6 +34,7 @@ class ObserverServiceProvider extends ServiceProvider
     public function boot()
     {
         Table::observe(new TableObserver);
+        Flow::observe(new FlowObserver);
         User::observe(new UserObserver);
         Invitation::observe(new InvitationsObserver);
     }

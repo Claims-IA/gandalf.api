@@ -14,6 +14,7 @@
 namespace App\Http\Controllers;
 
 use Nebo15\REST\AbstractController;
+use Nebo15\REST\Interfaces\ListableInterface;
 
 /**
  * @method \App\Repositories\FlowRepository getRepository()
@@ -38,9 +39,32 @@ class FlowsController extends AbstractController
             'outputs' => 'sometimes|required|array',
         ],
         'readList' => [
-            'title' => 'sometimes|min:1',
+            'title'       => 'sometimes|min:1',
+            'description' => 'sometimes|min:1',
         ],
     ];
+
+    /**
+     * Return a paginated, application-scoped list of flows.
+     *
+     * Overrides the vendor readList (which ignores query filters) to validate
+     * and apply the same title/description filters as the tables endpoint, and
+     * to reduce each flow to its list projection (Flow::toListArray).
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function readList()
+    {
+        $this->validateRoute();
+
+        return $this->response->jsonPaginator(
+            $this->getRepository()->readListWithFilters($this->request->all()),
+            [],
+            function (ListableInterface $model) {
+                return $model->toListArray();
+            }
+        );
+    }
 
     /**
      * Paginated run history for a flow (most recent first).
