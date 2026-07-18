@@ -49,6 +49,10 @@ class UsersController extends AbstractController
             'email' => 'sometimes|required|uniqueExceptUser:email|email',
             'password' => 'sometimes|required|between:6,32|password',
             'current_password' => 'required_with:password|current_password',
+            // Free-form UI preferences bag. Known keys are validated; unknown
+            // keys are allowed so new client preferences need no API change.
+            'settings' => 'sometimes|array',
+            'settings.flow_input_mode' => 'sometimes|in:mouse,trackpad',
         ],
         'createResetPasswordToken' => [
             'email' => 'required|email',
