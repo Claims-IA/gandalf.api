@@ -46,7 +46,7 @@ class Flow extends Base implements ListableInterface, Applicationable
 
     protected $perPage = 20;
 
-    protected $listable = ['_id', 'title', 'description'];
+    protected $listable = ['_id', 'title', 'description', 'category_id'];
 
     protected $attributes = [
         'title' => '',
@@ -55,12 +55,16 @@ class Flow extends Base implements ListableInterface, Applicationable
         'outputs' => [],
         'nodes' => [],
         'edges' => [],
+        // Optional reference to a category defined in the owning application's
+        // settings.categories list. Null means "uncategorised".
+        'category_id' => null,
     ];
 
     protected $visible = [
         '_id',
         'title',
         'description',
+        'category_id',
         'inputs',
         'outputs',
         'nodes',
@@ -70,6 +74,7 @@ class Flow extends Base implements ListableInterface, Applicationable
     protected $fillable = [
         'title',
         'description',
+        'category_id',
         'inputs',
         'outputs',
         'nodes',

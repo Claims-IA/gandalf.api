@@ -25,22 +25,25 @@ class FlowsController extends AbstractController
 
     protected $validationRules = [
         'create' => [
-            'title'   => 'required|string|min:1',
-            'nodes'   => 'required|array',
-            'edges'   => 'sometimes|array',
-            'inputs'  => 'sometimes|array',
-            'outputs' => 'required|array',
+            'title'       => 'required|string|min:1',
+            'category_id' => 'sometimes|string',
+            'nodes'       => 'required|array',
+            'edges'       => 'sometimes|array',
+            'inputs'      => 'sometimes|array',
+            'outputs'     => 'required|array',
         ],
         'update' => [
-            'title'   => 'sometimes|required|string|min:1',
-            'nodes'   => 'sometimes|required|array',
-            'edges'   => 'sometimes|array',
-            'inputs'  => 'sometimes|array',
-            'outputs' => 'sometimes|required|array',
+            'title'       => 'sometimes|required|string|min:1',
+            'category_id' => 'sometimes|string',
+            'nodes'       => 'sometimes|required|array',
+            'edges'       => 'sometimes|array',
+            'inputs'      => 'sometimes|array',
+            'outputs'     => 'sometimes|required|array',
         ],
         'readList' => [
             'title'       => 'sometimes|min:1',
             'description' => 'sometimes|min:1',
+            'category_id' => 'sometimes|string',
         ],
     ];
 

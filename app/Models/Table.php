@@ -40,13 +40,16 @@ class Table extends Base implements ListableInterface, Applicationable
 
     protected $perPage = 20;
 
-    protected $listable = ['_id', 'title', 'description', 'matching_type'];
+    protected $listable = ['_id', 'title', 'description', 'matching_type', 'category_id'];
 
     protected $attributes = [
         'title' => '',
         'description' => '',
         'matching_type' => 'first',
         'variants_probability' => '',
+        // Optional reference to a category defined in the owning application's
+        // settings.categories list. Null means "uncategorised".
+        'category_id' => null,
     ];
 
     protected $visible = [
@@ -56,6 +59,7 @@ class Table extends Base implements ListableInterface, Applicationable
         'matching_type',
         'decision_type',
         'variants_probability',
+        'category_id',
         'fields',
         'variants',
     ];
@@ -66,6 +70,7 @@ class Table extends Base implements ListableInterface, Applicationable
         'matching_type',
         'decision_type',
         'variants_probability',
+        'category_id',
     ];
 
     protected $casts = [

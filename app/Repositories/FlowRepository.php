@@ -54,6 +54,12 @@ class FlowRepository extends AbstractRepository
                 $where[$field] = new Regex($filter, 'i');
             }
         }
+        // Exact match on category_id — mirrors TablesRepository: a substring
+        // regex would let 'cat_a' match 'cat_abc', so filtering is an equality
+        // check, not a search.
+        if (!empty($filters['category_id'])) {
+            $where['category_id'] = $filters['category_id'];
+        }
         // Always scope to the authenticated application for tenant isolation.
         $where['applications'] = ApplicationableHelper::getApplicationId();
 

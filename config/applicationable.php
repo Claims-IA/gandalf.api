@@ -42,6 +42,8 @@ return [
             '~^\/api\/v1\/admin\/flows$~' => ['tables_view'],
             '~^\/api\/v1\/admin\/flows\/(.+)$~' => ['tables_view'],
 
+            '~^\/api\/v1\/admin\/categories$~' => ['tables_view'],
+
             '~^\/api\/v1\/admin\/decisions$~' => ['decisions_view'],
             '~^\/api\/v1\/admin\/decisions\/(.+)$~' => ['decisions_view'],
 
@@ -71,6 +73,9 @@ return [
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_manage'],
         ],
         'put' => [
+            // Editing the category list mutates project-level settings, so it
+            // requires project_update (project admin), not just tables_update.
+            '~^\/api\/v1\/admin\/categories$~' => ['project_update'],
             '~^\/api\/v1\/admin\/tables\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/flows\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_manage'],

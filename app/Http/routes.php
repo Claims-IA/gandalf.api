@@ -147,6 +147,10 @@ $app->group(
     ],
     function ($app) {
         /** @var Laravel\Lumen\Application $app */
+        // List the current application's categories (organisational labels for
+        // tables and flows). PUT replaces the whole list (project admin only).
+        $app->get('/categories', ['uses' => 'CategoriesController@index']);
+        $app->put('/categories', ['uses' => 'CategoriesController@update']);
         // List all decisions for this application (paginated, filterable by table/variant)
         $app->get('/decisions', ['uses' => 'DecisionsController@readList']);
         // Retrieve a single decision record by its MongoDB ObjectID

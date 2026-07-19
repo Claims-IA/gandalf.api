@@ -43,6 +43,12 @@ class TableRulesProvider
         return [
             'title' => 'sometimes|string',
             'description' => 'sometimes|string',
+            // Optional reference to an application category. Validated only when
+            // present; a string id keeps it, null moves the table back to
+            // "uncategorised". NB: this project runs illuminate/validation 5.2,
+            // which has no 'nullable' rule — 'sometimes|string' already accepts
+            // null (and absence) while still rejecting a non-string like an array.
+            'category_id' => 'sometimes|string',
             'matching_type' => 'required|in:first,scoring_sum,scoring_max,scoring_min,scoring_count',
             'decision_type' => 'required|in:alpha_num,numeric,string,json|decision_type',
             'fields' => 'required|array',
