@@ -16,6 +16,7 @@ use App\Models\Table;
 use App\Models\FlowRun;
 use App\Services\GraphSort;
 use App\Exceptions\FlowValidationException;
+use App\Repositories\TablesRepository;
 use MongoDB\BSON\Regex;
 use Nebo15\REST\AbstractRepository;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
@@ -102,6 +103,116 @@ class FlowRepository extends AbstractRepository
         $model->save();
 
         return $model;
+    }
+
+    /**
+     * Copy a flow into a target application, bringing its referenced tables.
+     *
+     * A flow is only executable when every node's table lives in the same
+     * application (validateGraph / FlowEngine resolve tables per-application via
+     * findProjectTable). So we first duplicate each referenced table into the
+     * target, remap the nodes' table_id to the new copies, then create the flow
+     * copy owned by the target.
+     *
+     * The graph is NOT re-validated through createOrUpdate here: validateGraph
+     * runs against the CURRENT (source) application, whereas the remapped ids
+     * point at the target's tables. The source graph was already valid and we
+     * only swap table ids (for identical copies) and the owning application, so
+     * writing directly is safe.
+     *
+     * @param  string $id         Source flow id (scoped to the current application).
+     * @param  string $project_id Target application id.
+     * @return Flow  The newly created flow copy.
+     */
+    public function copyTo($id, $project_id)
+    {
+        $source = $this->read($id);
+
+        $values = $source->getAttributes();
+        unset($values[$source->getKeyName()]);
+        unset($values['applications']);
+        unset($values['category_id']);
+
+        $values['nodes'] = $this->copyReferencedTables($source->nodes ?: [], $project_id);
+
+        /** @var Flow $model */
+        $model = $this->getModel()->newInstance();
+        // String id, consistent with how `applications` is stored across the codebase.
+        $model->applications = [(string) $project_id];
+        $model->category_id = null;
+        $model->fill($values);
+        $model->save();
+
+        return $model;
+    }
+
+    /**
+     * Move a flow to another application, bringing copies of its referenced tables.
+     *
+     * The flow document changes ownership (disappears from the source), but its
+     * referenced tables are COPIED into the target (never moved) so that other
+     * flows in the source application keep working. Node table_ids are remapped
+     * to those copies. As in copyTo, the graph is not re-validated against the
+     * source application; applications is set directly (not via the buggy
+     * ApplicationableTrait::removeApplication).
+     *
+     * @param  string $id         Source flow id (scoped to the current application).
+     * @param  string $project_id Target application id.
+     * @return Flow  The moved flow (same document, new owner).
+     */
+    public function moveTo($id, $project_id)
+    {
+        /** @var Flow $flow */
+        $flow = $this->read($id);
+
+        $flow->nodes = $this->copyReferencedTables($flow->nodes ?: [], $project_id);
+        // String id, consistent with how `applications` is stored across the codebase.
+        $flow->applications = [(string) $project_id];
+        $flow->category_id = null;
+        $flow->save();
+
+        return $flow;
+    }
+
+    /**
+     * Duplicate every table referenced by a flow's nodes into the target
+     * application and return the nodes with their table_id remapped to the copies.
+     *
+     * Distinct table ids are copied once each (a table used by several nodes maps
+     * to a single copy). Tables are read from the current (source) application via
+     * findProjectTable; a node whose table cannot be resolved keeps its original
+     * id (validateGraph would already have rejected such a flow on save, so this
+     * is defensive only).
+     *
+     * @param  array  $nodes       The source flow's nodes ([{ node_id, table_id }]).
+     * @param  string $project_id  Target application id.
+     * @return array  Nodes with remapped table_id.
+     */
+    private function copyReferencedTables($nodes, $project_id)
+    {
+        $tablesRepo = new TablesRepository();
+        $idMap = [];   // oldTableId => newTableId
+
+        foreach ($nodes as $node) {
+            $oldId = isset($node['table_id']) ? (string) $node['table_id'] : null;
+            if (!$oldId || isset($idMap[$oldId])) {
+                continue;
+            }
+            $table = $this->findProjectTable($oldId);
+            if ($table) {
+                $copy = $tablesRepo->duplicateInto($table, $project_id);
+                $idMap[$oldId] = (string) $copy->_id;
+            }
+        }
+
+        return array_map(function ($node) use ($idMap) {
+            $node = (array) $node;
+            $oldId = isset($node['table_id']) ? (string) $node['table_id'] : null;
+            if ($oldId && isset($idMap[$oldId])) {
+                $node['table_id'] = $idMap[$oldId];
+            }
+            return $node;
+        }, $nodes);
     }
 
     /**
