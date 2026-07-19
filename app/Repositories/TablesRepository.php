@@ -71,6 +71,11 @@ class TablesRepository extends AbstractRepository
         if (!empty($filters['matching_type'])) {
             $where['matching_type'] = $filters['matching_type'];
         }
+        // Exact match on category_id — a substring regex would let 'cat_a' match
+        // 'cat_abc', so category filtering is an equality check, not a search.
+        if (!empty($filters['category_id'])) {
+            $where['category_id'] = $filters['category_id'];
+        }
         // Always scope to the authenticated application for tenant isolation
         $where['applications'] = ApplicationableHelper::getApplicationId();
 

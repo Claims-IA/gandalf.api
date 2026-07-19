@@ -43,6 +43,7 @@ class TablesController extends AbstractController
             'title' => 'sometimes|min:1',
             'description' => 'sometimes|min:1',
             'matching_type' => 'sometimes|in:first,scoring_sum,scoring_max,scoring_min,scoring_count',
+            'category_id' => 'sometimes|string',
         ]
     ];
 

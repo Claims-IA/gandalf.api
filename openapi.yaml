@@ -56,6 +56,10 @@ tags:
     description: Project (application) lifecycle — delete and export
   - name: Tables
     description: Decision table CRUD, analytics, export, and import
+  - name: Categories
+    description: >
+      Per-application labels (name + colour) used to group and classify tables
+      and flows. Purely organisational — no effect on decision logic.
   - name: Decisions (Admin)
     description: Admin access to decision audit records
   - name: Decisions (Consumer)
@@ -161,6 +165,53 @@ components:
           example: "pending"
 
     # ── Flow (Decision Requirement Graph) ────────────────────────────────────
+    Category:
+      type: object
+      description: >
+        A per-application organisational label. Tables and flows reference it by
+        `id` (see their `category_id`). Purely a grouping/colour aid — it has no
+        effect on decision logic.
+      properties:
+        id:
+          type: string
+          description: >
+            Stable, server-generated identifier (prefixed `cat_`). Referenced by
+            a table's or flow's `category_id`; preserved across renames so those
+            references stay valid.
+          example: "cat_9f3a1c7b2d4e5f60"
+        name:
+          type: string
+          description: Display name. Unique within the application (case-insensitive).
+          example: "Risque"
+        color:
+          type: string
+          description: Hex colour of the pill, always stored as uppercase `#RRGGBB`.
+          pattern: '^#[0-9A-F]{6}$'
+          example: "#E11D48"
+      required: [id, name, color]
+
+    CategoryInput:
+      type: object
+      description: >
+        A category as submitted to `PUT /api/v1/admin/categories`. `id` is
+        optional: supply an existing category's id to rename/recolour it in
+        place; omit it to create a new category (the server assigns the id). An
+        unknown or foreign id is ignored and replaced by a freshly generated one.
+      properties:
+        id:
+          type: string
+          example: "cat_9f3a1c7b2d4e5f60"
+        name:
+          type: string
+          maxLength: 64
+          example: "Risque"
+        color:
+          type: string
+          description: 6-digit hex colour `#RRGGBB` (case-insensitive on input).
+          pattern: '^#[0-9a-fA-F]{6}$'
+          example: "#E11D48"
+      required: [name, color]
+
     Flow:
       type: object
       description: >
@@ -177,6 +228,14 @@ components:
           example: "Credit approval"
         description:
           type: string
+        category_id:
+          type: string
+          nullable: true
+          description: >
+            Optional reference to a category defined in the owning application's
+            list (see `GET /api/v1/admin/categories`). Purely organisational —
+            groups and colours the flow in listings. Null means uncategorised.
+          example: "cat_9f3a1c7b2d4e5f60"
         inputs:
           type: array
           description: The flow's public input contract.
@@ -771,6 +830,14 @@ components:
         description:
           type: string
           example: "Evaluates credit applications based on score and income."
+        category_id:
+          type: string
+          nullable: true
+          description: >
+            Optional reference to a category defined in the owning application's
+            list (see `GET /api/v1/admin/categories`). Purely organisational —
+            groups and colours the table in listings. Null means uncategorised.
+          example: "cat_9f3a1c7b2d4e5f60"
         matching_type:
           type: string
           enum: [first, scoring_sum, scoring_max, scoring_min, scoring_count]
@@ -826,6 +893,11 @@ components:
         description:
           type: string
           example: "Evaluates credit applications."
+        category_id:
+          type: string
+          nullable: true
+          description: Category reference used to render a coloured pill in the list.
+          example: "cat_9f3a1c7b2d4e5f60"
         matching_type:
           type: string
           enum: [first, scoring_sum, scoring_max, scoring_min, scoring_count]
@@ -2305,9 +2377,10 @@ paths:
       summary: List flows
       description: >
         Paginated list of the project's decision-requirement-graph flows.
-        Each item is a reduced representation (`_id`, `title`, `description`);
-        fetch a single flow by id to get its full graph. Supports
-        case-insensitive `title`/`description` filters.
+        Each item is a reduced representation (`_id`, `title`, `description`,
+        `category_id`); fetch a single flow by id to get its full graph.
+        Supports case-insensitive `title`/`description` filters and an
+        exact-match `category_id` filter.
       operationId: listFlows
       security:
         - BearerAuth: []
@@ -2327,6 +2400,13 @@ paths:
           description: Case-insensitive regex filter on flow description.
           schema:
             type: string
+        - name: category_id
+          in: query
+          required: false
+          description: Exact-match filter — return only flows in this category.
+          schema:
+            type: string
+            example: "cat_9f3a1c7b2d4e5f60"
       responses:
         "200":
           description: Paginated flow list (reduced items).
@@ -2570,6 +2650,106 @@ paths:
                         type: string
                         description: Id of the FlowRun that recorded this failed execution.
 
+  # ── Categories ───────────────────────────────────────────────────────────────
+  /api/v1/admin/categories:
+    get:
+      tags: [Categories]
+      summary: List the application's categories
+      description: >
+        Returns the current application's category list. Categories are purely
+        organisational labels (name + colour) used to group and colour tables
+        and flows in listings; they have no effect on decision logic. Requires
+        the `tables_view` scope.
+      operationId: listCategories
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      responses:
+        "200":
+          description: The category list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                    properties:
+                      code:
+                        type: integer
+                        example: 200
+                  data:
+                    type: object
+                    properties:
+                      categories:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Category'
+    put:
+      tags: [Categories]
+      summary: Replace the application's category list
+      description: >
+        Replaces the whole category list (send the desired final list, not a
+        patch). Each entry's `id` is preserved when supplied and still valid —
+        so a category can be renamed or recoloured without breaking the tables
+        and flows that reference it — or generated when new. Category names must
+        be unique within the application (case-insensitive). After saving, any
+        table or flow whose `category_id` no longer exists is reset to null, so
+        a removed category never leaves an orphaned coloured pill. Mutating the
+        list is a project-level change and requires the `project_update` scope
+        (project admin).
+      operationId: replaceCategories
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [categories]
+              properties:
+                categories:
+                  type: array
+                  description: The complete desired category list.
+                  items:
+                    $ref: '#/components/schemas/CategoryInput'
+            example:
+              categories:
+                - id: "cat_9f3a1c7b2d4e5f60"
+                  name: "Risque"
+                  color: "#E11D48"
+                - name: "Tarification"
+                  color: "#2563EB"
+      responses:
+        "200":
+          description: The saved category list (with server-assigned ids).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                    properties:
+                      code:
+                        type: integer
+                        example: 200
+                  data:
+                    type: object
+                    properties:
+                      categories:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Category'
+        "422":
+          description: >
+            Validation failed — a bad colour (not `#RRGGBB`), a missing name, or
+            a duplicate category name.
+
   # ── Tables (Admin CRUD) ──────────────────────────────────────────────────────
   /api/v1/admin/tables:
     get:
@@ -2578,7 +2758,7 @@ paths:
       description: |
         Returns a paginated list of decision tables belonging to the current
         application. Supports optional filters on `title`, `description`,
-        and `matching_type`.
+        `matching_type`, and `category_id`.
       operationId: listTables
       security:
         - BearerAuth: []
@@ -2604,6 +2784,13 @@ paths:
           schema:
             type: string
             enum: [first, scoring_sum, scoring_max, scoring_min, scoring_count]
+        - name: category_id
+          in: query
+          required: false
+          description: Exact-match filter — return only tables in this category.
+          schema:
+            type: string
+            example: "cat_9f3a1c7b2d4e5f60"
       responses:
         "200":
           description: Paginated table list.

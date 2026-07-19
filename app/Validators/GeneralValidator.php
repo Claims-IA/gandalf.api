@@ -47,6 +47,22 @@ class GeneralValidator
     }
 
     /**
+     * Validate that the value is a 6-digit hexadecimal colour (#RRGGBB).
+     *
+     * Used for category colours. Deliberately strict: only the #RRGGBB form is
+     * accepted (no 3-digit shorthand, no CSS colour names), so a stored colour
+     * always maps directly and unambiguously to a coloured pill on the frontend.
+     *
+     * @param  string $attribute
+     * @param  mixed  $value      Expected format: "#E11D48".
+     * @return bool
+     */
+    public function hexColor($attribute, $value)
+    {
+        return is_string($value) && preg_match('/^#[0-9a-fA-F]{6}$/', $value) === 1;
+    }
+
+    /**
      * Validate the "min;max" range format used by the $between condition operator.
      *
      * The value must contain exactly one semicolon separating two numeric values,
