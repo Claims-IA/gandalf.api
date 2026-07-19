@@ -161,8 +161,14 @@ $app->group(
         $app->get('/flows/{id:[0-9a-z]{24}}/runs', ['uses' => 'FlowsController@runs']);
         // Return rule/condition hit-rate analytics for a specific table variant
         $app->get('/tables/{id:[0-9a-z]{24}}/{variant_id:[0-9a-z]{24}}/analytics', ['uses' => 'TablesController@analytics']);
-        // Copy a decision table into a different project
+        // Copy a decision table into a different project (admin only)
         $app->post('/tables/{id:[0-9a-z]{24}}/copyto/{project_id:[0-9a-z]{24}}', ['uses' => 'TablesController@copyTo']);
+        // Move a decision table to a different project (admin only)
+        $app->post('/tables/{id:[0-9a-z]{24}}/moveto/{project_id:[0-9a-z]{24}}', ['uses' => 'TablesController@moveTo']);
+        // Copy a flow (with its referenced tables) into a different project (admin only)
+        $app->post('/flows/{id:[0-9a-z]{24}}/copyto/{project_id:[0-9a-z]{24}}', ['uses' => 'FlowsController@copyTo']);
+        // Move a flow (with copies of its referenced tables) to a different project (admin only)
+        $app->post('/flows/{id:[0-9a-z]{24}}/moveto/{project_id:[0-9a-z]{24}}', ['uses' => 'FlowsController@moveTo']);
         // Export a decision table as CSV, Excel or JSON (?format=csv|excel|json)
         $app->get('/tables/{id:[0-9a-z]{24}}/export', ['uses' => 'TablesController@export']);
         // Import a decision table from an uploaded CSV, Excel or JSON file (multipart/form-data, field: file)

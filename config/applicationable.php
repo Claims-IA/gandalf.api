@@ -64,6 +64,13 @@ return [
             '~^\/api\/v1\/admin\/tables$~' => ['tables_create'],
             '~^\/api\/v1\/admin\/flows$~' => ['tables_create'],
             '~^\/api\/v1\/admin\/tables\/(.+)\/copy$~' => ['tables_create'],
+            // Cross-project copy/move (also gated on project-admin role in the
+            // controller via CopyMoveGuard). Copy needs create; move additionally
+            // removes from the source, so it needs delete too.
+            '~^\/api\/v1\/admin\/tables\/(.+)\/copyto\/(.+)$~' => ['tables_create'],
+            '~^\/api\/v1\/admin\/tables\/(.+)\/moveto\/(.+)$~' => ['tables_create', 'tables_delete'],
+            '~^\/api\/v1\/admin\/flows\/(.+)\/copyto\/(.+)$~' => ['tables_create'],
+            '~^\/api\/v1\/admin\/flows\/(.+)\/moveto\/(.+)$~' => ['tables_create', 'tables_delete'],
             '~^\/api\/v1\/admin\/changelog\/(.+)\/(.+)\/rollback\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/tables\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v1\/flows\/(.+)\/decisions$~' => ['decisions_make'],

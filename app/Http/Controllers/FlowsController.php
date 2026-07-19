@@ -13,6 +13,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\CopyMoveGuard;
 use Nebo15\REST\AbstractController;
 use Nebo15\REST\Interfaces\ListableInterface;
 
@@ -21,6 +22,8 @@ use Nebo15\REST\Interfaces\ListableInterface;
  */
 class FlowsController extends AbstractController
 {
+    use CopyMoveGuard;
+
     protected $repositoryClassName = 'App\Repositories\FlowRepository';
 
     protected $validationRules = [
@@ -79,6 +82,51 @@ class FlowsController extends AbstractController
     {
         return $this->response->jsonPaginator(
             $this->getRepository()->getRuns($id, $this->request->input('size'))
+        );
+    }
+
+    /**
+     * Copy a flow into another project, bringing copies of its referenced tables.
+     *
+     * Admin-only; the caller must be a member of the target project (guardCopyMove).
+     * The referenced tables are duplicated into the target and the node table_ids
+     * remapped, so the copied flow stays executable there.
+     *
+     * @param  string $id         Flow ObjectID.
+     * @param  string $project_id Target project/application ObjectID.
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function copyTo($id, $project_id)
+    {
+        if ($error = $this->guardCopyMove($project_id)) {
+            return $error;
+        }
+
+        return $this->response->json(
+            $this->getRepository()->copyTo($id, $project_id)->toArray()
+        );
+    }
+
+    /**
+     * Move a flow to another project (change ownership), bringing copies of its
+     * referenced tables.
+     *
+     * Admin-only; the caller must be a member of the target project. The flow
+     * disappears from the source project; its referenced tables are COPIED (not
+     * moved) into the target so other source flows keep working.
+     *
+     * @param  string $id         Flow ObjectID.
+     * @param  string $project_id Target project/application ObjectID.
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function moveTo($id, $project_id)
+    {
+        if ($error = $this->guardCopyMove($project_id)) {
+            return $error;
+        }
+
+        return $this->response->json(
+            $this->getRepository()->moveTo($id, $project_id)->toArray()
         );
     }
 }

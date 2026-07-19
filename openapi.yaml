@@ -3263,6 +3263,12 @@ paths:
         table is left untouched and its `_id` is not reused. The source table is
         resolved within the project given by the `X-Application` header, exactly
         like all other admin endpoints.
+
+        The copy starts **uncategorised** (`category_id` reset to null): categories
+        are per-application, so a source category id would be an orphan in the target.
+
+        **Restricted to project admins.** The caller must be an `admin` of the
+        source project AND a member of the target project.
       operationId: copyTableTo
       security:
         - BearerAuth: []
@@ -3289,8 +3295,153 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Table'
+        "403":
+          description: Caller is not a project admin, or not a member of the target project.
         "404":
-          description: Source table not found.
+          description: Source table or target project not found.
+        "422":
+          description: Source and target projects are the same.
+
+  /api/v1/admin/tables/{id}/moveto/{project_id}:
+    post:
+      tags: [Tables]
+      summary: Move a decision table to another project
+      description: |
+        Moves the decision table identified by `{id}` to the project identified by
+        `{project_id}` — the table changes ownership (its `_id` is preserved) and
+        no longer appears in the source project. `category_id` is reset to null
+        (categories are per-application).
+
+        **Restricted to project admins.** The caller must be an `admin` of the
+        source project AND a member of the target project.
+      operationId: moveTableTo
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the table to move.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: project_id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the destination project (application).
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+      responses:
+        "200":
+          description: The moved table, now owned by the destination project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Table'
+        "403":
+          description: Caller is not a project admin, or not a member of the target project.
+        "404":
+          description: Source table or target project not found.
+        "422":
+          description: Source and target projects are the same.
+
+  /api/v1/admin/flows/{id}/copyto/{project_id}:
+    post:
+      tags: [Flows]
+      summary: Copy a flow to another project
+      description: |
+        Clones the flow identified by `{id}` into the project identified by
+        `{project_id}`. Because a flow is only executable when every node's table
+        lives in the same project, the flow's **referenced tables are also copied**
+        into the target and each node's `table_id` is remapped to its copy.
+
+        A brand-new flow document is created; the source flow (and its tables) are
+        left untouched. `category_id` is reset to null (per-application).
+
+        **Restricted to project admins.** The caller must be an `admin` of the
+        source project AND a member of the target project.
+      operationId: copyFlowTo
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the source flow.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: project_id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the destination project (application).
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+      responses:
+        "200":
+          description: The newly created flow in the destination project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+        "403":
+          description: Caller is not a project admin, or not a member of the target project.
+        "404":
+          description: Source flow or target project not found.
+        "422":
+          description: Source and target projects are the same.
+
+  /api/v1/admin/flows/{id}/moveto/{project_id}:
+    post:
+      tags: [Flows]
+      summary: Move a flow to another project
+      description: |
+        Moves the flow identified by `{id}` to the project identified by
+        `{project_id}` — the flow changes ownership (its `_id` is preserved) and no
+        longer appears in the source project.
+
+        Its **referenced tables are COPIED (not moved)** into the target so that
+        other flows in the source project keep working; each node's `table_id` is
+        remapped to its copy. `category_id` is reset to null (per-application).
+
+        **Restricted to project admins.** The caller must be an `admin` of the
+        source project AND a member of the target project.
+      operationId: moveFlowTo
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - name: id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the flow to move.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: project_id
+          in: path
+          required: true
+          description: MongoDB ObjectID of the destination project (application).
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+      responses:
+        "200":
+          description: The moved flow, now owned by the destination project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+        "403":
+          description: Caller is not a project admin, or not a member of the target project.
+        "404":
+          description: Source flow or target project not found.
+        "422":
+          description: Source and target projects are the same.
 
   # ── Decisions (Admin) ────────────────────────────────────────────────────────
   /api/v1/admin/decisions:

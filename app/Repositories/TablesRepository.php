@@ -145,13 +145,40 @@ class TablesRepository extends AbstractRepository
     public function copyTo($id, $project_id)
     {
         $source = $this->read($id);
+
+        return $this->duplicateInto($source, $project_id);
+    }
+
+    /**
+     * Duplicate a table document into a target application.
+     *
+     * Strips identity and the source application association, resets category_id
+     * (categories are per-application, so a source category would be an orphan in
+     * the target), and re-applies the embedded fields and variants. Shared by the
+     * table copyTo endpoint and the flow copy/move path (which copies a flow's
+     * referenced tables into the target). Public so FlowRepository can reuse it.
+     *
+     * @param  \App\Models\Table $source
+     * @param  string            $project_id  Target application id.
+     * @return \App\Models\Table  The newly created copy.
+     */
+    public function duplicateInto(\App\Models\Table $source, $project_id)
+    {
         $values = $source->getAttributes();
         unset($values[$source->getKeyName()]);
         unset($values['applications']);
+        // A category belongs to the source application's settings.categories list;
+        // it would be an orphan in the target, so the copy starts uncategorised.
+        unset($values['category_id']);
 
         /** @var \App\Models\Table $model */
         $model = $this->getModel()->newInstance();
-        $model->applications = [new ObjectID($project_id)];
+        // Store the application id as a string, consistent with how the rest of
+        // the codebase stores `applications` (ApplicationableHelper::addApplication
+        // pushes Application->_id, which is cast to string) and with how
+        // findProjectTable / AbstractRepository::read query it.
+        $model->applications = [(string) $project_id];
+        $model->category_id = null;
         $model->fill($values);
         if (isset($values['fields'])) {
             $model->setFields($values['fields']);
@@ -162,6 +189,38 @@ class TablesRepository extends AbstractRepository
         $model->save();
 
         return $model;
+    }
+
+    /**
+     * Move a table to another application (change ownership, no duplication).
+     *
+     * Reads the source (scoped to the current application), reassigns the sole
+     * owning application to the target, and resets category_id (per-application).
+     * The applications array is set directly rather than via the Applicationable
+     * trait's removeApplication(), which has a known bug (assignment instead of
+     * comparison) that would drop every association.
+     *
+     * CAVEAT: if the moved table is referenced by a flow that stays in the source
+     * application, that flow becomes non-executable there (FlowRepository::
+     * findProjectTable resolves a node's table within the flow's own application,
+     * and the table is no longer in it). This is not detected/blocked here — moving
+     * a shared table is the caller's decision. Copying a flow, by contrast, always
+     * duplicates its tables into the target, so it never leaves dangling references.
+     *
+     * @param  string $id
+     * @param  string $project_id  Target application id.
+     * @return \App\Models\Table  The moved table (same document, new owner).
+     */
+    public function moveTo($id, $project_id)
+    {
+        /** @var \App\Models\Table $table */
+        $table = $this->read($id);
+        // String id, consistent with how `applications` is stored elsewhere.
+        $table->applications = [(string) $project_id];
+        $table->category_id = null;
+        $table->save();
+
+        return $table;
     }
 
     public function analyzeTableDecisions($table_id, $variant_id)
