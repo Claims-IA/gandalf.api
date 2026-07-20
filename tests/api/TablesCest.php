@@ -1338,4 +1338,74 @@ class TablesCest
         $I->seeResponseCodeIs(422);
         $I->seeResponseContains('variants_probability');
     }
+
+    /**
+     * A decision table's columns (fields) are shared by ALL its variants, so
+     * every rule of every variant must carry exactly one condition per field,
+     * in field order. This test sends drifted conditions (a missing field, an
+     * orphan field_key, and a second variant with its own rule count) and
+     * asserts the server realigns them on save.
+     */
+    public function normalizesVariantConditionsToFields(ApiTester $I)
+    {
+        $I->createAndLoginUser();
+        $I->createProjectAndSetHeader();
+
+        $data = $I->getTableShortData();
+        // Fields: numeric, string, bool (3 columns).
+        $fieldKeys = ['numeric', 'string', 'bool'];
+
+        // Variant A: one rule with ONLY the 'numeric' condition (string+bool
+        // missing) plus an orphan condition referencing a removed field.
+        $data['variants'][0]['rules'] = [
+            [
+                'than' => 'Approve',
+                'title' => 'A1',
+                'description' => 'A1',
+                'conditions' => [
+                    ['field_key' => 'numeric', 'condition' => '$gte', 'value' => 10],
+                    ['field_key' => 'ghost',   'condition' => '$eq',  'value' => 1],
+                ],
+            ],
+        ];
+        // Variant B: two rules, each with a different subset of conditions.
+        $data['variants'][1] = [
+            'title' => 'Variant B',
+            'description' => 'B',
+            'default_title' => 'BT',
+            'default_description' => 'BD',
+            'default_decision' => 'Decline',
+            'rules' => [
+                ['than' => 'Approve', 'title' => 'B1', 'description' => 'B1', 'conditions' => []],
+                ['than' => 'Decline', 'title' => 'B2', 'description' => 'B2', 'conditions' => [
+                    ['field_key' => 'bool', 'condition' => '$eq', 'value' => true],
+                ]],
+            ],
+        ];
+
+        $table = $I->createTable($data);
+        $I->sendGET('api/v1/admin/tables/' . $table->_id);
+        $I->assertTable();
+
+        $fetched = $I->getResponseFields()->data;
+
+        // Every rule of every variant now has exactly one condition per field,
+        // in field order; missing fields are filled with the neutral '$any'.
+        foreach ($fetched->variants as $variant) {
+            foreach ($variant->rules as $rule) {
+                $keys = array_map(function ($c) { return $c->field_key; }, $rule->conditions);
+                $I->assertEquals($fieldKeys, $keys, 'Each rule must hold one condition per field, in order');
+            }
+        }
+
+        // Orphan condition ('ghost') was dropped; the kept condition survives.
+        $a1 = $fetched->variants[0]->rules[0]->conditions;
+        $I->assertEquals('$gte', $a1[0]->condition);       // numeric kept
+        $I->assertEquals('$any', $a1[1]->condition);       // string synthesised
+        $I->assertEquals('$any', $a1[2]->condition);       // bool synthesised
+
+        // Variant B keeps its own rule count (2) with realigned conditions.
+        $I->assertCount(2, $fetched->variants[1]->rules);
+        $I->assertEquals('$eq', $fetched->variants[1]->rules[1]->conditions[2]->condition); // bool kept
+    }
 }
