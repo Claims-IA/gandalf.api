@@ -103,6 +103,20 @@ class TablesRepository extends AbstractRepository
             ApplicationableHelper::addApplication($model);
         }
         $model->fill($values);
+        // Enforce the table invariant: every variant shares the SAME set of
+        // fields (columns), so each rule must carry exactly one condition per
+        // field, in field order. Realign before persisting so a client that
+        // sends drifted conditions (extra/missing/reordered) can never store an
+        // inconsistent table. Skip only when we cannot determine the field set
+        // (fields neither provided nor already stored) — normalising against an
+        // empty field set would wrongly wipe every condition. In practice the
+        // API always sends fields ('required'); this guards programmatic calls.
+        if (isset($values['variants'])) {
+            $fields = isset($values['fields']) ? $values['fields'] : $this->existingFields($model);
+            if (!empty($fields)) {
+                $values['variants'] = $this->normalizeVariantConditions($fields, $values['variants']);
+            }
+        }
         // Replace the full embedded fields set if provided
         if (isset($values['fields'])) {
             $model->setFields($values['fields']);
@@ -114,6 +128,77 @@ class TablesRepository extends AbstractRepository
         $model->save();
 
         return $model;
+    }
+
+    /**
+     * Fields already stored on a model, as plain arrays (fallback when a
+     * variants-only update omits the fields key).
+     *
+     * @param  \App\Models\Table $model
+     * @return array
+     */
+    private function existingFields($model)
+    {
+        $fields = [];
+        foreach (($model->fields ?: []) as $field) {
+            $fields[] = is_array($field) ? $field : $field->toArray();
+        }
+        return $fields;
+    }
+
+    /**
+     * Realign every rule's conditions to the table's field set.
+     *
+     * The columns of a decision table are shared by all its variants, so each
+     * rule must hold exactly one condition per field, in field order. For each
+     * rule we keep the existing condition matching a field (by field_key) and
+     * synthesise a neutral '$any' condition (always true) for any field the rule
+     * was missing — so adding a column never changes an existing rule's outcome.
+     * Conditions referencing an unknown field_key (orphans) are dropped.
+     *
+     * @param  array $fields    Field definitions (each with a 'key').
+     * @param  array $variants  Variant definitions (each with 'rules').
+     * @return array            The variants with realigned rule conditions.
+     */
+    private function normalizeVariantConditions($fields, $variants)
+    {
+        $fieldKeys = [];
+        foreach ($fields as $field) {
+            if (isset($field['key']) && $field['key'] !== '') {
+                $fieldKeys[] = $field['key'];
+            }
+        }
+
+        foreach ($variants as &$variant) {
+            if (!isset($variant['rules']) || !is_array($variant['rules'])) {
+                continue;
+            }
+            foreach ($variant['rules'] as &$rule) {
+                $existing = [];
+                foreach ((isset($rule['conditions']) && is_array($rule['conditions']) ? $rule['conditions'] : []) as $condition) {
+                    if (isset($condition['field_key'])) {
+                        // First condition wins if a rule somehow has duplicates.
+                        if (!array_key_exists($condition['field_key'], $existing)) {
+                            $existing[$condition['field_key']] = $condition;
+                        }
+                    }
+                }
+
+                $aligned = [];
+                foreach ($fieldKeys as $key) {
+                    if (array_key_exists($key, $existing)) {
+                        $aligned[] = $existing[$key];
+                    } else {
+                        $aligned[] = ['field_key' => $key, 'condition' => '$any', 'value' => null];
+                    }
+                }
+                $rule['conditions'] = $aligned;
+            }
+            unset($rule);
+        }
+        unset($variant);
+
+        return $variants;
     }
 
     /**
@@ -180,6 +265,12 @@ class TablesRepository extends AbstractRepository
         $model->applications = [(string) $project_id];
         $model->category_id = null;
         $model->fill($values);
+        // Realign conditions on the copy too, so a duplicate can never inherit
+        // (or introduce) a drifted field/condition set.
+        if (isset($values['variants'])) {
+            $fields = isset($values['fields']) ? $values['fields'] : [];
+            $values['variants'] = $this->normalizeVariantConditions($fields, $values['variants']);
+        }
         if (isset($values['fields'])) {
             $model->setFields($values['fields']);
         }
