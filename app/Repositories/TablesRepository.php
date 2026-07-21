@@ -107,10 +107,15 @@ class TablesRepository extends AbstractRepository
         // fields (columns), so each rule must carry exactly one condition per
         // field, in field order. Realign before persisting so a client that
         // sends drifted conditions (extra/missing/reordered) can never store an
-        // inconsistent table.
+        // inconsistent table. Skip only when we cannot determine the field set
+        // (fields neither provided nor already stored) — normalising against an
+        // empty field set would wrongly wipe every condition. In practice the
+        // API always sends fields ('required'); this guards programmatic calls.
         if (isset($values['variants'])) {
             $fields = isset($values['fields']) ? $values['fields'] : $this->existingFields($model);
-            $values['variants'] = $this->normalizeVariantConditions($fields, $values['variants']);
+            if (!empty($fields)) {
+                $values['variants'] = $this->normalizeVariantConditions($fields, $values['variants']);
+            }
         }
         // Replace the full embedded fields set if provided
         if (isset($values['fields'])) {
