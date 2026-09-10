@@ -1,0 +1,47 @@
+{
+  "exceptions": [],
+  "managed": {
+    ".engineering/NOTICE.md": {
+      "kind": "file",
+      "sha256": "3ca42be6689ec994f8657f98b6013121ba5afe3c791595315ca41410910ec340"
+    },
+    ".engineering/standards/development.md": {
+      "kind": "file",
+      "sha256": "19ff6b506fa4266182df7a2bc8fed105d5e378678fae5b70f491c3f3b3adafaa"
+    },
+    ".engineering/standards/documentation.md": {
+      "kind": "file",
+      "sha256": "03cae3acea203e151c7ba76b0d544a7d115f43f6204e73b5359ff4e0fdef24c4"
+    },
+    ".engineering/standards/git.md": {
+      "kind": "file",
+      "sha256": "7242bbdbd1649061de512c30ac8b0a9d8cc84506adaff070433c0f12ea857faf"
+    },
+    ".engineering/standards/review.md": {
+      "kind": "file",
+      "sha256": "a0aead5a37d5699eccb7bfa61a44343f90cc819409e8130c809401c7a2a0f872"
+    },
+    ".engineering/standards/verification.md": {
+      "kind": "file",
+      "sha256": "e3487895775684d1d23c379572c8e68943d082c282ad80780d85b2af33609597"
+    },
+    "AGENTS.md": {
+      "kind": "section",
+      "sha256": "7c8b813a4fc21a7184184f282296df63e96f5cdf43978d6bf4c5e30117f6f68e"
+    },
+    "REVIEW.md": {
+      "kind": "section",
+      "sha256": "0dcc49ae998008b8df87728dc6052c9c0390dfcede2dcf16de9da238f76e6ca7"
+    }
+  },
+  "modules": [
+    "development",
+    "documentation",
+    "git",
+    "review",
+    "verification"
+  ],
+  "schema_version": 1,
+  "standards_revision": "51f86fe053782450e07516603eb864e8a96fa3f1",
+  "visibility": "public"
+}
