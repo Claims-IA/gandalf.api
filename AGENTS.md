@@ -24,6 +24,7 @@ Maintained fork of a Lumen decision-table and flow API backed by MongoDB. Preser
 ## Map
 
 - [README.md](README.md), [API_GUIDE.md](API_GUIDE.md), [API_GUIDE.fr.md](API_GUIDE.fr.md), [openapi.yaml](openapi.yaml): public API documentation.
+- [DRG.md](DRG.md) and [DRG.fr.md](DRG.fr.md): bilingual flow model, execution and API guides.
 - [app/Http/routes.php](app/Http/routes.php), `app/Http/Controllers/` and `app/Repositories/`: request and persistence boundaries.
 - [app/Services/FlowEngine.php](app/Services/FlowEngine.php) and `app/Services/Excel/`: flow execution and spreadsheet codecs.
 - [tests/unit.suite.yml](tests/unit.suite.yml), [tests/api.suite.yml](tests/api.suite.yml), [codeception.yml](codeception.yml): distinct test surfaces.
@@ -35,7 +36,7 @@ Preserve upstream LICENSE, existing developer work, database volumes, imports an
 
 ## Contribution base and metadata
 
-The verified contribution base is `master`. Without a real ticket, use `feature/<work-description>` and descriptive commit/PR subjects; never invent tracking identifiers. Use normal follow-up commits, preserve genuine attribution and the organization template's conditional disclosure footer. Review in French, use la claim and chiffrage when relevant, and do not use em dashes. These shared rules are proposed pending review of their source revision.
+The verified contribution base is `master`. Without a real ticket, use `feature/<work-description>` and descriptive commit/PR subjects; never invent tracking identifiers. Use normal follow-up commits, preserve genuine attribution and the organization template's conditional disclosure footer. Review in French, use la claim and chiffrage when relevant, and do not use em dashes. These shared rules are proposed pending review of their source revision. For offline PR drafting, include Quoi, Pourquoi, Hors périmètre, Points d’attention pour la review and Vérification, with actual check outcomes. Preserve `### 🤖 Code partiellement généré par IA` when applicable. GitHub supplies the organization template during publication; this repository does not maintain a competing active copy.
 
 ## Verification
 
@@ -43,11 +44,11 @@ Composer requires PHP ^8.1 with platform 8.1.0; Docker uses PHP 8.2, while Lumen
 
 ## Canonical documentation
 
-Keep [DOCUMENTATION.md](DOCUMENTATION.md), [DOCUMENTATION.fr.md](DOCUMENTATION.fr.md), [GUIDE.fr.md](GUIDE.fr.md) and API documentation aligned with relevant behavior. Choose the existing canonical page for the affected API or flow, preserving bilingual meaning. Validate rules against current code and tests instead of copying historical `.history/` pages or legacy Travis assumptions. Table variants share columns: each rule keeps one condition per field, in field order. Preserve neutral conditions for missing columns and round-trip serialization for values resembling operators. Consult the existing table and codec tests before changing this invariant.
+Keep [DOCUMENTATION.md](DOCUMENTATION.md), [DOCUMENTATION.fr.md](DOCUMENTATION.fr.md), [GUIDE.fr.md](GUIDE.fr.md) and API documentation aligned with relevant behavior. For flow changes, also read and update [DRG.md](DRG.md) and [DRG.fr.md](DRG.fr.md), preserving bilingual meaning. Their endpoint tables are incomplete relative to current routes and openapi.yaml, so verify each affected contract against code and tests before updating its documentation. Choose the existing canonical page for the affected API or flow. Validate rules against current code and tests instead of copying historical `.history/` pages or legacy Travis assumptions. Table variants share columns: each rule keeps one condition per field, in field order. Preserve neutral conditions for missing columns and round-trip serialization for values resembling operators. Consult the existing table and codec tests before changing this invariant.
 
 ## Nested guidance
 
-No tracked nested AGENTS.md or AGENTS.override.md was found at adoption. Read this root guide, the locally committed shared rules and REVIEW.md explicitly before relevant work, including work started in a subdirectory. Do not rely on sibling checkouts or network access. Recheck applicable overrides when beginning a task; preserve personal overrides and report conflicts.
+No tracked nested AGENTS.md or AGENTS.override.md was found at adoption. Read this root guide, the locally committed shared rules and REVIEW.md explicitly before relevant work, including work started in a subdirectory. Reading these locally committed instructions needs no sibling checkout or network access. Remote freshness checks and PR publication require authorized network access; if unavailable, record the known local base SHA and the unavailable remote check, and do not claim the base is current. Recheck applicable overrides when beginning a task; preserve personal overrides and report conflicts.
 
 ## Code Review Rules
 
