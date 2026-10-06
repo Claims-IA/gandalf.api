@@ -64,6 +64,10 @@ class Scoring
      */
     public function check($id, $values, $appId, $showMeta = false)
     {
+        // Preset results are cached per field key for ONE decision. FlowEngine
+        // reuses this instance for every node, so a cached value must not leak
+        // into the next table's evaluation.
+        $this->presets = [];
         $table = $this->tablesRepository->read($id);
         // Validate that all required fields are present and of the correct type
         $validator = \Validator::make($values, $this->createValidationRules($table));
