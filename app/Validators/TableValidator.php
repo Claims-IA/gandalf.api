@@ -16,6 +16,7 @@
 namespace App\Validators;
 
 use App\Services\ConditionsTypes;
+use App\Services\DateValue;
 use Illuminate\Validation\Validator;
 use App\Exceptions\ConditionException;
 
@@ -36,6 +37,9 @@ class TableValidator
      * specific input type (e.g. $gt requires numeric), the value is validated against
      * that type. Operators with an empty input_type accept any value.
      *
+     * Conditions on a date field follow the date grammar instead (ISO date or
+     * relative "today±N" expression, restricted operator set; see DateValue).
+     *
      * @param  string    $attribute  The dot-path of the 'value' field being validated.
      * @param  mixed     $value      The condition threshold value.
      * @param  array     $parameters Not used.
@@ -44,17 +48,19 @@ class TableValidator
      */
     public function conditionType($attribute, $value, $parameters, Validator $validator)
     {
+        $data = $validator->getData();
+        // Sibling 'condition' key at the same nesting level as 'value'
+        $operator = array_get($data, str_replace('value', 'condition', $attribute));
         try {
-            // Look up the sibling 'condition' key at the same nesting level as 'value'
-            $condition = $this->conditionsTypes->getCondition(
-                array_get(
-                    $validator->getData(),
-                    str_replace('value', 'condition', $attribute)
-                )
-            );
+            $condition = $this->conditionsTypes->getCondition($operator);
         } catch (ConditionException $e) {
             // Unknown operator — fail validation cleanly rather than throwing
             return false;
+        }
+
+        $fieldKey = array_get($data, str_replace('value', 'field_key', $attribute));
+        if ($this->fieldType($data, $fieldKey) === 'date') {
+            return DateValue::isValidConditionValue($operator, $value);
         }
 
         // Only validate the input type when the operator requires a specific format
@@ -67,6 +73,24 @@ class TableValidator
         }
 
         return true;
+    }
+
+    /**
+     * Type of the payload field with the given key, or null when there is none.
+     *
+     * @param  array  $data
+     * @param  mixed  $key
+     * @return string|null
+     */
+    private function fieldType(array $data, $key)
+    {
+        foreach ((array) array_get($data, 'fields', []) as $field) {
+            if (isset($field['key']) && $field['key'] === $key) {
+                return isset($field['type']) ? $field['type'] : null;
+            }
+        }
+
+        return null;
     }
 
     /**

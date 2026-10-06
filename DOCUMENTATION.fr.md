@@ -142,6 +142,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | ----------------- | ------------------------------------------------------------------------------------------------------- |
 | `Scoring`         | Cœur du moteur de décision — évalue les règles, accumule les résultats, persiste les décisions          |
 | `ConditionsTypes` | Définit tous les opérateurs de comparaison sous forme de closures ; évalue les conditions à l'exécution |
+| `DateValue`       | Analyse les valeurs `date` (dates ISO, relatives `today-30d`) en numéros de jour                        |
 | `Mail`            | Intégration email Postmark (vérification, réinitialisation de mot de passe, invitations)                |
 | `Intercom`        | Intégration CRM Intercom (synchronisation des profils, événements de décision, code sécurisé)           |
 | `Mixpanel`        | Intégration analytics Mixpanel (événements utilisateur, compteurs de décisions)                         |
@@ -164,7 +165,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 
 | Classe             | Règles enregistrées                                                                                         |
 | ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `GeneralValidator` | `mongoId`, `json`, `betweenString`                                                                          |
+| `GeneralValidator` | `mongoId`, `json`, `betweenString`, `isoDate`                                                               |
 | `TableValidator`   | `conditionType`, `conditionsCount`, `conditionsFieldKey`, `ruleThanType`, `probabilitySum`, `decision_type` |
 | `UserValidator`    | `password`, `current_password`, `username`, `last_name`, `uniqueExceptUser`                                 |
 
@@ -311,13 +312,13 @@ Modèle MongoDB Eloquent abstrait.
 
 ### `App\Services\Scoring`
 
-| Méthode                                  | Description                                                                  |
-| ---------------------------------------- | ---------------------------------------------------------------------------- |
-| `check($id, $values, $appId, $showMeta)` | Pipeline complet d'évaluation ; retourne un tableau adapté aux consommateurs |
-| `checkCondition(Condition, $value)`      | Définit `condition->matched` via ConditionsTypes                             |
-| `prepareFieldPreset(Field, $value)`      | Applique la transformation de preset avec mise en cache par exécution        |
-| `createValidationRules(Table)`           | Construit les règles de validation Lumen à partir des champs de la table     |
-| `getValidationRuleByType($type)`         | Mappe une chaîne de type de champ vers un nom de règle Lumen                 |
+| Méthode                                                | Description                                                                       |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `check($id, $values, $appId, $showMeta)`               | Pipeline complet d'évaluation ; retourne un tableau adapté aux consommateurs      |
+| `checkCondition(Condition, $value, $fieldType = null)` | Définit `condition->matched` via ConditionsTypes                                  |
+| `prepareFieldPreset(Field, $value)`                    | Applique la transformation de preset avec mise en cache par exécution             |
+| `createValidationRules(Table)`                         | Construit les règles de validation Lumen à partir des champs de la table          |
+| `getValidationRuleByType($type)`                       | Mappe une chaîne de type de champ vers un nom de règle Lumen (`date` → `isoDate`) |
 
 ---
 
@@ -348,13 +349,47 @@ Opérateurs supportés :
 | `$between_lexcl` | betweenString | Entre deux valeurs `min < x <= max` (format : `min;max`) |
 | `$between_rexcl` | betweenString | Entre deux valeurs `min <= x < max` (format : `min;max`) |
 
+Sur un champ `date`, le type d'entrée est remplacé par la grammaire des dates (voir `DateValue`
+ci-dessous) : seuls `$any`, `$is_set`, `$is_null`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`,
+`$between`, `$between_excl`, `$between_lexcl`, `$between_rexcl` et `$not_between` sont acceptés
+(`TableValidator::conditionType`), et la valeur de la condition comme celle du champ sont converties
+en numéros de jour avant l'exécution de la closure : les opérateurs numériques comparent alors des
+jours calendaires.
 
+| Méthode                                                             | Description                                                                                                             |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `getConditionsRules()`                                              | Retourne une chaîne des clés d'opérateurs séparées par des virgules pour les règles `in:`                               |
+| `checkConditionValue($key, $condVal, $fieldVal, $fieldType = null)` | Évalue une condition ; retourne un booléen. Sur un champ `date`, une valeur qui n'est pas une date ne correspond jamais |
+| `getCondition($key)`                                                | Retourne le tableau de définition de l'opérateur ; lève `ConditionException` si inconnu                                 |
 
-| Méthode                                          | Description                                                                               |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| `getConditionsRules()`                           | Retourne une chaîne des clés d'opérateurs séparées par des virgules pour les règles `in:` |
-| `checkConditionValue($key, $condVal, $fieldVal)` | Évalue une condition ; retourne un booléen                                                |
-| `getCondition($key)`                             | Retourne le tableau de définition de l'opérateur ; lève `ConditionException` si inconnu   |
+---
+
+### `App\Services\DateValue`
+
+Analyse et résolution des valeurs des champs `date`, au jour près. Toute valeur est convertie en
+numéro de jour (jours depuis le 1970-01-01).
+
+- **Valeurs de requête / valeurs de condition absolues :** date ISO 8601 `AAAA-MM-JJ` ; une
+  date-heure (`AAAA-MM-JJTHH:MM[:SS[.fff]][Z|±HH:MM]`, `T` ou espace) est acceptée et sa partie
+  heure ignorée — le jour retenu est la date telle qu'écrite, sans conversion de fuseau.
+- **Valeurs de condition relatives :** `today`, ou `today` suivi d'un seul décalage signé `+N` /
+  `-N` et d'une unité `d` (jours), `w` (semaines), `m` (mois) ou `y` (années) : `today-30d`,
+  `today-18y`. Insensible à la casse, espaces tolérés ; forme canonique en minuscules sans espaces.
+  L'arithmétique des mois et années est ramenée à la fin du mois (31 mars − 1 mois = 28 février).
+- **`today`** est la date du jour dans `DECISION_TIMEZONE`, à défaut `APP_TIMEZONE` (UTC si non
+  défini) ; les valeurs relatives sont résolues à chaque décision.
+- **Intervalles** (`$between*`, `$not_between`) : bornes `"min;max"` ; la borne basse doit être
+  strictement antérieure à la borne haute à l'enregistrement.
+
+| Méthode                                     | Description                                                                           |
+| ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `isIsoDate($value)`                         | Vrai pour une date ou date-heure ISO (seule forme acceptée dans les requêtes)         |
+| `isRelative($value)`                        | Vrai pour une expression relative (`today`, `today-30d`, …)                           |
+| `toDayNumber($value)`                       | Convertit une date ISO ou une expression relative en numéro de jour, ou null          |
+| `canonical($value)`                         | Texte canonique d'une expression de date (`Today - 30D` → `today-30d`), ou null       |
+| `isValidConditionValue($operator, $value)`  | Valide une condition sur un champ date (opérateur, valeur, ordre des bornes)          |
+| `toEngineConditionValue($operator, $value)` | Réécrit une valeur de condition en numéros de jour (`"min;max"` pour les intervalles) |
+| `today()`                                   | Le jour courant dans `DECISION_TIMEZONE` / le fuseau de l'application                 |
 
 ---
 
@@ -460,7 +495,7 @@ Opérateurs supportés :
 	
 	   b. Valider les valeurs soumises par rapport au schéma de champs de la table
 	      - Chaque champ devient : "field_key" => "present|{type}"
-	      - 'present' autorise null ; le type est numeric / boolean / string
+	      - 'present' autorise null ; le type est numeric / boolean / string / isoDate (champs date)
 	
 	   c. Sélectionner la variante :
 	      - Si variant_id fourni : utiliser cette variante spécifique
@@ -477,7 +512,8 @@ Opérateurs supportés :
 	        iii. Évaluer : ConditionsTypes::checkConditionValue(
 	               condition.condition,  ← clé d'opérateur ex. '$gt'
 	               condition.value,      ← seuil de la table
-	               field_value           ← de la requête (ou résultat du preset)
+	               field_value,          ← de la requête (ou résultat du preset)
+	               field_type            ← 'date' compare des jours calendaires (null si un preset s'applique)
 	             ) → stocke le résultat dans condition.matched
 	
 	      Déterminer si TOUTES les conditions ont correspondu (logique ET) :
@@ -566,6 +602,7 @@ Le Kernel Console planifie trois tâches récurrentes via le planificateur de La
 | `INTERCOM_APP_SECRET` | —              | Secret HMAC pour la vérification d'identité Intercom              |
 | `MIXPANEL_ENABLED`    | false          | Active l'intégration Mixpanel                                     |
 | `BUGSNAG_ENABLED`     | —              | Active le suivi d'erreurs Bugsnag                                 |
+| `DECISION_TIMEZONE`   | `APP_TIMEZONE` | Fuseau horaire de "today" dans les conditions de date relatives   |
 
 [1]:	#présentation-du-projet
 [2]:	#diagramme-darchitecture

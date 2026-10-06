@@ -492,7 +492,7 @@ class TableImportService
                 if (empty($field['key'])) {
                     $errors[] = "Champ #$i : la clé (key) est obligatoire.";
                 }
-                $validTypes = ['numeric', 'boolean', 'string'];
+                $validTypes = ['numeric', 'boolean', 'string', 'date'];
                 if (!empty($field['type']) && !in_array($field['type'], $validTypes)) {
                     $errors[] = "Champ '{$field['key']}' : type invalide '{$field['type']}'. Valeurs acceptées: " . implode(', ', $validTypes) . '.';
                 }

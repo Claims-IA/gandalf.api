@@ -126,8 +126,11 @@ class Scoring
                     // (can happen if a field was removed after a decision was submitted)
                     continue;
                 }
-                // Apply preset transform (if any) then evaluate the condition
-                $this->checkCondition($condition, $this->prepareFieldPreset($field, $values[$condition->field_key]));
+                // Apply preset transform (if any) then evaluate the condition. A preset
+                // replaces the raw value with its own result, so the field type (which
+                // drives date comparisons) only applies to untransformed values.
+                $fieldType = ($field->preset and $field->preset->condition) ? null : $field->type;
+                $this->checkCondition($condition, $this->prepareFieldPreset($field, $values[$condition->field_key]), $fieldType);
 
                 if (!$condition->matched) {
                     $conditions_matched = false;
@@ -198,16 +201,18 @@ class Scoring
      * Delegates to ConditionsTypes::checkConditionValue() and stores the boolean
      * result on the condition model so it can be included in the Decision snapshot.
      *
-     * @param  Condition $condition  The condition to evaluate.
-     * @param  mixed     $value      The (possibly preset-transformed) field value.
+     * @param  Condition   $condition  The condition to evaluate.
+     * @param  mixed       $value      The (possibly preset-transformed) field value.
+     * @param  string|null $fieldType  The field type (see ConditionsTypes::checkConditionValue).
      * @return void
      */
-    private function checkCondition(Condition $condition, $value)
+    private function checkCondition(Condition $condition, $value, $fieldType = null)
     {
         $condition->matched = $this->conditionsTypes->checkConditionValue(
             $condition->condition,
             $condition->value,
-            $value
+            $value,
+            $fieldType
         );
     }
 
@@ -284,6 +289,10 @@ class Scoring
             case 'bool':
             case 'boolean':
                 $rule = 'boolean';
+                break;
+
+            case 'date':
+                $rule = 'isoDate';
                 break;
 
             default:

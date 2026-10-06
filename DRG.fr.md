@@ -74,7 +74,7 @@ résultats de chaque nœud.
   "title": "Credit approval",
   "description": "",
 
-  // Contrat d'entrée public. `type` ∈ numeric | boolean | string.
+  // Contrat d'entrée public. `type` ∈ numeric | boolean | string | date.
   "inputs": [
     { "key": "salary",  "type": "numeric" },
     { "key": "history", "type": "string"  }
@@ -280,16 +280,24 @@ famille de types** (`FlowRepository::typesCompatible` / `typeFamily`) :
 | `text`    | `string`, `alpha_num`            |
 | `numeric` | `numeric`, `number`, `integer`   |
 | `boolean` | `boolean`, `bool`                |
+| `date`    | `date`                           |
 | —         | `json` (et tout type inconnu) n'est **jamais** câblable, en entrée comme en sortie |
 
-Ainsi un score numérique ne peut alimenter un champ `string`, et un champ
-`boolean` ne peut être alimenté que par une source `boolean`. Un désaccord est
-rejeté au save avec un 422.
+Ainsi un score numérique ne peut alimenter un champ `string`, un champ
+`boolean` ne peut être alimenté que par une source `boolean`, et une entrée
+`date` ne peut alimenter qu'un champ `date` (et un champ `date` ne peut être
+alimenté que par une entrée `date`). Un désaccord est rejeté au save avec un 422.
 
 > **Note :** une sortie de table est toujours `numeric` (scoring) ou le
 > `decision_type` de la table (`alpha_num` | `numeric` | `string` | `json`) —
-> **jamais `boolean`**. Un champ `boolean` aval ne peut donc être alimenté que par
-> une entrée de flow `boolean`, pas par un nœud amont.
+> **jamais `boolean` ni `date`**. Un champ `boolean` ou `date` aval ne peut donc
+> être alimenté que par une entrée de flow du même type, pas par un nœud amont :
+> une date ne circule jamais entre nœuds.
+
+À l'exécution, une entrée `date` prend les mêmes valeurs qu'un champ `date` de
+table : une date ISO 8601 `AAAA-MM-JJ` (une date-heure est acceptée, sa partie
+heure ignorée) ; une valeur invalide fait échouer la validation des champs du
+nœud avec une 422 (voir [API_GUIDE.fr.md](API_GUIDE.fr.md#types-de-champs)).
 
 ---
 
@@ -438,9 +446,9 @@ Une `FlowValidationException` est rendue en **HTTP 422** :
 Reportées à dessein (notées comme évolutions futures) :
 
 - **Une seule sortie par nœud** — `from_output` vaut toujours `final_decision`.
-- **Pas de sortie de table `boolean`** — `decision_type` ne peut pas être
-  `boolean`, donc le câblage booléen de nœud à nœud est impossible (voir
-  [Compatibilité de types](#compatibilité-de-types)).
+- **Pas de sortie de table `boolean` ni `date`** — `decision_type` ne peut être
+  ni `boolean` ni `date`, donc le câblage booléen ou date de nœud à nœud est
+  impossible (voir [Compatibilité de types](#compatibilité-de-types)).
 - **Pas de sélection de variante par nœud** — un nœud exécute la variante
   auto-sélectionnée / par défaut de sa table ; `variant_id` n'est pas transmis par
   nœud.

@@ -35,6 +35,7 @@ class ValidationServiceProvider extends ServiceProvider
         Validator::extend('uniqueExceptUser', 'App\Validators\UserValidator@unique');
         Validator::extend('mongoId', 'App\Validators\GeneralValidator@mongoId');
         Validator::extend('betweenString', 'App\Validators\GeneralValidator@betweenString');
+        Validator::extend('isoDate', 'App\Validators\GeneralValidator@isoDate');
         Validator::extend('json', 'App\Validators\GeneralValidator@json');
         Validator::extend('hexColor', 'App\Validators\GeneralValidator@hexColor');
     }

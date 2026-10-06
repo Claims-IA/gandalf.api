@@ -196,13 +196,25 @@ class ConditionsTypes
      * '$is_null', because null values cannot satisfy any other condition meaningfully.
      * Delegates the actual comparison to the operator's closure.
      *
-     * @param  string $condition_key    The operator key (e.g. '$eq', '$gt').
-     * @param  mixed  $condition_value  The threshold/reference value from the rule.
-     * @param  mixed  $field_value      The actual value from the incoming request.
+     * For a 'date' field, both values are first resolved to day numbers (see
+     * DateValue), so the numeric operators compare calendar days; a value that
+     * is not a date never matches.
+     *
+     * @param  string      $condition_key    The operator key (e.g. '$eq', '$gt').
+     * @param  mixed       $condition_value  The threshold/reference value from the rule.
+     * @param  mixed       $field_value      The actual value from the incoming request.
+     * @param  string|null $field_type       The field type; only 'date' changes the comparison.
      * @return bool   True if the condition is satisfied, false otherwise.
      */
-    public function checkConditionValue($condition_key, $condition_value, $field_value)
+    public function checkConditionValue($condition_key, $condition_value, $field_value, $field_type = null)
     {
+        if ($field_type === 'date' and !in_array($condition_key, DateValue::VALUELESS_OPERATORS, true)) {
+            $condition_value = DateValue::toEngineConditionValue($condition_key, $condition_value);
+            $field_value = DateValue::toDayNumber($field_value);
+            if ($condition_value === null or $field_value === null) {
+                return false;
+            }
+        }
         // Null field values cannot satisfy any condition except $is_null and $any
         if ($field_value === null and $condition_key !== '$is_null' and $condition_key !== '$any') {
             return false;

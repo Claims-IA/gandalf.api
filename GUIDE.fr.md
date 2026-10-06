@@ -187,7 +187,7 @@ Les rôles sont attribués lors de l'invitation d'un utilisateur à une applicat
 
 Une **Table** est le conteneur principal du moteur de décision. Elle définit :
 
-- **Les champs** (`fields`) : les variables d'entrée attendues lors de l'évaluation (ex. `credit_score`, `age`, `country`). Chaque champ a un type (`numeric`, `string`, `boolean`) et peut avoir un **preset** (pré-condition appliquée à la valeur avant évaluation).
+- **Les champs** (`fields`) : les variables d'entrée attendues lors de l'évaluation (ex. `credit_score`, `age`, `country`). Chaque champ a un type (`numeric`, `string`, `boolean`, `date`) et peut avoir un **preset** (pré-condition appliquée à la valeur avant évaluation).
 - **Le type de correspondance** (`matching_type`) : détermine comment le résultat final est calculé à partir des règles qui correspondent.
 - **Le type de décision** (`decision_type`) : type de la valeur retournée (`string`, `numeric`, `alpha_num`, `json`).
 
@@ -233,6 +233,34 @@ Une **Condition** évalue un champ d'entrée avec un opérateur :
 | `$is_set`        | La valeur est présente (non nulle)                           | —                              |
 | `$is_null`       | La valeur est absente ou nulle                               | —                              |
 | `$any`           | Toujours vrai (passe-partout)                                | —                              |
+
+#### Les dates
+
+Un champ de type `date` travaille **au jour près**.
+
+**Valeurs envoyées à l'évaluation** : une date ISO 8601 `AAAA-MM-JJ` (ex. `"2026-03-15"`). Une date-heure est aussi acceptée (`2026-03-15T10:30:00+02:00`, ou avec une espace à la place du `T`), mais l'heure est ignorée : le jour retenu est la date telle qu'écrite, sans conversion de fuseau (`"2026-03-15T23:30:00+02:00"` est le 15 mars). `null` est accepté (seuls `$is_null` et `$any` correspondent alors). Les expressions relatives (`today`…) ne sont pas acceptées dans les requêtes. Une valeur invalide renvoie une erreur `422` (`The <champ> must be an ISO 8601 date (YYYY-MM-DD).`).
+
+**Opérateurs autorisés** : `$any`, `$is_set`, `$is_null`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$between`, `$between_excl`, `$between_lexcl`, `$between_rexcl`, `$not_between`. Les opérateurs de texte et de liste (`$in`, `$nin`, `$contains`, `$not_contains`, `$starts_with`, `$ends_with`) sont refusés (`422`) à l'enregistrement de la table.
+
+**Valeurs de condition** :
+
+- une date absolue : `2026-01-01` (une date-heure est acceptée, seul son jour compte) ;
+- une date relative au jour courant : `today`, ou `today` suivi d'**un seul** décalage signé `+N` / `-N` et d'une unité `d` (jours), `w` (semaines), `m` (mois) ou `y` (années) : `today-30d`, `today+1w`, `today-6m`, `today-18y`. L'écriture est insensible à la casse et tolère les espaces (`Today - 30D`) ; la forme canonique est en minuscules sans espaces. Les mois et années sont calculés au calendrier, ramenés à la fin du mois si besoin (31 mars − 1 mois = 28 février ; 29 février + 1 an = 28 février) ;
+- pour les intervalles (`$between*`, `$not_between`), le format habituel `"min;max"`, chaque borne étant absolue ou relative : `"2026-01-01;2026-12-31"`, `"today-1y;today"`. La borne basse doit être strictement antérieure à la borne haute à l'enregistrement de la table.
+
+`today` est la date du jour dans le fuseau défini par la variable d'environnement `DECISION_TIMEZONE` (ex. `Europe/Paris`), à défaut `APP_TIMEZONE` (UTC si non défini). Les conditions relatives sont réévaluées à chaque décision. Les comparaisons se font au jour près : `$eq 2026-03-15` correspond à toute valeur du 15 mars, quelle que soit l'heure.
+
+| Condition                                    | Signification                            |
+|----------------------------------------------|------------------------------------------|
+| `$between today-30d;today`                   | Dans les 30 derniers jours               |
+| `$gte today-30d`                             | Depuis 30 jours (dates futures comprises) |
+| `$lt today-30d`                              | Il y a plus de 30 jours                  |
+| `$lt today`                                  | Dans le passé                            |
+| `$lte today-18y` (sur une date de naissance) | 18 ans ou plus                           |
+
+```json
+{ "field_key": "date_naissance", "condition": "$lte", "value": "today-18y" }
+```
 
 #### Flux d'évaluation
 

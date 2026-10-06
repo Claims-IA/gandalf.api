@@ -57,7 +57,7 @@ class TableRulesProvider
             // Only 'variant_id' is globally reserved (historical check-time
             // parameter); Excel sentinel collisions are handled at export time.
             'fields.*.key' => 'required|string|not_in:variant_id',
-            'fields.*.type' => 'required|in:numeric,boolean,string',
+            'fields.*.type' => 'required|in:numeric,boolean,string,date',
             'fields.*.source' => 'required|in:request',
             'fields.*.preset' => 'present|array',
             'fields.*.preset._id' => 'mongoId',

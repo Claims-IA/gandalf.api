@@ -139,6 +139,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | ----------------- | ------------------------------------------------------------------------------- |
 | `Scoring`         | Core decision engine — evaluates rules, accumulates results, persists decisions |
 | `ConditionsTypes` | Defines all comparison operators as closures; evaluates conditions at runtime   |
+| `DateValue`       | Parses `date` values (ISO dates, relative `today-30d`) into day numbers         |
 | `Mail`            | Postmark email integration (verification, password reset, invitations)          |
 | `Intercom`        | Intercom CRM integration (user profile sync, decision events, secure code)      |
 | `Mixpanel`        | Mixpanel analytics integration (user track events, decision counters)           |
@@ -161,7 +162,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 
 | Class              | Rules Registered                                                                                            |
 | ------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `GeneralValidator` | `mongoId`, `json`, `betweenString`                                                                          |
+| `GeneralValidator` | `mongoId`, `json`, `betweenString`, `isoDate`                                                               |
 | `TableValidator`   | `conditionType`, `conditionsCount`, `conditionsFieldKey`, `ruleThanType`, `probabilitySum`, `decision_type` |
 | `UserValidator`    | `password`, `current_password`, `username`, `last_name`, `uniqueExceptUser`                                 |
 
@@ -306,13 +307,13 @@ Abstract MongoDB Eloquent model.
 
 ### `App\Services\Scoring`
 
-| Method                                   | Description                                                    |
-| ---------------------------------------- | -------------------------------------------------------------- |
-| `check($id, $values, $appId, $showMeta)` | Full decision evaluation pipeline; returns consumer-safe array |
-| `checkCondition(Condition, $value)`      | Sets `condition->matched` via ConditionsTypes                  |
-| `prepareFieldPreset(Field, $value)`      | Applies preset transform with per-run caching                  |
-| `createValidationRules(Table)`           | Builds Lumen validation rules from table field definitions     |
-| `getValidationRuleByType($type)`         | Maps field type string to Lumen rule name                      |
+| Method                                                 | Description                                                    |
+| ------------------------------------------------------ | -------------------------------------------------------------- |
+| `check($id, $values, $appId, $showMeta)`               | Full decision evaluation pipeline; returns consumer-safe array |
+| `checkCondition(Condition, $value, $fieldType = null)` | Sets `condition->matched` via ConditionsTypes                  |
+| `prepareFieldPreset(Field, $value)`                    | Applies preset transform with per-run caching                  |
+| `createValidationRules(Table)`                         | Builds Lumen validation rules from table field definitions     |
+| `getValidationRuleByType($type)`                       | Maps field type string to Lumen rule name (`date` → `isoDate`) |
 
 ---
 
@@ -338,11 +339,46 @@ Supported operators:
 | `$nin`           | —             | Value not in comma-separated list                                          |
 | `$any`           | —             | Always true regardless of value (including null)                           |
 
-| Method                                           | Description                                                               |
-| ------------------------------------------------ | ------------------------------------------------------------------------- |
-| `getConditionsRules()`                           | Returns comma-separated operator key string for `in:` validation rules    |
-| `checkConditionValue($key, $condVal, $fieldVal)` | Evaluates a condition; returns bool                                       |
-| `getCondition($key)`                             | Returns operator definition array; throws `ConditionException` if unknown |
+On a `date` field the input type is replaced by the date grammar (see `DateValue` below): only
+`$any`, `$is_set`, `$is_null`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$between`,
+`$between_excl`, `$between_lexcl`, `$between_rexcl` and `$not_between` are accepted
+(`TableValidator::conditionType`), and both the condition value and the field value are resolved
+to day numbers before the closure runs, so the numeric operators compare calendar days.
+
+| Method                                                              | Description                                                                                       |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `getConditionsRules()`                                              | Returns comma-separated operator key string for `in:` validation rules                            |
+| `checkConditionValue($key, $condVal, $fieldVal, $fieldType = null)` | Evaluates a condition; returns bool. For a `date` field, a value that is not a date never matches |
+| `getCondition($key)`                                                | Returns operator definition array; throws `ConditionException` if unknown                         |
+
+---
+
+### `App\Services\DateValue`
+
+Parsing and resolution of `date` field values, at calendar-day granularity. Every value resolves
+to a day number (days since 1970-01-01).
+
+- **Request values / absolute condition values:** ISO 8601 date `YYYY-MM-DD`; a date-time
+  (`YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]`, `T` or space) is accepted and its time part ignored —
+  the day is the date as written, without timezone conversion.
+- **Relative condition values:** `today`, or `today` followed by one signed offset `+N` / `-N` and a
+  unit `d` (days), `w` (weeks), `m` (months) or `y` (years): `today-30d`, `today-18y`.
+  Case-insensitive, spaces tolerated; canonical form is lowercase without spaces. Month/year
+  arithmetic is clamped to the end of the month (March 31 − 1 month = February 28).
+- **`today`** is the current date in `DECISION_TIMEZONE`, falling back to `APP_TIMEZONE` (UTC when
+  unset); relative values are resolved at each decision.
+- **Ranges** (`$between*`, `$not_between`) take `"min;max"` bounds; the lower bound must resolve
+  strictly before the upper one at save time.
+
+| Method                                      | Description                                                                |
+| ------------------------------------------- | -------------------------------------------------------------------------- |
+| `isIsoDate($value)`                         | True for an ISO date or date-time (the only form accepted in requests)     |
+| `isRelative($value)`                        | True for a relative expression (`today`, `today-30d`, …)                   |
+| `toDayNumber($value)`                       | Resolves an ISO date or relative expression to a day number, or null       |
+| `canonical($value)`                         | Canonical text of a date expression (`Today - 30D` → `today-30d`), or null |
+| `isValidConditionValue($operator, $value)`  | Validates a condition on a date field (operator set, value, range order)   |
+| `toEngineConditionValue($operator, $value)` | Rewrites a condition value into day numbers (`"min;max"` for ranges)       |
+| `today()`                                   | The current day in `DECISION_TIMEZONE` / the application timezone          |
 
 ---
 
@@ -448,7 +484,7 @@ Supported operators:
 	
 	   b. Validate submitted values against the table's field schema
 	      - Each field becomes: "field_key" => "present|{type}"
-	      - 'present' allows null; type is numeric / boolean / string
+	      - 'present' allows null; type is numeric / boolean / string / isoDate (date fields)
 	
 	   c. Select variant:
 	      - If variant_id supplied: use that specific variant
@@ -465,7 +501,8 @@ Supported operators:
 	        iii. Evaluate: ConditionsTypes::checkConditionValue(
 	               condition.condition,  ← operator key e.g. '$gt'
 	               condition.value,      ← threshold from the table
-	               field_value           ← from request (or preset result)
+	               field_value,          ← from request (or preset result)
+	               field_type            ← 'date' compares calendar days (null when a preset applies)
 	             ) → stores result in condition.matched
 	
 	      Determine whether ALL conditions matched (AND logic):
@@ -554,6 +591,7 @@ The Console Kernel schedules three recurring tasks via Laravel's task scheduler.
 | `INTERCOM_APP_SECRET` | —              | HMAC secret for Intercom identity verification  |
 | `MIXPANEL_ENABLED`    | false          | Enable Mixpanel integration                     |
 | `BUGSNAG_ENABLED`     | —              | Enable Bugsnag error reporting                  |
+| `DECISION_TIMEZONE`   | `APP_TIMEZONE` | Timezone of "today" in relative date conditions |
 
 [1]:	#project-overview
 [2]:	#architecture-diagram

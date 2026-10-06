@@ -258,7 +258,7 @@ class ExcelTableWriter
 
         // --- Data validations ---
         // Strict type dropdown on the type row for field columns
-        $typeValidation = $this->makeListValidation('"numeric,boolean,string"', true);
+        $typeValidation = $this->makeListValidation('"numeric,boolean,string,date"', true);
         for ($colIndex = 2; $colIndex < $decisionCol; $colIndex++) {
             $letter = Coordinate::stringFromColumnIndex($colIndex);
             $sheet->getCell($letter . ExcelLayout::ROW_TYPES)->setDataValidation(clone $typeValidation);
@@ -276,12 +276,16 @@ class ExcelTableWriter
             $colIndex++;
         }
 
-        // Grammar hint as a comment on each field title cell
-        for ($ci = 2; $ci < $decisionCol; $ci++) {
-            $letter = Coordinate::stringFromColumnIndex($ci);
+        // Grammar hint as a comment on each field title cell (date columns get date examples)
+        $colIndex = 2;
+        foreach ($fields as $field) {
+            $letter = Coordinate::stringFromColumnIndex($colIndex);
             $sheet->getComment($letter . ExcelLayout::ROW_TITLES)->getText()->createText(
-                "Exemples de conditions :\n>= 21   [18..25]   not [1..2]\nin: FR, BE   contains: x\n* = peu importe   + = renseigné   null = absent\n'>= 3' (quotes) = valeur littérale"
+                $field->type === 'date'
+                    ? "Exemples de conditions (dates) :\n>= 2026-01-01   [2026-01-01..2026-12-31]\n[today-30d..today] = 30 derniers jours   < today = passé\nunités : d jours, w semaines, m mois, y ans\n* = peu importe   + = renseigné   null = absent"
+                    : "Exemples de conditions :\n>= 21   [18..25]   not [1..2]\nin: FR, BE   contains: x\n* = peu importe   + = renseigné   null = absent\n'>= 3' (quotes) = valeur littérale"
             );
+            $colIndex++;
         }
     }
 

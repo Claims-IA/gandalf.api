@@ -70,7 +70,7 @@ and finally assembles the flow's named `outputs` from the per-node results.
   "title": "Credit approval",
   "description": "",
 
-  // Public input contract. `type` ∈ numeric | boolean | string.
+  // Public input contract. `type` ∈ numeric | boolean | string | date.
   "inputs": [
     { "key": "salary",  "type": "numeric" },
     { "key": "history", "type": "string"  }
@@ -268,15 +268,24 @@ family** (`FlowRepository::typesCompatible` / `typeFamily`):
 | `text`    | `string`, `alpha_num`            |
 | `numeric` | `numeric`, `number`, `integer`   |
 | `boolean` | `boolean`, `bool`                |
+| `date`    | `date`                           |
 | —         | `json` (and any unknown type) is **never** wireable, in or out |
 
-So a numeric score cannot feed a `string` field, and a `boolean` field can only
-be fed by a `boolean` source. A mismatch is rejected at save with a 422.
+So a numeric score cannot feed a `string` field, a `boolean` field can only
+be fed by a `boolean` source, and a `date` input can only feed a `date` field
+(and a `date` field can only be fed by a `date` input). A mismatch is rejected
+at save with a 422.
 
 > **Note:** a table output is always `numeric` (scoring) or the table's
 > `decision_type` (`alpha_num` | `numeric` | `string` | `json`) — **never
-> `boolean`**. A downstream `boolean` field can therefore only be fed by a
-> `boolean` flow input, not by an upstream node.
+> `boolean` or `date`**. A downstream `boolean` or `date` field can therefore
+> only be fed by a flow input of the same type, not by an upstream node: a date
+> never flows between nodes.
+
+At run time a `date` input takes the same values as a table `date` field: an
+ISO 8601 date `YYYY-MM-DD` (a date-time is accepted, its time part ignored); an
+invalid value fails the node's field validation with a 422 (see
+[API_GUIDE.md](API_GUIDE.md#field-types)).
 
 ---
 
@@ -421,8 +430,9 @@ A `FlowValidationException` renders as **HTTP 422**:
 Deferred by design (noted as future evolutions):
 
 - **Single output per node** — `from_output` is always `final_decision`.
-- **No `boolean` table output** — `decision_type` cannot be `boolean`, so boolean
-  node-to-node wiring is impossible (see [Type compatibility](#type-compatibility)).
+- **No `boolean` or `date` table output** — `decision_type` cannot be `boolean`
+  or `date`, so boolean or date node-to-node wiring is impossible (see
+  [Type compatibility](#type-compatibility)).
 - **No per-node variant selection** — a node runs its table's auto-selected /
   default variant; `variant_id` is not threaded per node.
 - **No nested flows** — a node references a table, not a sub-flow (recursion /

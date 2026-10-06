@@ -480,7 +480,7 @@ class FlowRepository extends AbstractRepository
      *
      * @param  Table  $table
      * @param  string $key
-     * @return string  numeric | boolean | string
+     * @return string  numeric | boolean | string | date
      */
     private function fieldType(Table $table, $key)
     {
@@ -522,10 +522,11 @@ class FlowRepository extends AbstractRepository
      *   - text    : string, alpha_num  (equivalent — input fields only know 'string')
      *   - numeric : numeric  (with the synonyms number/integer)
      *   - boolean : boolean  (with the synonym bool)
+     *   - date    : date  (only flow inputs produce it: no decision_type is a date)
      *   - json    : never wireable, in or out.
      *
-     * @param  string $sourceType  numeric | string | alpha_num | boolean | json
-     * @param  string $targetType  numeric | boolean | string
+     * @param  string $sourceType  numeric | string | alpha_num | boolean | date | json
+     * @param  string $targetType  numeric | boolean | string | date
      * @return bool
      */
     private function typesCompatible($sourceType, $targetType)
@@ -549,7 +550,7 @@ class FlowRepository extends AbstractRepository
      * null for 'json' and any unrecognised type, which makes them un-wireable.
      *
      * @param  string $type
-     * @return string|null  'text' | 'numeric' | 'boolean' | null
+     * @return string|null  'text' | 'numeric' | 'boolean' | 'date' | null
      */
     private function typeFamily($type)
     {
@@ -564,6 +565,8 @@ class FlowRepository extends AbstractRepository
             case 'boolean':
             case 'bool':
                 return 'boolean';
+            case 'date':
+                return 'date';
             default:
                 // json and anything unrecognised: not a valid wire endpoint.
                 return null;
