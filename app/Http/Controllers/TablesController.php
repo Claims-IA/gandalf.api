@@ -113,6 +113,30 @@ class TablesController extends AbstractController
      * @return \Illuminate\Http\JsonResponse
      */
     /**
+     * Update a decision table.
+     *
+     * Same as the generic update, plus field renames (a field sent with its
+     * stored _id and another key): conditions follow the new key BEFORE
+     * validation, so they are validated against their field's type, and the
+     * response meta reports what the rename changed (field_renames,
+     * flows_updated, flows_failed; see TablesRepository::createOrUpdate).
+     *
+     * @param  string $id
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function update($id)
+    {
+        $this->request->request->replace(
+            $this->getRepository()->withRenamedConditions($id, $this->request->request->all())
+        );
+        $this->validateRoute();
+
+        $table = $this->getRepository()->createOrUpdate($this->request->request->all(), $id);
+
+        return $this->response->json($table->toArray(), Response::HTTP_OK, $this->getRepository()->lastFieldRenames());
+    }
+
+    /**
      * Copy a decision table into a different project.
      *
      * Duplicates the table identified by $id (from the current application) and

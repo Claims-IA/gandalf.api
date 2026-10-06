@@ -61,6 +61,11 @@ class FlowRepository extends AbstractRepository
         if (!empty($filters['category_id'])) {
             $where['category_id'] = $filters['category_id'];
         }
+        // Flows having a node on the given table (e.g. the flows a field rename
+        // of that table will update).
+        if (!empty($filters['table_id'])) {
+            $where['nodes.table_id'] = (string) $filters['table_id'];
+        }
         // Always scope to the authenticated application for tenant isolation.
         $where['applications'] = ApplicationableHelper::getApplicationId();
 
@@ -212,13 +217,7 @@ class FlowRepository extends AbstractRepository
         $tablesRepo = new TablesRepository();
         $idMap = [];   // oldTableId => target table id
 
-        $inputTypes = [];   // input key => declared type
-        foreach ($inputs as $input) {
-            $input = (array) $input;
-            if (isset($input['key'])) {
-                $inputTypes[$input['key']] = isset($input['type']) ? $input['type'] : 'string';
-            }
-        }
+        $inputTypes = $this->inputTypes($inputs);
 
         foreach ($nodes as $node) {
             $oldId = isset($node['table_id']) ? (string) $node['table_id'] : null;
@@ -230,12 +229,7 @@ class FlowRepository extends AbstractRepository
                 continue;
             }
             // Nodes of this flow that use the table: the stand-in must fit them all.
-            $nodeIds = [];
-            foreach ($nodes as $other) {
-                if (isset($other['table_id']) && (string) $other['table_id'] === $oldId && isset($other['node_id'])) {
-                    $nodeIds[] = $other['node_id'];
-                }
-            }
+            $nodeIds = $this->nodesUsingTable($nodes, $oldId);
             $existing = $this->findReusableTable($table, $project_id, $nodeIds, $edges, $inputTypes, array_values($idMap));
             $idMap[$oldId] = $existing
                 ? (string) $existing->_id
@@ -254,16 +248,13 @@ class FlowRepository extends AbstractRepository
 
     /**
      * Make the current application's flows follow a rename of fields of one of
-     * their tables (see TablesRepository::createOrUpdate). For each node using
-     * the table, edges into a renamed field target the new key, and a renamed
-     * field that was fed implicitly by the same-named flow input gets an explicit
-     * edge from that input (edges win over same-named inputs in FlowEngine), so
-     * the flow keeps its inputs, i.e. its own API contract, and its behavior.
-     * Renames apply in one pass from the original keys (a swap stays correct).
+     * their tables (see TablesRepository::createOrUpdate and the changelog
+     * rollback). Each flow is rewritten by renameEdges and saved on its own: a
+     * failure is logged and reported, the other flows are still updated.
      *
      * @param  string $tableId
      * @param  array  $renames  old key => new key
-     * @return array  Titles of the updated flows.
+     * @return array  ['flows_updated' => titles, 'flows_failed' => titles]
      */
     public function followFieldRenames($tableId, array $renames)
     {
@@ -272,54 +263,129 @@ class FlowRepository extends AbstractRepository
             ->where('nodes.table_id', $tableId)
             ->get();
 
-        $updated = [];
+        $result = ['flows_updated' => [], 'flows_failed' => []];
         foreach ($flows as $flow) {
-            $nodeIds = [];
-            foreach (($flow->nodes ?: []) as $node) {
-                $node = (array) $node;
-                if (isset($node['table_id'], $node['node_id']) && (string) $node['table_id'] === $tableId) {
-                    $nodeIds[$node['node_id']] = true;
-                }
+            $edges = self::renameEdges(
+                $flow->edges ?: [],
+                $this->nodesUsingTable($flow->nodes ?: [], $tableId),
+                $this->inputTypes($flow->inputs ?: []),
+                $renames
+            );
+            if ($edges === null) {
+                continue;
             }
-            $inputKeys = [];
-            foreach (($flow->inputs ?: []) as $input) {
-                $input = (array) $input;
-                if (isset($input['key'])) {
-                    $inputKeys[$input['key']] = true;
-                }
-            }
-
-            $edges = [];
-            $wired = [];   // "node:old key" fed by an edge before the rename
-            $changed = false;
-            foreach (($flow->edges ?: []) as $edge) {
-                $edge = (array) $edge;
-                $into = isset($edge['into']) ? (array) $edge['into'] : [];
-                if (isset($into['node'], $into['field'], $nodeIds[$into['node']], $renames[$into['field']])) {
-                    $wired[$into['node'] . ':' . $into['field']] = true;
-                    $into['field'] = $renames[$into['field']];
-                    $edge['into'] = $into;
-                    $changed = true;
-                }
-                $edges[] = $edge;
-            }
-            foreach (array_keys($nodeIds) as $nodeId) {
-                foreach ($renames as $old => $new) {
-                    if (!isset($wired[$nodeId . ':' . $old]) && isset($inputKeys[$old])) {
-                        $edges[] = ['from' => ['input' => $old], 'into' => ['node' => $nodeId, 'field' => $new]];
-                        $changed = true;
-                    }
-                }
-            }
-
-            if ($changed) {
+            try {
                 $flow->edges = $edges;
                 $flow->save();
-                $updated[] = $flow->title;
+                $result['flows_updated'][] = $flow->title;
+            } catch (\Exception $e) {
+                error_log("Flow {$flow->_id} could not follow a field rename of table $tableId: " . $e->getMessage());
+                $result['flows_failed'][] = $flow->title;
             }
         }
 
-        return $updated;
+        return $result;
+    }
+
+    /**
+     * A flow's edges after a rename of fields of the table used by $nodeIds, or
+     * null when nothing changes. Edges into a renamed field target the new key;
+     * a renamed field that was fed implicitly by the same-named flow input gets
+     * an explicit edge from that input (edges win over same-named inputs in
+     * FlowEngine), so the flow keeps its inputs, i.e. its own API contract, and
+     * its behavior. An edge into a key that a renamed field now takes, without
+     * coming from that field, targeted a field removed in the same update and is
+     * dropped. Renames apply in one pass from the original keys (a swap stays
+     * correct). Ids and keys are written as strings (PHP turns numeric array
+     * keys into integers).
+     *
+     * @param  array $edges
+     * @param  array $nodeIds    Nodes using the table.
+     * @param  array $inputKeys  Flow input keys (key => anything).
+     * @param  array $renames    old key => new key
+     * @return array|null
+     */
+    public static function renameEdges(array $edges, array $nodeIds, array $inputKeys, array $renames)
+    {
+        $nodes = [];
+        foreach ($nodeIds as $nodeId) {
+            $nodes[(string) $nodeId] = true;
+        }
+        $targets = [];
+        foreach ($renames as $new) {
+            $targets[(string) $new] = true;
+        }
+
+        $result = [];
+        $wired = [];   // "node:old key" fed by an edge before the rename
+        $changed = false;
+        foreach ($edges as $edge) {
+            $edge = (array) $edge;
+            $into = isset($edge['into']) ? (array) $edge['into'] : [];
+            if (isset($into['node'], $into['field'], $nodes[(string) $into['node']])) {
+                $field = (string) $into['field'];
+                if (isset($renames[$field])) {
+                    $wired[$into['node'] . ':' . $field] = true;
+                    $into['field'] = (string) $renames[$field];
+                    $edge['into'] = $into;
+                    $changed = true;
+                } elseif (isset($targets[$field])) {
+                    $changed = true;
+                    continue;
+                }
+            }
+            $result[] = $edge;
+        }
+        foreach (array_keys($nodes) as $nodeId) {
+            foreach ($renames as $old => $new) {
+                if (!isset($wired[$nodeId . ':' . $old]) && isset($inputKeys[$old])) {
+                    $result[] = ['from' => ['input' => (string) $old], 'into' => ['node' => (string) $nodeId, 'field' => (string) $new]];
+                    $changed = true;
+                }
+            }
+        }
+
+        return $changed ? $result : null;
+    }
+
+    /**
+     * Ids of the nodes that use the given table.
+     *
+     * @param  array  $nodes
+     * @param  string $tableId
+     * @return array
+     */
+    private function nodesUsingTable($nodes, $tableId)
+    {
+        $ids = [];
+        foreach ($nodes as $node) {
+            $node = (array) $node;
+            if (isset($node['table_id'], $node['node_id']) && (string) $node['table_id'] === (string) $tableId) {
+                $ids[] = (string) $node['node_id'];
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * A flow's inputs as key => declared type ('string' when missing, as in
+     * validateGraph).
+     *
+     * @param  array $inputs
+     * @return array
+     */
+    private function inputTypes($inputs)
+    {
+        $types = [];
+        foreach ($inputs as $input) {
+            $input = (array) $input;
+            if (isset($input['key'])) {
+                $types[$input['key']] = isset($input['type']) ? $input['type'] : 'string';
+            }
+        }
+
+        return $types;
     }
 
     /**

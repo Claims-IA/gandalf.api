@@ -15,6 +15,8 @@ namespace App\Http\Controllers;
 use Laravel\Lumen\Routing\Controller;
 use Nebo15\Changelog\Changelog;
 use Nebo15\Changelog\ControllerInterface;
+use App\Models\Table;
+use App\Repositories\FlowRepository;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
 use Nebo15\REST\Response;
 use Illuminate\Http\Request;
@@ -125,14 +127,50 @@ class ChangelogController extends Controller implements ControllerInterface
      */
     public function rollback($table, $model_id, $changelog_id)
     {
-        return $this->response->json(
-            $this->changelogModel->rollback(
-                $table,
-                $model_id,
-                $changelog_id,
-                ['model.attributes.applications' => ApplicationableHelper::getApplicationId()]
-            )
+        // A table rollback can rename fields back (same field _id, other key):
+        // the flows that followed the rename must follow the rollback too.
+        $keysBefore = $table === 'tables' ? $this->tableFieldKeys($model_id) : [];
+
+        $result = $this->changelogModel->rollback(
+            $table,
+            $model_id,
+            $changelog_id,
+            ['model.attributes.applications' => ApplicationableHelper::getApplicationId()]
         );
+
+        if ($table === 'tables') {
+            $renames = [];
+            foreach ($this->tableFieldKeys($model_id) as $fieldId => $key) {
+                if (isset($keysBefore[$fieldId]) && $keysBefore[$fieldId] !== $key) {
+                    $renames[$keysBefore[$fieldId]] = $key;
+                }
+            }
+            if ($renames) {
+                $result += (new FlowRepository())->followFieldRenames($model_id, $renames);
+            }
+        }
+
+        return $this->response->json($result);
+    }
+
+    /**
+     * A table's field keys by field _id (empty when the table is not found in
+     * the current application).
+     *
+     * @param  string $id
+     * @return array
+     */
+    private function tableFieldKeys($id)
+    {
+        $table = Table::where('_id', $id)
+            ->where('applications', (string) ApplicationableHelper::getApplicationId())
+            ->first();
+        $keys = [];
+        foreach ((($table ? $table->fields : null) ?: []) as $field) {
+            $keys[(string) $field->_id] = $field->key;
+        }
+
+        return $keys;
     }
 
     /**

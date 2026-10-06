@@ -34,6 +34,9 @@ use Nebo15\LumenApplicationable\Contracts\Applicationable;
  */
 class TablesRepository extends AbstractRepository
 {
+    /** @var array What the last createOrUpdate did to field keys and flows. */
+    private $lastFieldRenames = [];
+
     protected $modelClassName = 'App\Models\Table';
 
     protected $observerClassName = 'App\Observers\TableObserver';
@@ -108,9 +111,10 @@ class TablesRepository extends AbstractRepository
         // conditions still using the old key follow it (the editor renames them
         // itself; this covers API clients), and so do the application's flows
         // using this table, once the table is saved.
+        $this->lastFieldRenames = [];
         $renames = ($id && isset($values['fields'])) ? $this->fieldRenames($model, $values['fields']) : [];
         if ($renames && isset($values['variants'])) {
-            $values['variants'] = $this->renameOrphanConditions($values['variants'], $values['fields'], $renames);
+            $values['variants'] = $this->renameConditions($model, $values['variants'], $values['fields'], $renames);
         }
         // Enforce the table invariant: every variant shares the SAME set of
         // fields (columns), so each rule must carry exactly one condition per
@@ -137,14 +141,17 @@ class TablesRepository extends AbstractRepository
         $model->save();
 
         if ($renames) {
-            (new FlowRepository())->followFieldRenames((string) $model->_id, $renames);
+            $this->lastFieldRenames = ['field_renames' => (object) $renames]
+                + (new FlowRepository())->followFieldRenames((string) $model->_id, $renames);
         }
 
         return $model;
     }
 
     /**
-     * Fields renamed by an update: sent with their stored _id but another key.
+     * Fields renamed by an update: sent with their stored _id, once, and another
+     * key. A field duplicated with the same _id under another key is not a
+     * rename. Two fields may swap keys.
      *
      * @param  \App\Models\Table $model     The stored table (before its fields are replaced).
      * @param  array             $incoming  Submitted fields.
@@ -159,6 +166,14 @@ class TablesRepository extends AbstractRepository
             }
         }
 
+        $idCount = [];
+        foreach ($incoming as $field) {
+            if (isset($field['_id'])) {
+                $fieldId = (string) $field['_id'];
+                $idCount[$fieldId] = (isset($idCount[$fieldId]) ? $idCount[$fieldId] : 0) + 1;
+            }
+        }
+
         $renames = [];
         foreach ($incoming as $field) {
             if (!isset($field['_id'], $field['key'])) {
@@ -166,7 +181,7 @@ class TablesRepository extends AbstractRepository
             }
             $id = (string) $field['_id'];
             $key = Field::normalizeKey($field['key']);
-            if (isset($stored[$id]) && $stored[$id] !== $key) {
+            if (isset($stored[$id]) && $stored[$id] !== $key && $idCount[$id] === 1) {
                 $renames[$stored[$id]] = $key;
             }
         }
@@ -175,17 +190,23 @@ class TablesRepository extends AbstractRepository
     }
 
     /**
-     * Point conditions that still use a renamed key at the new key. Only orphan
-     * conditions (whose key is no longer a field) are rewritten, so conditions
-     * a client already renamed, including a swap of two keys, are left alone.
+     * Point the submitted conditions of renamed fields at their new key.
      *
-     * @param  array $variants
-     * @param  array $fields    Submitted fields.
-     * @param  array $renames   old key => new key
+     * A condition already stored (known _id) follows the rename only if the
+     * client left its key as stored, so conditions the client renamed itself,
+     * including a swap or a chain of renames, are left alone and every rename
+     * applies once. A new condition (no stored _id) still using an old key that
+     * is no longer a field follows it too.
+     *
+     * @param  \App\Models\Table $model     The stored table.
+     * @param  array             $variants  Submitted variants.
+     * @param  array             $fields    Submitted fields.
+     * @param  array             $renames   old key => new key
      * @return array
      */
-    private function renameOrphanConditions(array $variants, array $fields, array $renames)
+    private function renameConditions($model, array $variants, array $fields, array $renames)
     {
+        $stored = $this->storedConditionKeys($model);
         $fieldKeys = [];
         foreach ($fields as $field) {
             if (isset($field['key'])) {
@@ -196,15 +217,79 @@ class TablesRepository extends AbstractRepository
         foreach ($variants as $v => $variant) {
             foreach ((isset($variant['rules']) ? $variant['rules'] : []) as $r => $rule) {
                 foreach ((isset($rule['conditions']) ? $rule['conditions'] : []) as $c => $condition) {
-                    $key = isset($condition['field_key']) ? Field::normalizeKey($condition['field_key']) : null;
-                    if ($key !== null && !isset($fieldKeys[$key]) && isset($renames[$key])) {
-                        $variants[$v]['rules'][$r]['conditions'][$c]['field_key'] = $renames[$key];
+                    if (!isset($condition['field_key'])) {
+                        continue;
+                    }
+                    $key = Field::normalizeKey($condition['field_key']);
+                    $id = isset($condition['_id']) ? (string) $condition['_id'] : null;
+                    $follows = ($id !== null && isset($stored[$id]))
+                        ? $key === $stored[$id] && isset($renames[$key])
+                        : !isset($fieldKeys[$key]) && isset($renames[$key]);
+                    if ($follows) {
+                        $variants[$v]['rules'][$r]['conditions'][$c]['field_key'] = (string) $renames[$key];
                     }
                 }
             }
         }
 
         return $variants;
+    }
+
+    /**
+     * Stored conditions' field keys, by condition _id.
+     *
+     * @param  \App\Models\Table $model
+     * @return array  condition _id => field key
+     */
+    private function storedConditionKeys($model)
+    {
+        $keys = [];
+        foreach (($model->variants ?: []) as $variant) {
+            foreach (($variant->rules ?: []) as $rule) {
+                foreach (($rule->conditions ?: []) as $condition) {
+                    if ($condition->_id !== null && $condition->field_key !== null) {
+                        $keys[(string) $condition->_id] = $condition->field_key;
+                    }
+                }
+            }
+        }
+
+        return $keys;
+    }
+
+    /**
+     * Apply the field renames of an update payload to its conditions before it
+     * is validated, so each condition is validated against its field's type
+     * (see TablesController::update). createOrUpdate applies the same rewrite,
+     * which is idempotent, for programmatic callers.
+     *
+     * @param  string $id      Table id.
+     * @param  array  $values  Update payload.
+     * @return array
+     */
+    public function withRenamedConditions($id, array $values)
+    {
+        if (!isset($values['fields'], $values['variants']) || !is_array($values['fields']) || !is_array($values['variants'])) {
+            return $values;
+        }
+        $model = $this->read($id);
+        $renames = $this->fieldRenames($model, $values['fields']);
+        if ($renames) {
+            $values['variants'] = $this->renameConditions($model, $values['variants'], $values['fields'], $renames);
+        }
+
+        return $values;
+    }
+
+    /**
+     * What the last createOrUpdate did to field keys and flows (empty when no
+     * field was renamed): field_renames, flows_updated, flows_failed.
+     *
+     * @return array
+     */
+    public function lastFieldRenames()
+    {
+        return $this->lastFieldRenames;
     }
 
     /**
@@ -239,10 +324,12 @@ class TablesRepository extends AbstractRepository
      */
     private function normalizeVariantConditions($fields, $variants)
     {
+        // Keys compared in their stored form (Field::normalizeKey), so a submitted
+        // "Cause Sinistre" matches a condition on "cause_sinistre".
         $fieldKeys = [];
         foreach ($fields as $field) {
             if (isset($field['key']) && $field['key'] !== '') {
-                $fieldKeys[] = $field['key'];
+                $fieldKeys[] = Field::normalizeKey($field['key']);
             }
         }
 
@@ -254,9 +341,10 @@ class TablesRepository extends AbstractRepository
                 $existing = [];
                 foreach ((isset($rule['conditions']) && is_array($rule['conditions']) ? $rule['conditions'] : []) as $condition) {
                     if (isset($condition['field_key'])) {
+                        $conditionKey = Field::normalizeKey($condition['field_key']);
                         // First condition wins if a rule somehow has duplicates.
-                        if (!array_key_exists($condition['field_key'], $existing)) {
-                            $existing[$condition['field_key']] = $condition;
+                        if (!array_key_exists($conditionKey, $existing)) {
+                            $existing[$conditionKey] = $condition;
                         }
                     }
                 }
@@ -266,7 +354,10 @@ class TablesRepository extends AbstractRepository
                     if (array_key_exists($key, $existing)) {
                         $aligned[] = $existing[$key];
                     } else {
-                        $aligned[] = ['field_key' => $key, 'condition' => '$any', 'value' => null];
+                        // Neutral condition; a value is required by the validation
+                        // (required|conditionType), and true is what the editor and
+                        // the Excel codec store for valueless operators.
+                        $aligned[] = ['field_key' => $key, 'condition' => '$any', 'value' => true];
                     }
                 }
                 $rule['conditions'] = $aligned;

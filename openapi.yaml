@@ -2420,8 +2420,8 @@ paths:
         Paginated list of the project's decision-requirement-graph flows.
         Each item is a reduced representation (`_id`, `title`, `description`,
         `category_id`); fetch a single flow by id to get its full graph.
-        Supports case-insensitive `title`/`description` filters and an
-        exact-match `category_id` filter.
+        Supports case-insensitive `title`/`description` filters and exact-match
+        `category_id` and `table_id` filters.
       operationId: listFlows
       security:
         - BearerAuth: []
@@ -2448,6 +2448,13 @@ paths:
           schema:
             type: string
             example: "cat_9f3a1c7b2d4e5f60"
+        - name: table_id
+          in: query
+          required: false
+          description: Return only flows having a node on this table (e.g. the flows a field rename of the table updates).
+          schema:
+            type: string
+            example: "5745ce96f70466a2098b457c"
       responses:
         "200":
           description: Paginated flow list (reduced items).
@@ -2959,6 +2966,11 @@ paths:
         same-named flow input gets an explicit edge from that input, so the flows'
         inputs (their own API contract) do not change. Systems calling this table
         directly (`POST /api/v1/tables/{id}/decisions`) must send the new key.
+        Conditions are renamed before validation; a condition sent with its
+        stored `_id` follows the rename only if its `field_key` was left as
+        stored. The response `meta` then reports `field_renames` (old key to new
+        key), `flows_updated` and `flows_failed` (flow titles). A changelog
+        rollback of the table makes the flows follow the restored keys too.
       operationId: updateTable
       security:
         - BearerAuth: []

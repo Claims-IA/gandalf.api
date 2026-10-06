@@ -47,6 +47,7 @@ class FlowsController extends AbstractController
             'title'       => 'sometimes|min:1',
             'description' => 'sometimes|min:1',
             'category_id' => 'sometimes|string',
+            'table_id'    => 'sometimes|string',
         ],
     ];
 
