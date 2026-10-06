@@ -190,14 +190,16 @@ class FlowRepository extends AbstractRepository
      * Bring every table referenced by a flow's nodes into the target application
      * and return the nodes with their table_id remapped.
      *
-     * A table already present in the target — same origin (Table::originId), and
-     * still usable by this graph (canStandIn) — is reused; otherwise the table is
-     * duplicated. So copying or moving several flows that share a table, one call
-     * after the other, brings that table over once. Distinct table ids are handled
-     * once each (a table used by several nodes maps to a single target table).
-     * Tables are read from the current (source) application via findProjectTable;
-     * a node whose table cannot be resolved keeps its original id (validateGraph
-     * would already have rejected such a flow on save, so this is defensive only).
+     * A table already present in the target (same origin, see Table::originId,
+     * and still usable by this graph, see canStandIn) is reused; otherwise the
+     * table is duplicated. So copying or moving several flows that share a table,
+     * one call after the other, brings that table over once. Distinct table ids
+     * are handled once each (a table used by several nodes maps to a single target
+     * table), and two distinct source tables never map onto the same target table
+     * (a flow using two copies of one table keeps two tables). Tables are read
+     * from the current (source) application via findProjectTable; a node whose
+     * table cannot be resolved keeps its original id (validateGraph would already
+     * have rejected such a flow on save, so this is defensive only).
      *
      * @param  array  $nodes       The source flow's nodes ([{ node_id, table_id }]).
      * @param  array  $edges       The source flow's edges.
@@ -210,11 +212,11 @@ class FlowRepository extends AbstractRepository
         $tablesRepo = new TablesRepository();
         $idMap = [];   // oldTableId => target table id
 
-        $inputKeys = [];
+        $inputTypes = [];   // input key => declared type
         foreach ($inputs as $input) {
             $input = (array) $input;
             if (isset($input['key'])) {
-                $inputKeys[$input['key']] = true;
+                $inputTypes[$input['key']] = isset($input['type']) ? $input['type'] : 'string';
             }
         }
 
@@ -234,7 +236,7 @@ class FlowRepository extends AbstractRepository
                     $nodeIds[] = $other['node_id'];
                 }
             }
-            $existing = $this->findReusableTable($table, $project_id, $nodeIds, $edges, $inputKeys);
+            $existing = $this->findReusableTable($table, $project_id, $nodeIds, $edges, $inputTypes, array_values($idMap));
             $idMap[$oldId] = $existing
                 ? (string) $existing->_id
                 : (string) $tablesRepo->duplicateInto($table, $project_id)->_id;
@@ -252,18 +254,20 @@ class FlowRepository extends AbstractRepository
 
     /**
      * A table of the target application that can replace $source in this flow:
-     * same origin (the original itself, or any copy of it), and usable as is by
-     * the graph (canStandIn). The original wins over copies, then the oldest copy,
-     * so the choice is stable. Null when there is none.
+     * same origin (the original itself, or any copy of it), not already used for
+     * another source table of the flow, and usable as is by the graph
+     * (canStandIn). The original wins over copies, then the oldest copy, so the
+     * choice is stable. Null when there is none.
      *
-     * @param  Table  $source     The flow's table in the source application.
-     * @param  string $projectId  Target application id.
-     * @param  array  $nodeIds    The flow's nodes that use $source.
-     * @param  array  $edges      The flow's edges.
-     * @param  array  $inputKeys  The flow's input keys (key => true).
+     * @param  Table  $source      The flow's table in the source application.
+     * @param  string $projectId   Target application id.
+     * @param  array  $nodeIds     The flow's nodes that use $source.
+     * @param  array  $edges       The flow's edges.
+     * @param  array  $inputTypes  The flow's inputs (key => declared type).
+     * @param  array  $taken       Target table ids already used for other source tables.
      * @return Table|null
      */
-    private function findReusableTable(Table $source, $projectId, array $nodeIds, $edges, array $inputKeys)
+    private function findReusableTable(Table $source, $projectId, array $nodeIds, $edges, array $inputTypes, array $taken)
     {
         $origin = $source->originId();
         $candidates = Table::where('applications', (string) $projectId)
@@ -271,15 +275,21 @@ class FlowRepository extends AbstractRepository
                 $query->where('_id', $origin)->orWhere('origin_table_id', $origin);
             })
             ->orderBy('created_at')
-            ->get()
+            // Only what canStandIn reads: variants and rules are not loaded.
+            ->get(['_id', 'fields', 'matching_type', 'decision_type', 'origin_table_id', 'created_at'])
             ->all();
         // Stable sort: the original first, copies keep their creation order.
         usort($candidates, function ($a, $b) use ($origin) {
             return ((string) $a->_id !== $origin) <=> ((string) $b->_id !== $origin);
         });
 
+        $sourceTypes = $this->fieldTypes($source);
+        $sourceOutputFamily = $this->typeFamily($this->tableOutputType($source));
         foreach ($candidates as $candidate) {
-            if ($this->canStandIn($candidate, $source, $nodeIds, $edges, $inputKeys)) {
+            if (in_array((string) $candidate->_id, $taken, true)) {
+                continue;
+            }
+            if ($this->canStandIn($candidate, $sourceTypes, $sourceOutputFamily, $nodeIds, $edges, $inputTypes)) {
                 return $candidate;
             }
         }
@@ -288,26 +298,28 @@ class FlowRepository extends AbstractRepository
     }
 
     /**
-     * Whether $candidate can replace $source for the given nodes without making
-     * the graph invalid (same rules as validateGraph):
+     * Whether $candidate can replace the source table (described by its field
+     * types and output family) for the given nodes, the graph staying valid and
+     * runnable:
      *   - every field wired into those nodes still exists, with the same type;
-     *   - every other field of $candidate is still fed by a same-named flow input
-     *     (field coverage);
+     *   - every other field of $candidate is fed by a same-named flow input of a
+     *     compatible type (stricter than validateGraph's field coverage, which
+     *     only checks the key: the value would otherwise fail the field's
+     *     validation at run time);
      *   - when those nodes' output feeds another node, it keeps its type family.
      *
-     * @param  Table  $candidate
-     * @param  Table  $source
-     * @param  array  $nodeIds
-     * @param  array  $edges
-     * @param  array  $inputKeys  key => true
+     * @param  Table       $candidate
+     * @param  array       $sourceTypes         Source table fields (key => type).
+     * @param  string|null $sourceOutputFamily  Type family of the source table's output.
+     * @param  array       $nodeIds
+     * @param  array       $edges
+     * @param  array       $inputTypes          Flow inputs (key => declared type).
      * @return bool
      */
-    private function canStandIn(Table $candidate, Table $source, array $nodeIds, $edges, array $inputKeys)
+    private function canStandIn(Table $candidate, array $sourceTypes, $sourceOutputFamily, array $nodeIds, $edges, array $inputTypes)
     {
-        $sourceTypes = $this->fieldTypes($source);
         $candidateTypes = $this->fieldTypes($candidate);
-        $sameOutputFamily = $this->typeFamily($this->tableOutputType($candidate))
-            === $this->typeFamily($this->tableOutputType($source));
+        $sameOutputFamily = $this->typeFamily($this->tableOutputType($candidate)) === $sourceOutputFamily;
 
         foreach ($nodeIds as $nodeId) {
             $wired = [];
@@ -326,8 +338,11 @@ class FlowRepository extends AbstractRepository
                     return false;
                 }
             }
-            foreach (array_keys($candidateTypes) as $key) {
-                if (!isset($wired[$key]) && !isset($inputKeys[$key])) {
+            foreach ($candidateTypes as $key => $type) {
+                if (isset($wired[$key])) {
+                    continue;
+                }
+                if (!isset($inputTypes[$key]) || !$this->typesCompatible($inputTypes[$key], $type)) {
                     return false;
                 }
             }
