@@ -59,7 +59,7 @@ class TableValidator
         }
 
         $fieldKey = array_get($data, str_replace('value', 'field_key', $attribute));
-        if ($this->fieldType($data, $fieldKey) === 'date') {
+        if ($this->conditionFieldType($data, $fieldKey) === 'date') {
             return DateValue::isValidConditionValue($operator, $value);
         }
 
@@ -76,18 +76,30 @@ class TableValidator
     }
 
     /**
-     * Type of the payload field with the given key, or null when there is none.
+     * Type that a condition on the given field key is compared against: the
+     * payload field's type, or null when there is no such field or when the field
+     * has a preset (rules then compare the preset's result, not the raw value;
+     * see Scoring::check). Keys are matched as stored, i.e. normalized like
+     * Field::setKeyAttribute and Condition::setFieldKeyAttribute.
      *
      * @param  array  $data
      * @param  mixed  $key
      * @return string|null
      */
-    private function fieldType(array $data, $key)
+    private function conditionFieldType(array $data, $key)
     {
+        $normalize = function ($value) {
+            return strtolower(str_replace(' ', '_', trim((string) $value)));
+        };
         foreach ((array) array_get($data, 'fields', []) as $field) {
-            if (isset($field['key']) && $field['key'] === $key) {
-                return isset($field['type']) ? $field['type'] : null;
+            if (!isset($field['key']) || $normalize($field['key']) !== $normalize($key)) {
+                continue;
             }
+            if (!empty($field['preset']['condition'])) {
+                return null;
+            }
+
+            return isset($field['type']) ? $field['type'] : null;
         }
 
         return null;

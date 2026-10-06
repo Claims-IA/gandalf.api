@@ -233,8 +233,9 @@ class Scoring
         if (array_key_exists($field->key, $this->presets)) {
             $value = $this->presets[$field->key];
         } elseif ($preset = $field->preset and $preset->condition) {
-            // Apply the preset condition (e.g. $is_set converts the value to true/false)
-            $value = $this->conditionsTypes->checkConditionValue($preset->condition, $preset->value, $value);
+            // Apply the preset condition (e.g. $is_set converts the value to true/false).
+            // The preset compares the raw value, so it follows the field type (dates).
+            $value = $this->conditionsTypes->checkConditionValue($preset->condition, $preset->value, $value, $field->type);
             // Cache for subsequent conditions that reference the same field
             $this->presets[$field->key] = $value;
         }

@@ -89,6 +89,22 @@ class DateFieldValidationTest extends \Codeception\TestCase\Test
         $this->assertSame([$path], $this->fails($this->payload('numeric', '$gt', '2026-01-01')));
     }
 
+    public function testFieldKeysAreMatchedAsStored()
+    {
+        // Field::setKeyAttribute stores 'Claim Date' as 'claim_date'
+        $payload = $this->payload('date', '$gte', '15/03/2026');
+        $payload['fields'][0]['key'] = 'Claim Date';
+        $this->assertSame(['variants.0.rules.0.conditions.0.value'], $this->fails($payload));
+    }
+
+    public function testPresetFieldRulesCompareThePresetResult()
+    {
+        // With a preset, rules compare its boolean result, not a date.
+        $payload = $this->payload('date', '$eq', true);
+        $payload['fields'][0]['preset'] = ['condition' => '$gte', 'value' => 'today-18y'];
+        $this->assertSame([], $this->fails($payload));
+    }
+
     public function testUnknownTypeIsRejected()
     {
         $this->assertContains('fields.0.type', $this->fails($this->payload('datetime', '$eq', '2026-01-01')));

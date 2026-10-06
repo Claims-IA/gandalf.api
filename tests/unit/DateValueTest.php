@@ -146,6 +146,12 @@ class DateValueTest extends \Codeception\TestCase\Test
             'range iso'              => ['$between', '2026-01-01;2026-12-31', true],
             'range relative'         => ['$between_excl', 'today-1y;today', true],
             'range reversed'         => ['$between', '2026-12-31;2026-01-01', false],
+            'relative reversed'      => ['$between', 'today;today-30d', false],
+            'relative same family'   => ['$between', 'today-2w;today-3d', true],
+            'relative months reversed' => ['$between', 'today-1m;today-1y', false],
+            // Order may change over time: accepted, the range is just empty some days
+            'relative mixed units'   => ['$between', 'today-30d;today-1m', true],
+            'mixed relative absolute' => ['$between', 'today;2026-12-31', true],
             'range single day'       => ['$between', '2026-01-01;2026-01-01', false],
             'range one bound'        => ['$not_between', '2026-01-01', false],
             'range bad bound'        => ['$between_rexcl', '2026-01-01;soon', false],
@@ -162,6 +168,13 @@ class DateValueTest extends \Codeception\TestCase\Test
     public function testIsValidConditionValue(string $operator, $value, bool $expected)
     {
         $this->assertSame($expected, DateValue::isValidConditionValue($operator, $value));
+    }
+
+    public function testMixedRangeStaysValidOnceInverted()
+    {
+        // Saved in 2026, the table must still save in 2027 although the range is empty.
+        DateValue::freezeToday('2027-01-01');
+        $this->assertTrue(DateValue::isValidConditionValue('$between', 'today;2026-12-31'));
     }
 
     // -------------------------------------------------------------------------

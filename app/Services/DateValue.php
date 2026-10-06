@@ -102,8 +102,13 @@ final class DateValue
 
     /**
      * Whether a condition value is valid for a date field under the operator.
-     * Range bounds must resolve in increasing order, like numeric ranges
-     * (see GeneralValidator::betweenString).
+     *
+     * Range bounds must be in increasing order, like numeric ranges (see
+     * GeneralValidator::betweenString), but only when that order cannot change
+     * over time: two absolute dates, or two offsets from today in comparable
+     * units. A mixed range such as "today;2026-12-31" is valid when saved and
+     * becomes empty later on; rejecting it then would block every later save of
+     * the table (the whole table is validated on each update).
      *
      * @param  string $operator
      * @param  mixed  $value
@@ -122,12 +127,58 @@ final class DateValue
             if ($range === null) {
                 return false;
             }
+            [$minExpr, $maxExpr] = explode(';', $value);
+            if (!self::hasFixedOrder($minExpr, $maxExpr)) {
+                return true;
+            }
             [$min, $max] = explode(';', $range);
 
             return (int) $min < (int) $max;
         }
 
         return self::toDayNumber($value) !== null;
+    }
+
+    /**
+     * Whether two date expressions keep the same order whatever the current day:
+     * both absolute, or both relative with offsets in the same unit family (days
+     * and weeks, or months and years; a bare "today" fits either).
+     *
+     * @param  string $a
+     * @param  string $b
+     * @return bool
+     */
+    private static function hasFixedOrder($a, $b): bool
+    {
+        if (self::isIsoDate($a) && self::isIsoDate($b)) {
+            return true;
+        }
+        $familyA = self::relativeFamily($a);
+        $familyB = self::relativeFamily($b);
+        if ($familyA === null || $familyB === null) {
+            return false;
+        }
+
+        return $familyA === 'any' || $familyB === 'any' || $familyA === $familyB;
+    }
+
+    /**
+     * Unit family of a relative expression: 'days' (d, w), 'months' (m, y),
+     * 'any' for a bare "today", null when the value is not relative.
+     *
+     * @param  mixed $value
+     * @return string|null
+     */
+    private static function relativeFamily($value): ?string
+    {
+        if (!is_string($value) || !preg_match(self::RELATIVE_PATTERN, trim($value), $m)) {
+            return null;
+        }
+        if (!isset($m[1])) {
+            return 'any';
+        }
+
+        return in_array(strtolower($m[3]), ['d', 'w'], true) ? 'days' : 'months';
     }
 
     /**
@@ -258,7 +309,9 @@ final class DateValue
         try {
             return new \DateTimeZone($name);
         } catch (\Exception $e) {
-            // Misconfigured DECISION_TIMEZONE: fall back rather than fail every decision.
+            // Misconfigured DECISION_TIMEZONE: fall back rather than fail every
+            // decision, but leave a trace (php-fpm forwards error_log to stderr).
+            error_log("DECISION_TIMEZONE '$name' is not a valid timezone; using " . date_default_timezone_get() . '.');
             return new \DateTimeZone(date_default_timezone_get());
         }
     }
