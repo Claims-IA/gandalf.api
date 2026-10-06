@@ -2951,6 +2951,14 @@ paths:
 
         Provide `_id` for existing fields, variants, rules, and conditions to
         preserve their identifiers in the changelog history.
+
+        **Renaming a field:** send the field with its existing `_id` and a new
+        `key`. Conditions still using the old key are pointed at the new one, and
+        the project's flows using this table follow the rename: edges into the
+        field target the new key, and a field that was fed implicitly by the
+        same-named flow input gets an explicit edge from that input, so the flows'
+        inputs (their own API contract) do not change. Systems calling this table
+        directly (`POST /api/v1/tables/{id}/decisions`) must send the new key.
       operationId: updateTable
       security:
         - BearerAuth: []

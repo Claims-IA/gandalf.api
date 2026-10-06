@@ -15,6 +15,7 @@
 
 namespace App\Validators;
 
+use App\Models\Field;
 use App\Services\ConditionsTypes;
 use App\Services\DateValue;
 use Illuminate\Validation\Validator;
@@ -88,11 +89,8 @@ class TableValidator
      */
     private function conditionFieldType(array $data, $key)
     {
-        $normalize = function ($value) {
-            return strtolower(str_replace(' ', '_', trim((string) $value)));
-        };
         foreach ((array) array_get($data, 'fields', []) as $field) {
-            if (!isset($field['key']) || $normalize($field['key']) !== $normalize($key)) {
+            if (!isset($field['key']) || Field::normalizeKey($field['key']) !== Field::normalizeKey($key)) {
                 continue;
             }
             if (!empty($field['preset']['condition'])) {

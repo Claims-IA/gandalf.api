@@ -326,6 +326,12 @@ Le CRUD est fourni par l'`AbstractController` Nebo15 ; les écritures passent pa
 stocké et n'efface jamais `nodes`/`edges`/`outputs`. C'est le graphe fusionné qui
 est revalidé.
 
+**Renommage d'un champ de table** (même `_id` de champ, nouvelle `key`, via la
+mise à jour de la table) : les flows du projet qui utilisent la table suivent le
+renommage. Les fils vers le champ visent la nouvelle clé, et un champ qui était
+alimenté implicitement par l'entrée du flow de même nom reçoit un fil explicite
+depuis cette entrée : le flow garde ses entrées et son comportement.
+
 **Copie et déplacement vers un autre projet** (réservés aux admins du projet, qui
 doivent aussi être membres du projet cible) : un flow ne s'exécute que si ses
 tables sont dans son propre projet, donc ses tables sont amenées dans le projet

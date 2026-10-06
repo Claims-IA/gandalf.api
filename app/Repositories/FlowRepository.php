@@ -253,6 +253,76 @@ class FlowRepository extends AbstractRepository
     }
 
     /**
+     * Make the current application's flows follow a rename of fields of one of
+     * their tables (see TablesRepository::createOrUpdate). For each node using
+     * the table, edges into a renamed field target the new key, and a renamed
+     * field that was fed implicitly by the same-named flow input gets an explicit
+     * edge from that input (edges win over same-named inputs in FlowEngine), so
+     * the flow keeps its inputs, i.e. its own API contract, and its behavior.
+     * Renames apply in one pass from the original keys (a swap stays correct).
+     *
+     * @param  string $tableId
+     * @param  array  $renames  old key => new key
+     * @return array  Titles of the updated flows.
+     */
+    public function followFieldRenames($tableId, array $renames)
+    {
+        $tableId = (string) $tableId;
+        $flows = Flow::where('applications', (string) ApplicationableHelper::getApplicationId())
+            ->where('nodes.table_id', $tableId)
+            ->get();
+
+        $updated = [];
+        foreach ($flows as $flow) {
+            $nodeIds = [];
+            foreach (($flow->nodes ?: []) as $node) {
+                $node = (array) $node;
+                if (isset($node['table_id'], $node['node_id']) && (string) $node['table_id'] === $tableId) {
+                    $nodeIds[$node['node_id']] = true;
+                }
+            }
+            $inputKeys = [];
+            foreach (($flow->inputs ?: []) as $input) {
+                $input = (array) $input;
+                if (isset($input['key'])) {
+                    $inputKeys[$input['key']] = true;
+                }
+            }
+
+            $edges = [];
+            $wired = [];   // "node:old key" fed by an edge before the rename
+            $changed = false;
+            foreach (($flow->edges ?: []) as $edge) {
+                $edge = (array) $edge;
+                $into = isset($edge['into']) ? (array) $edge['into'] : [];
+                if (isset($into['node'], $into['field'], $nodeIds[$into['node']], $renames[$into['field']])) {
+                    $wired[$into['node'] . ':' . $into['field']] = true;
+                    $into['field'] = $renames[$into['field']];
+                    $edge['into'] = $into;
+                    $changed = true;
+                }
+                $edges[] = $edge;
+            }
+            foreach (array_keys($nodeIds) as $nodeId) {
+                foreach ($renames as $old => $new) {
+                    if (!isset($wired[$nodeId . ':' . $old]) && isset($inputKeys[$old])) {
+                        $edges[] = ['from' => ['input' => $old], 'into' => ['node' => $nodeId, 'field' => $new]];
+                        $changed = true;
+                    }
+                }
+            }
+
+            if ($changed) {
+                $flow->edges = $edges;
+                $flow->save();
+                $updated[] = $flow->title;
+            }
+        }
+
+        return $updated;
+    }
+
+    /**
      * A table of the target application that can replace $source in this flow:
      * same origin (the original itself, or any copy of it), not already used for
      * another source table of the flow, and usable as is by the graph

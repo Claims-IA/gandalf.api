@@ -15,6 +15,7 @@
 namespace App\Repositories;
 
 use App\Models\Decision;
+use App\Models\Field;
 use MongoDB\BSON\Regex;
 use MongoDB\Driver\Query;
 use MongoDB\BSON\ObjectID;
@@ -103,6 +104,14 @@ class TablesRepository extends AbstractRepository
             ApplicationableHelper::addApplication($model);
         }
         $model->fill($values);
+        // A field sent with its stored _id but another key is a rename. Orphan
+        // conditions still using the old key follow it (the editor renames them
+        // itself; this covers API clients), and so do the application's flows
+        // using this table, once the table is saved.
+        $renames = ($id && isset($values['fields'])) ? $this->fieldRenames($model, $values['fields']) : [];
+        if ($renames && isset($values['variants'])) {
+            $values['variants'] = $this->renameOrphanConditions($values['variants'], $values['fields'], $renames);
+        }
         // Enforce the table invariant: every variant shares the SAME set of
         // fields (columns), so each rule must carry exactly one condition per
         // field, in field order. Realign before persisting so a client that
@@ -127,7 +136,75 @@ class TablesRepository extends AbstractRepository
         }
         $model->save();
 
+        if ($renames) {
+            (new FlowRepository())->followFieldRenames((string) $model->_id, $renames);
+        }
+
         return $model;
+    }
+
+    /**
+     * Fields renamed by an update: sent with their stored _id but another key.
+     *
+     * @param  \App\Models\Table $model     The stored table (before its fields are replaced).
+     * @param  array             $incoming  Submitted fields.
+     * @return array  old key => new key (normalized keys)
+     */
+    private function fieldRenames($model, array $incoming)
+    {
+        $stored = [];
+        foreach ($this->existingFields($model) as $field) {
+            if (isset($field['_id'], $field['key'])) {
+                $stored[(string) $field['_id']] = $field['key'];
+            }
+        }
+
+        $renames = [];
+        foreach ($incoming as $field) {
+            if (!isset($field['_id'], $field['key'])) {
+                continue;
+            }
+            $id = (string) $field['_id'];
+            $key = Field::normalizeKey($field['key']);
+            if (isset($stored[$id]) && $stored[$id] !== $key) {
+                $renames[$stored[$id]] = $key;
+            }
+        }
+
+        return $renames;
+    }
+
+    /**
+     * Point conditions that still use a renamed key at the new key. Only orphan
+     * conditions (whose key is no longer a field) are rewritten, so conditions
+     * a client already renamed, including a swap of two keys, are left alone.
+     *
+     * @param  array $variants
+     * @param  array $fields    Submitted fields.
+     * @param  array $renames   old key => new key
+     * @return array
+     */
+    private function renameOrphanConditions(array $variants, array $fields, array $renames)
+    {
+        $fieldKeys = [];
+        foreach ($fields as $field) {
+            if (isset($field['key'])) {
+                $fieldKeys[Field::normalizeKey($field['key'])] = true;
+            }
+        }
+
+        foreach ($variants as $v => $variant) {
+            foreach ((isset($variant['rules']) ? $variant['rules'] : []) as $r => $rule) {
+                foreach ((isset($rule['conditions']) ? $rule['conditions'] : []) as $c => $condition) {
+                    $key = isset($condition['field_key']) ? Field::normalizeKey($condition['field_key']) : null;
+                    if ($key !== null && !isset($fieldKeys[$key]) && isset($renames[$key])) {
+                        $variants[$v]['rules'][$r]['conditions'][$c]['field_key'] = $renames[$key];
+                    }
+                }
+            }
+        }
+
+        return $variants;
     }
 
     /**

@@ -312,6 +312,12 @@ CRUD is provided by the Nebo15 `AbstractController`; writes go through
 partial update (e.g. `title` only) merges over the stored graph and never wipes
 `nodes`/`edges`/`outputs`. The merged graph is what gets re-validated.
 
+**Renaming a table field** (same field `_id`, new `key`, through the table
+update): the project's flows using the table follow the rename. Edges into the
+field target the new key, and a field that was fed implicitly by the same-named
+flow input gets an explicit edge from that input, so a flow keeps its inputs
+and its behavior.
+
 **Copy and move to another project** (project admins only, the caller must also
 be a member of the target project): a flow can only run when its tables live in
 its own project, so its referenced tables are brought into the target and each
