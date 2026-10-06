@@ -29,6 +29,8 @@ use Nebo15\LumenApplicationable\Traits\ApplicationableTrait;
  * @property string $variants_probability
  * @property Variant[] $variants
  * @property Field[] $fields
+ * @property string|null $origin_table_id  Root table this one was copied from (internal,
+ *                                         set by TablesRepository::duplicateInto)
  * @method static Decision findById($id)
  * @method static Decision create(array $attributes = [])
  * @method Decision save(array $options = [])
@@ -92,6 +94,19 @@ class Table extends Base implements ListableInterface, Applicationable
             'fields' => $this->fields,
             'variants' => $this->variants,
         ];
+    }
+
+    /**
+     * Id of the table this one originally comes from: its own id when it is not
+     * a copy. A copy of a copy keeps the root, so all copies of a table — in any
+     * application — share one origin id (used to reuse a table already present
+     * in an application instead of copying it again, see FlowRepository).
+     *
+     * @return string
+     */
+    public function originId()
+    {
+        return (string) ($this->origin_table_id ?: $this->getKey());
     }
 
     /**

@@ -314,6 +314,8 @@ protégées par ACL.
 | `PUT    /api/v1/admin/flows/{id}` | mettre à jour un flow | `tables_update` |
 | `DELETE /api/v1/admin/flows/{id}` | supprimer un flow | `tables_delete` |
 | `GET    /api/v1/admin/flows/{id}/runs` | historique paginé des exécutions | `tables_view` |
+| `POST   /api/v1/admin/flows/{id}/copyto/{project_id}` | copier le flow vers un autre projet | `tables_create` |
+| `POST   /api/v1/admin/flows/{id}/moveto/{project_id}` | déplacer le flow vers un autre projet | `tables_create`, `tables_delete` |
 | `POST   /api/v1/flows/{id}/decisions` | **exécuter le flow** | `decisions_make` |
 
 Le CRUD est fourni par l'`AbstractController` Nebo15 ; les écritures passent par
@@ -323,6 +325,19 @@ Le CRUD est fourni par l'`AbstractController` Nebo15 ; les écritures passent pa
 — une mise à jour partielle (p. ex. `title` seul) fusionne par-dessus le graphe
 stocké et n'efface jamais `nodes`/`edges`/`outputs`. C'est le graphe fusionné qui
 est revalidé.
+
+**Copie et déplacement vers un autre projet** (réservés aux admins du projet, qui
+doivent aussi être membres du projet cible) : un flow ne s'exécute que si ses
+tables sont dans son propre projet, donc ses tables sont amenées dans le projet
+cible et le `table_id` de chaque nœud est réaffecté. Une table déjà présente dans
+la cible est réutilisée au lieu d'être recopiée si elle a la même origine (la
+table d'origine elle-même, ou une copie antérieure : chaque copie de table retient
+sa table racine) et si le graphe peut l'utiliser telle quelle : chaque champ
+branché existe encore avec le même type, chaque autre champ est encore alimenté
+par une entrée du flow de même nom, et sa sortie garde sa famille de types
+lorsqu'elle alimente un autre nœud. Sinon la table est dupliquée. Copier plusieurs
+flows qui partagent une table n'amène donc cette table qu'une fois. Un déplacement
+ne déplace jamais les tables : le projet source les garde pour ses autres flows.
 
 ---
 

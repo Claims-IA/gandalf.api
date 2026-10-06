@@ -3319,6 +3319,10 @@ paths:
         resolved within the project given by the `X-Application` header, exactly
         like all other admin endpoints.
 
+        The copy remembers the table it comes from, so a flow using that table that
+        is later copied or moved into the same project reuses this copy instead of
+        duplicating the table again (see `copyFlowTo`).
+
         The copy starts **uncategorised** (`category_id` reset to null): categories
         are per-application, so a source category id would be an orphan in the target.
 
@@ -3409,8 +3413,18 @@ paths:
       description: |
         Clones the flow identified by `{id}` into the project identified by
         `{project_id}`. Because a flow is only executable when every node's table
-        lives in the same project, the flow's **referenced tables are also copied**
-        into the target and each node's `table_id` is remapped to its copy.
+        lives in the same project, the flow's **referenced tables are also brought**
+        into the target and each node's `table_id` is remapped accordingly.
+
+        A referenced table is **not copied again** when the target project already
+        holds a table of the same origin (the original itself, or an earlier copy of
+        it — every table copy remembers its root table) that the graph can use as
+        is: every field the flow wires into it still exists with the same type,
+        every other field is still fed by a same-named flow input, and its output
+        keeps its type family when it feeds another node. The first such table is
+        reused (the original first, then the oldest copy); otherwise the table is
+        duplicated. Copying or moving several flows that share tables, one call
+        after the other, therefore brings each table over once.
 
         A brand-new flow document is created; the source flow (and its tables) are
         left untouched. `category_id` is reset to null (per-application).
@@ -3461,7 +3475,17 @@ paths:
 
         Its **referenced tables are COPIED (not moved)** into the target so that
         other flows in the source project keep working; each node's `table_id` is
-        remapped to its copy. `category_id` is reset to null (per-application).
+        remapped accordingly. `category_id` is reset to null (per-application).
+
+        A referenced table is **not copied again** when the target project already
+        holds a table of the same origin (the original itself, or an earlier copy of
+        it — every table copy remembers its root table) that the graph can use as
+        is: every field the flow wires into it still exists with the same type,
+        every other field is still fed by a same-named flow input, and its output
+        keeps its type family when it feeds another node. The first such table is
+        reused (the original first, then the oldest copy); otherwise the table is
+        duplicated. Copying or moving several flows that share tables, one call
+        after the other, therefore brings each table over once.
 
         **Restricted to project admins.** The caller must be an `admin` of the
         source project AND a member of the target project.

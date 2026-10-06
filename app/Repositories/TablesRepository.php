@@ -239,7 +239,8 @@ class TablesRepository extends AbstractRepository
      *
      * Strips identity and the source application association, resets category_id
      * (categories are per-application, so a source category would be an orphan in
-     * the target), and re-applies the embedded fields and variants. Shared by the
+     * the target), records the origin (Table::originId) and re-applies the embedded
+     * fields and variants. Shared by the
      * table copyTo endpoint and the flow copy/move path (which copies a flow's
      * referenced tables into the target). Public so FlowRepository can reuse it.
      *
@@ -264,6 +265,8 @@ class TablesRepository extends AbstractRepository
         // findProjectTable / AbstractRepository::read query it.
         $model->applications = [(string) $project_id];
         $model->category_id = null;
+        // Remember where the copy comes from (not fillable, so set directly).
+        $model->origin_table_id = $source->originId();
         $model->fill($values);
         // Realign conditions on the copy too, so a duplicate can never inherit
         // (or introduce) a drifted field/condition set.
@@ -295,8 +298,9 @@ class TablesRepository extends AbstractRepository
      * application, that flow becomes non-executable there (FlowRepository::
      * findProjectTable resolves a node's table within the flow's own application,
      * and the table is no longer in it). This is not detected/blocked here — moving
-     * a shared table is the caller's decision. Copying a flow, by contrast, always
-     * duplicates its tables into the target, so it never leaves dangling references.
+     * a shared table is the caller's decision. Copying a flow, by contrast, brings
+     * its tables into the target (duplicated, or reused when a compatible table of
+     * the same origin is already there), so it never leaves dangling references.
      *
      * @param  string $id
      * @param  string $project_id  Target application id.

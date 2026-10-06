@@ -301,6 +301,8 @@ All routes are application-scoped (`X-Application` header) and ACL-gated.
 | `PUT    /api/v1/admin/flows/{id}` | update flow | `tables_update` |
 | `DELETE /api/v1/admin/flows/{id}` | delete flow | `tables_delete` |
 | `GET    /api/v1/admin/flows/{id}/runs` | paginated run history | `tables_view` |
+| `POST   /api/v1/admin/flows/{id}/copyto/{project_id}` | copy the flow to another project | `tables_create` |
+| `POST   /api/v1/admin/flows/{id}/moveto/{project_id}` | move the flow to another project | `tables_create`, `tables_delete` |
 | `POST   /api/v1/flows/{id}/decisions` | **run the flow** | `decisions_make` |
 
 CRUD is provided by the Nebo15 `AbstractController`; writes go through
@@ -309,6 +311,18 @@ CRUD is provided by the Nebo15 `AbstractController`; writes go through
 **Update semantics:** a `PUT` only overrides the keys present in the body — a
 partial update (e.g. `title` only) merges over the stored graph and never wipes
 `nodes`/`edges`/`outputs`. The merged graph is what gets re-validated.
+
+**Copy and move to another project** (project admins only, the caller must also
+be a member of the target project): a flow can only run when its tables live in
+its own project, so its referenced tables are brought into the target and each
+node's `table_id` is remapped. A table already present in the target is reused
+rather than copied again when it has the same origin (the original itself, or an
+earlier copy of it: every table copy remembers its root table) and the graph can
+use it as is: every field wired into it still exists with the same type, every
+other field is still fed by a same-named flow input, and its output keeps its
+type family when it feeds another node. Otherwise the table is duplicated. So
+copying several flows that share a table brings that table over once. A move
+never moves tables: the source project keeps them for its other flows.
 
 ---
 

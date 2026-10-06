@@ -110,15 +110,16 @@ class FlowRepository extends AbstractRepository
      *
      * A flow is only executable when every node's table lives in the same
      * application (validateGraph / FlowEngine resolve tables per-application via
-     * findProjectTable). So we first duplicate each referenced table into the
-     * target, remap the nodes' table_id to the new copies, then create the flow
-     * copy owned by the target.
+     * findProjectTable). So each referenced table is first brought into the
+     * target — reused when a compatible table of the same origin is already
+     * there, duplicated otherwise (see copyReferencedTables) — the nodes'
+     * table_id are remapped, then the flow copy is created in the target.
      *
      * The graph is NOT re-validated through createOrUpdate here: validateGraph
      * runs against the CURRENT (source) application, whereas the remapped ids
-     * point at the target's tables. The source graph was already valid and we
-     * only swap table ids (for identical copies) and the owning application, so
-     * writing directly is safe.
+     * point at the target's tables. The source graph was already valid and a
+     * table is only swapped for a copy, or for a table that canStandIn() checked
+     * against this very graph, so writing directly is safe.
      *
      * @param  string $id         Source flow id (scoped to the current application).
      * @param  string $project_id Target application id.
@@ -133,7 +134,12 @@ class FlowRepository extends AbstractRepository
         unset($values['applications']);
         unset($values['category_id']);
 
-        $values['nodes'] = $this->copyReferencedTables($source->nodes ?: [], $project_id);
+        $values['nodes'] = $this->copyReferencedTables(
+            $source->nodes ?: [],
+            $source->edges ?: [],
+            $source->inputs ?: [],
+            $project_id
+        );
 
         /** @var Flow $model */
         $model = $this->getModel()->newInstance();
@@ -151,8 +157,9 @@ class FlowRepository extends AbstractRepository
      *
      * The flow document changes ownership (disappears from the source), but its
      * referenced tables are COPIED into the target (never moved) so that other
-     * flows in the source application keep working. Node table_ids are remapped
-     * to those copies. As in copyTo, the graph is not re-validated against the
+     * flows in the source application keep working — or reused when a compatible
+     * table of the same origin is already there. Node table_ids are remapped
+     * accordingly. As in copyTo, the graph is not re-validated against the
      * source application; applications is set directly (not via the buggy
      * ApplicationableTrait::removeApplication).
      *
@@ -165,7 +172,12 @@ class FlowRepository extends AbstractRepository
         /** @var Flow $flow */
         $flow = $this->read($id);
 
-        $flow->nodes = $this->copyReferencedTables($flow->nodes ?: [], $project_id);
+        $flow->nodes = $this->copyReferencedTables(
+            $flow->nodes ?: [],
+            $flow->edges ?: [],
+            $flow->inputs ?: [],
+            $project_id
+        );
         // String id, consistent with how `applications` is stored across the codebase.
         $flow->applications = [(string) $project_id];
         $flow->category_id = null;
@@ -175,23 +187,36 @@ class FlowRepository extends AbstractRepository
     }
 
     /**
-     * Duplicate every table referenced by a flow's nodes into the target
-     * application and return the nodes with their table_id remapped to the copies.
+     * Bring every table referenced by a flow's nodes into the target application
+     * and return the nodes with their table_id remapped.
      *
-     * Distinct table ids are copied once each (a table used by several nodes maps
-     * to a single copy). Tables are read from the current (source) application via
-     * findProjectTable; a node whose table cannot be resolved keeps its original
-     * id (validateGraph would already have rejected such a flow on save, so this
-     * is defensive only).
+     * A table already present in the target — same origin (Table::originId), and
+     * still usable by this graph (canStandIn) — is reused; otherwise the table is
+     * duplicated. So copying or moving several flows that share a table, one call
+     * after the other, brings that table over once. Distinct table ids are handled
+     * once each (a table used by several nodes maps to a single target table).
+     * Tables are read from the current (source) application via findProjectTable;
+     * a node whose table cannot be resolved keeps its original id (validateGraph
+     * would already have rejected such a flow on save, so this is defensive only).
      *
      * @param  array  $nodes       The source flow's nodes ([{ node_id, table_id }]).
+     * @param  array  $edges       The source flow's edges.
+     * @param  array  $inputs      The source flow's inputs ([{ key, type }]).
      * @param  string $project_id  Target application id.
      * @return array  Nodes with remapped table_id.
      */
-    private function copyReferencedTables($nodes, $project_id)
+    private function copyReferencedTables($nodes, $edges, $inputs, $project_id)
     {
         $tablesRepo = new TablesRepository();
-        $idMap = [];   // oldTableId => newTableId
+        $idMap = [];   // oldTableId => target table id
+
+        $inputKeys = [];
+        foreach ($inputs as $input) {
+            $input = (array) $input;
+            if (isset($input['key'])) {
+                $inputKeys[$input['key']] = true;
+            }
+        }
 
         foreach ($nodes as $node) {
             $oldId = isset($node['table_id']) ? (string) $node['table_id'] : null;
@@ -199,10 +224,20 @@ class FlowRepository extends AbstractRepository
                 continue;
             }
             $table = $this->findProjectTable($oldId);
-            if ($table) {
-                $copy = $tablesRepo->duplicateInto($table, $project_id);
-                $idMap[$oldId] = (string) $copy->_id;
+            if (!$table) {
+                continue;
             }
+            // Nodes of this flow that use the table: the stand-in must fit them all.
+            $nodeIds = [];
+            foreach ($nodes as $other) {
+                if (isset($other['table_id']) && (string) $other['table_id'] === $oldId && isset($other['node_id'])) {
+                    $nodeIds[] = $other['node_id'];
+                }
+            }
+            $existing = $this->findReusableTable($table, $project_id, $nodeIds, $edges, $inputKeys);
+            $idMap[$oldId] = $existing
+                ? (string) $existing->_id
+                : (string) $tablesRepo->duplicateInto($table, $project_id)->_id;
         }
 
         return array_map(function ($node) use ($idMap) {
@@ -213,6 +248,110 @@ class FlowRepository extends AbstractRepository
             }
             return $node;
         }, $nodes);
+    }
+
+    /**
+     * A table of the target application that can replace $source in this flow:
+     * same origin (the original itself, or any copy of it), and usable as is by
+     * the graph (canStandIn). The original wins over copies, then the oldest copy,
+     * so the choice is stable. Null when there is none.
+     *
+     * @param  Table  $source     The flow's table in the source application.
+     * @param  string $projectId  Target application id.
+     * @param  array  $nodeIds    The flow's nodes that use $source.
+     * @param  array  $edges      The flow's edges.
+     * @param  array  $inputKeys  The flow's input keys (key => true).
+     * @return Table|null
+     */
+    private function findReusableTable(Table $source, $projectId, array $nodeIds, $edges, array $inputKeys)
+    {
+        $origin = $source->originId();
+        $candidates = Table::where('applications', (string) $projectId)
+            ->where(function ($query) use ($origin) {
+                $query->where('_id', $origin)->orWhere('origin_table_id', $origin);
+            })
+            ->orderBy('created_at')
+            ->get()
+            ->all();
+        // Stable sort: the original first, copies keep their creation order.
+        usort($candidates, function ($a, $b) use ($origin) {
+            return ((string) $a->_id !== $origin) <=> ((string) $b->_id !== $origin);
+        });
+
+        foreach ($candidates as $candidate) {
+            if ($this->canStandIn($candidate, $source, $nodeIds, $edges, $inputKeys)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether $candidate can replace $source for the given nodes without making
+     * the graph invalid (same rules as validateGraph):
+     *   - every field wired into those nodes still exists, with the same type;
+     *   - every other field of $candidate is still fed by a same-named flow input
+     *     (field coverage);
+     *   - when those nodes' output feeds another node, it keeps its type family.
+     *
+     * @param  Table  $candidate
+     * @param  Table  $source
+     * @param  array  $nodeIds
+     * @param  array  $edges
+     * @param  array  $inputKeys  key => true
+     * @return bool
+     */
+    private function canStandIn(Table $candidate, Table $source, array $nodeIds, $edges, array $inputKeys)
+    {
+        $sourceTypes = $this->fieldTypes($source);
+        $candidateTypes = $this->fieldTypes($candidate);
+        $sameOutputFamily = $this->typeFamily($this->tableOutputType($candidate))
+            === $this->typeFamily($this->tableOutputType($source));
+
+        foreach ($nodeIds as $nodeId) {
+            $wired = [];
+            foreach ($edges as $edge) {
+                $edge = (array) $edge;
+                $into = isset($edge['into']) ? (array) $edge['into'] : [];
+                $from = isset($edge['from']) ? (array) $edge['from'] : [];
+                if (isset($into['node'], $into['field']) && $into['node'] === $nodeId) {
+                    $key = $into['field'];
+                    if (!isset($candidateTypes[$key], $sourceTypes[$key]) || $candidateTypes[$key] !== $sourceTypes[$key]) {
+                        return false;
+                    }
+                    $wired[$key] = true;
+                }
+                if (isset($from['node']) && $from['node'] === $nodeId && !$sameOutputFamily) {
+                    return false;
+                }
+            }
+            foreach (array_keys($candidateTypes) as $key) {
+                if (!isset($wired[$key]) && !isset($inputKeys[$key])) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * A table's fields as key => type.
+     *
+     * @param  Table $table
+     * @return array
+     */
+    private function fieldTypes(Table $table)
+    {
+        $types = [];
+        foreach (($table->fields ?: []) as $field) {
+            if (isset($field['key'])) {
+                $types[$field['key']] = isset($field['type']) ? $field['type'] : 'string';
+            }
+        }
+
+        return $types;
     }
 
     /**
