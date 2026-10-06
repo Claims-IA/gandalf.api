@@ -2968,9 +2968,15 @@ paths:
         directly (`POST /api/v1/tables/{id}/decisions`) must send the new key.
         Conditions are renamed before validation; a condition sent with its
         stored `_id` follows the rename only if its `field_key` was left as
-        stored. The response `meta` then reports `field_renames` (old key to new
-        key), `flows_updated` and `flows_failed` (flow titles). A changelog
-        rollback of the table makes the flows follow the restored keys too.
+        stored; a stored condition left on a key that a renamed field now takes
+        (its field was removed) is dropped, and a condition the client wrote on
+        the new key wins. Field `_id`s must be distinct. The response `meta`
+        then reports `field_renames` (old key to new key), `flows_updated`,
+        `flows_failed` (not updated) and `flows_invalid` (updated, but whose
+        graph no longer validates, e.g. an input of an incompatible type now
+        wired explicitly; fix the flow before its next save), as flow titles. A
+        changelog rollback of the table makes the flows follow the restored keys
+        too.
       operationId: updateTable
       security:
         - BearerAuth: []

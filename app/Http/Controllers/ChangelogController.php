@@ -17,6 +17,7 @@ use Nebo15\Changelog\Changelog;
 use Nebo15\Changelog\ControllerInterface;
 use App\Models\Table;
 use App\Repositories\FlowRepository;
+use App\Repositories\TablesRepository;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
 use Nebo15\REST\Response;
 use Illuminate\Http\Request;
@@ -129,7 +130,9 @@ class ChangelogController extends Controller implements ControllerInterface
     {
         // A table rollback can rename fields back (same field _id, other key):
         // the flows that followed the rename must follow the rollback too.
-        $keysBefore = $table === 'tables' ? $this->tableFieldKeys($model_id) : [];
+        // (The rollback result only says whether the save succeeded, so the
+        // fields after it are read back.)
+        $fieldsBefore = $table === 'tables' ? $this->tableFields($model_id) : [];
 
         $result = $this->changelogModel->rollback(
             $table,
@@ -139,12 +142,7 @@ class ChangelogController extends Controller implements ControllerInterface
         );
 
         if ($table === 'tables') {
-            $renames = [];
-            foreach ($this->tableFieldKeys($model_id) as $fieldId => $key) {
-                if (isset($keysBefore[$fieldId]) && $keysBefore[$fieldId] !== $key) {
-                    $renames[$keysBefore[$fieldId]] = $key;
-                }
-            }
+            $renames = TablesRepository::fieldRenamesBetween($fieldsBefore, $this->tableFields($model_id));
             if ($renames) {
                 $result += (new FlowRepository())->followFieldRenames($model_id, $renames);
             }
@@ -154,23 +152,23 @@ class ChangelogController extends Controller implements ControllerInterface
     }
 
     /**
-     * A table's field keys by field _id (empty when the table is not found in
-     * the current application).
+     * A table's fields, as arrays (empty when the table is not found in the
+     * current application). Only the fields are read.
      *
      * @param  string $id
      * @return array
      */
-    private function tableFieldKeys($id)
+    private function tableFields($id)
     {
         $table = Table::where('_id', $id)
             ->where('applications', (string) ApplicationableHelper::getApplicationId())
-            ->first();
-        $keys = [];
+            ->first(['fields']);
+        $fields = [];
         foreach ((($table ? $table->fields : null) ?: []) as $field) {
-            $keys[(string) $field->_id] = $field->key;
+            $fields[] = ['_id' => (string) $field->_id, 'key' => $field->key];
         }
 
-        return $keys;
+        return $fields;
     }
 
     /**

@@ -252,9 +252,15 @@ class FlowRepository extends AbstractRepository
      * rollback). Each flow is rewritten by renameEdges and saved on its own: a
      * failure is logged and reported, the other flows are still updated.
      *
+     * A rewritten flow is saved even when its graph no longer validates (e.g. an
+     * input that fed the renamed field implicitly, of an incompatible type, now
+     * feeds it through an explicit edge, which validateGraph type-checks): the
+     * flow keeps running as before, and is reported in flows_invalid, as its next
+     * save would be refused until it is fixed.
+     *
      * @param  string $tableId
      * @param  array  $renames  old key => new key
-     * @return array  ['flows_updated' => titles, 'flows_failed' => titles]
+     * @return array  ['flows_updated' => titles, 'flows_failed' => titles, 'flows_invalid' => titles (among flows_updated)]
      */
     public function followFieldRenames($tableId, array $renames)
     {
@@ -263,24 +269,35 @@ class FlowRepository extends AbstractRepository
             ->where('nodes.table_id', $tableId)
             ->get();
 
-        $result = ['flows_updated' => [], 'flows_failed' => []];
+        $result = ['flows_updated' => [], 'flows_failed' => [], 'flows_invalid' => []];
         foreach ($flows as $flow) {
-            $edges = self::renameEdges(
-                $flow->edges ?: [],
-                $this->nodesUsingTable($flow->nodes ?: [], $tableId),
-                $this->inputTypes($flow->inputs ?: []),
-                $renames
-            );
-            if ($edges === null) {
-                continue;
-            }
             try {
+                $edges = self::renameEdges(
+                    $flow->edges ?: [],
+                    $this->nodesUsingTable($flow->nodes ?: [], $tableId),
+                    $this->inputTypes($flow->inputs ?: []),
+                    $renames
+                );
+                if ($edges === null) {
+                    continue;
+                }
                 $flow->edges = $edges;
                 $flow->save();
                 $result['flows_updated'][] = $flow->title;
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 error_log("Flow {$flow->_id} could not follow a field rename of table $tableId: " . $e->getMessage());
                 $result['flows_failed'][] = $flow->title;
+                continue;
+            }
+            try {
+                $this->validateGraph([
+                    'inputs' => $flow->inputs ?: [],
+                    'outputs' => $flow->outputs ?: [],
+                    'nodes' => $flow->nodes ?: [],
+                    'edges' => $edges,
+                ]);
+            } catch (\Throwable $e) {
+                $result['flows_invalid'][] = $flow->title;
             }
         }
 
@@ -293,11 +310,12 @@ class FlowRepository extends AbstractRepository
      * a renamed field that was fed implicitly by the same-named flow input gets
      * an explicit edge from that input (edges win over same-named inputs in
      * FlowEngine), so the flow keeps its inputs, i.e. its own API contract, and
-     * its behavior. An edge into a key that a renamed field now takes, without
-     * coming from that field, targeted a field removed in the same update and is
-     * dropped. Renames apply in one pass from the original keys (a swap stays
-     * correct). Ids and keys are written as strings (PHP turns numeric array
-     * keys into integers).
+     * its behavior. Another edge into the node and key that a renamed field's
+     * edge now feeds targeted a field removed in the same update, and is dropped;
+     * an edge that no renamed field's edge replaces is kept (it may point at a
+     * key the rename restores, e.g. a rollback). Renames apply in one pass from
+     * the original keys (a swap stays correct). Ids and keys are written as
+     * strings (PHP turns numeric array keys into integers).
      *
      * @param  array $edges
      * @param  array $nodeIds    Nodes using the table.
@@ -311,14 +329,11 @@ class FlowRepository extends AbstractRepository
         foreach ($nodeIds as $nodeId) {
             $nodes[(string) $nodeId] = true;
         }
-        $targets = [];
-        foreach ($renames as $new) {
-            $targets[(string) $new] = true;
-        }
 
         $result = [];
         $wired = [];   // "node:old key" fed by an edge before the rename
-        $changed = false;
+        $moved = [];   // indexes in $result of the retargeted and added edges
+        $fed = [];     // "node:new key" fed by those edges
         foreach ($edges as $edge) {
             $edge = (array) $edge;
             $into = isset($edge['into']) ? (array) $edge['into'] : [];
@@ -326,12 +341,10 @@ class FlowRepository extends AbstractRepository
                 $field = (string) $into['field'];
                 if (isset($renames[$field])) {
                     $wired[$into['node'] . ':' . $field] = true;
+                    $fed[$into['node'] . ':' . $renames[$field]] = true;
                     $into['field'] = (string) $renames[$field];
                     $edge['into'] = $into;
-                    $changed = true;
-                } elseif (isset($targets[$field])) {
-                    $changed = true;
-                    continue;
+                    $moved[count($result)] = true;
                 }
             }
             $result[] = $edge;
@@ -339,13 +352,28 @@ class FlowRepository extends AbstractRepository
         foreach (array_keys($nodes) as $nodeId) {
             foreach ($renames as $old => $new) {
                 if (!isset($wired[$nodeId . ':' . $old]) && isset($inputKeys[$old])) {
+                    $fed[$nodeId . ':' . $new] = true;
+                    $moved[count($result)] = true;
                     $result[] = ['from' => ['input' => (string) $old], 'into' => ['node' => (string) $nodeId, 'field' => (string) $new]];
-                    $changed = true;
                 }
             }
         }
+        if (!$moved) {
+            return null;
+        }
 
-        return $changed ? $result : null;
+        $kept = [];
+        foreach ($result as $i => $edge) {
+            $into = isset($edge['into']) ? (array) $edge['into'] : [];
+            if (!isset($moved[$i]) && isset($into['node'], $into['field'])
+                && is_scalar($into['node']) && is_scalar($into['field'])
+                && isset($fed[$into['node'] . ':' . $into['field']])) {
+                continue;
+            }
+            $kept[] = $edge;
+        }
+
+        return $kept;
     }
 
     /**
@@ -463,14 +491,16 @@ class FlowRepository extends AbstractRepository
                 $edge = (array) $edge;
                 $into = isset($edge['into']) ? (array) $edge['into'] : [];
                 $from = isset($edge['from']) ? (array) $edge['from'] : [];
-                if (isset($into['node'], $into['field']) && $into['node'] === $nodeId) {
+                // Node ids compared as strings: nodesUsingTable casts them, and a
+                // flow stored through the API may hold integer ids.
+                if (isset($into['node'], $into['field']) && (string) $into['node'] === (string) $nodeId) {
                     $key = $into['field'];
                     if (!isset($candidateTypes[$key], $sourceTypes[$key]) || $candidateTypes[$key] !== $sourceTypes[$key]) {
                         return false;
                     }
                     $wired[$key] = true;
                 }
-                if (isset($from['node']) && $from['node'] === $nodeId && !$sameOutputFamily) {
+                if (isset($from['node']) && (string) $from['node'] === (string) $nodeId && !$sameOutputFamily) {
                     return false;
                 }
             }

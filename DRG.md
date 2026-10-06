@@ -295,7 +295,7 @@ All routes are application-scoped (`X-Application` header) and ACL-gated.
 
 | Method & path | Handler | ACL scope |
 | ------------- | ------- | --------- |
-| `GET    /api/v1/admin/flows` | list flows | `tables_view` |
+| `GET    /api/v1/admin/flows` | list flows (filters: `title`, `description`, `category_id`, `table_id`) | `tables_view` |
 | `POST   /api/v1/admin/flows` | create flow | `tables_create` |
 | `GET    /api/v1/admin/flows/{id}` | read flow | `tables_view` |
 | `PUT    /api/v1/admin/flows/{id}` | update flow | `tables_update` |
@@ -316,7 +316,16 @@ partial update (e.g. `title` only) merges over the stored graph and never wipes
 update): the project's flows using the table follow the rename. Edges into the
 field target the new key, and a field that was fed implicitly by the same-named
 flow input gets an explicit edge from that input, so a flow keeps its inputs
-and its behavior.
+and its behavior. When a field is removed and another one renamed to its key in
+the same update, the edge into the removed field is dropped; an edge that no
+renamed field's edge replaces is kept. Each flow is saved on its own, and the
+table update's response `meta` reports `field_renames`, `flows_updated`,
+`flows_failed` (not updated, to fix by hand) and `flows_invalid` (updated, but
+the graph no longer validates, e.g. an untyped input that fed a numeric field
+implicitly now feeds it through an explicit edge, which is type-checked: the
+flow runs as before, its next save is refused until it is fixed). A changelog
+rollback of the table makes the flows follow the restored keys the same way.
+`GET /api/v1/admin/flows?table_id=…` lists the flows using a table.
 
 **Copy and move to another project** (project admins only, the caller must also
 be a member of the target project): a flow can only run when its tables live in

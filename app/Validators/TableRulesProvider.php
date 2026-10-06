@@ -51,7 +51,7 @@ class TableRulesProvider
             'category_id' => 'sometimes|string',
             'matching_type' => 'required|in:first,scoring_sum,scoring_max,scoring_min,scoring_count',
             'decision_type' => 'required|in:alpha_num,numeric,string,json|decision_type',
-            'fields' => 'required|array',
+            'fields' => 'required|array|distinctFieldIds',
             'fields.*._id' => 'sometimes|mongoId',
             'fields.*.title' => 'required|string',
             // Only 'variant_id' is globally reserved (historical check-time

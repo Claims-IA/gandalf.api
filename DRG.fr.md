@@ -308,7 +308,7 @@ protégées par ACL.
 
 | Méthode & chemin | Handler | Scope ACL |
 | ---------------- | ------- | --------- |
-| `GET    /api/v1/admin/flows` | lister les flows | `tables_view` |
+| `GET    /api/v1/admin/flows` | lister les flows (filtres : `title`, `description`, `category_id`, `table_id`) | `tables_view` |
 | `POST   /api/v1/admin/flows` | créer un flow | `tables_create` |
 | `GET    /api/v1/admin/flows/{id}` | lire un flow | `tables_view` |
 | `PUT    /api/v1/admin/flows/{id}` | mettre à jour un flow | `tables_update` |
@@ -330,7 +330,18 @@ est revalidé.
 mise à jour de la table) : les flows du projet qui utilisent la table suivent le
 renommage. Les fils vers le champ visent la nouvelle clé, et un champ qui était
 alimenté implicitement par l'entrée du flow de même nom reçoit un fil explicite
-depuis cette entrée : le flow garde ses entrées et son comportement.
+depuis cette entrée : le flow garde ses entrées et son comportement. Quand un
+champ est supprimé et un autre renommé avec sa clé dans la même mise à jour, le
+fil vers le champ supprimé est retiré ; un fil qu'aucun fil de champ renommé ne
+remplace est conservé. Chaque flow est enregistré séparément, et le `meta` de la
+réponse de mise à jour de la table indique `field_renames`, `flows_updated`,
+`flows_failed` (non mis à jour, à corriger à la main) et `flows_invalid` (mis à
+jour, mais le graphe ne passe plus la validation, par exemple une entrée non
+typée qui alimentait implicitement un champ numérique l'alimente désormais par
+un fil explicite, dont le type est vérifié : le flow s'exécute comme avant, son
+prochain enregistrement est refusé tant qu'il n'est pas corrigé). Un rollback de
+la table via le changelog fait suivre les clés restaurées de la même façon.
+`GET /api/v1/admin/flows?table_id=…` liste les flows qui utilisent une table.
 
 **Copie et déplacement vers un autre projet** (réservés aux admins du projet, qui
 doivent aussi être membres du projet cible) : un flow ne s'exécute que si ses

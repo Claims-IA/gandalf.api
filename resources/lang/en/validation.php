@@ -85,6 +85,7 @@ return [
     'group_tables_exists' => 'Table must exist',
     'group_table_matching_type' => 'All Table.matching_type must be defined as "first"',
     'between_string' => 'Value must be separated by a semicolon. Value before the semicolon must be less than after the semicolon',
+    'distinct_field_ids' => 'Each of the :attribute must have a single _id, listed once.',
     'iso_date' => 'The :attribute must be an ISO 8601 date (YYYY-MM-DD).',
     'meta_keys_amount' => 'Amount of keys for Meta Data must be less or equal to 24',
     'probability_sum' => 'The sum of all passed variants probabilities should be 100',

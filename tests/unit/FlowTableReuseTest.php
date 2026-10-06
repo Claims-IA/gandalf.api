@@ -111,4 +111,18 @@ class FlowTableReuseTest extends \Codeception\TestCase\Test
         // ...accepted when n1's output is not wired to another node.
         $this->assertTrue($this->canStandIn($scoring, ['age' => 'numeric'], [$this->wire('age')], ['age' => 'numeric'], 'string'));
     }
+
+    public function testIntegerNodeIdsAreChecked()
+    {
+        // nodesUsingTable gives '1'; a flow stored through the API may use node 1.
+        $method = new ReflectionMethod(FlowRepository::class, 'canStandIn');
+        $method->setAccessible(true);
+        $scoring = $this->table(['age' => 'numeric'], 'scoring_sum', 'numeric');
+        $edges = [
+            ['from' => ['input' => 'age'], 'into' => ['node' => 1, 'field' => 'age']],
+            ['from' => ['node' => 1, 'output' => 'final_decision'], 'into' => ['node' => 2, 'field' => 'score']],
+        ];
+
+        $this->assertFalse($method->invoke(new FlowRepository(), $scoring, ['age' => 'numeric'], 'text', ['1'], $edges, ['age' => 'numeric']));
+    }
 }

@@ -89,8 +89,12 @@ class TableValidator
      */
     private function conditionFieldType(array $data, $key)
     {
+        if (!is_scalar($key)) {
+            return null;
+        }
         foreach ((array) array_get($data, 'fields', []) as $field) {
-            if (!isset($field['key']) || Field::normalizeKey($field['key']) !== Field::normalizeKey($key)) {
+            if (!is_array($field) || !isset($field['key']) || !is_scalar($field['key'])
+                || Field::normalizeKey($field['key']) !== Field::normalizeKey($key)) {
                 continue;
             }
             if (!empty($field['preset']['condition'])) {
@@ -172,6 +176,39 @@ class TableValidator
 
         // Each defined field should have at least one corresponding condition
         return count($unique_conditions) >= count($unique_fields);
+    }
+
+    /**
+     * Validate that each field _id is a plain value listed once. Table::setFields
+     * would store two fields with one _id as one (EmbedsMany replaces by _id),
+     * silently dropping a field or renaming it. Checked on the whole fields array:
+     * App\Http\Services\Validator::each flattens an object _id away, so the
+     * per-field mongoId rule never sees it, and Lumen's 'distinct' rule needs
+     * wildcard bookkeeping that this each() does not do.
+     *
+     * @param  string    $attribute
+     * @param  mixed     $value      The fields array.
+     * @param  array     $parameters Not used.
+     * @param  Validator $validator  Parent validator.
+     * @return bool
+     */
+    public function distinctFieldIds($attribute, $value, $parameters, Validator $validator)
+    {
+        $ids = [];
+        foreach ((array) $value as $field) {
+            if (is_array($field) && isset($field['_id'])) {
+                if (!is_scalar($field['_id'])) {
+                    return false;
+                }
+                $id = (string) $field['_id'];
+                if (isset($ids[$id])) {
+                    return false;
+                }
+                $ids[$id] = true;
+            }
+        }
+
+        return true;
     }
 
     /**
