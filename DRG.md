@@ -197,7 +197,6 @@ checks, and the message each produces:
 | Source output is `final_decision` | `Edge #2 sources output 'x'; only 'final_decision' is available today.` |
 | A `json` output cannot feed a table input | `Edge #2: node 'n_risk' outputs json, which cannot feed a table input.` |
 | Source and target types are compatible | `Edge #2: output of 'n_risk' (numeric) is not compatible with field 'name' (string).` |
-| **Field coverage** — every table field is fed by an edge or a same-named input | `Field 'salary' of node 'n_risk' is not fed by any edge or flow input.` |
 | The graph is acyclic | `The graph contains a cycle; a decision graph must be acyclic.` |
 | At least one output, uniquely named, resolving to a known node | `The flow must declare at least one output.` / `Duplicate output name 'verdict'.` / `Output #0 references an unknown node.` |
 
@@ -205,9 +204,12 @@ The cycle check runs **regardless of other errors**, so a graph that has both a
 cycle and, say, a bad output reports both in one response instead of surfacing
 the cycle only on a second save.
 
-> **Field coverage** is why a partial run never silently fails on a missing
-> field: if a table field is neither wired nor covered by a same-named input,
-> the flow is rejected at save time rather than 422-ing on a later run.
+> **Field coverage is not enforced.** A node's table may declare many fields
+> while a flow only wires the few its rules need — which fields a node receives
+> is the designer's choice. An unwired field is passed as `null` at run time
+> (`FlowEngine::buildNodeInput`), which Scoring's `present` rule accepts and the
+> condition evaluator handles via `$is_null` / `$is_set`, so the run does not
+> fail on it.
 
 ---
 
@@ -234,9 +236,10 @@ Step by step:
    - `requireTable()` re-loads the table, scoped to the current application, and
      fails clearly if it was deleted since the flow was saved.
    - `buildNodeInput()` assembles **only that table's own fields**: each field is
-     fed from its wired edge if present, otherwise from a same-named flow input.
-     Unrelated inputs — including `variant_id`, which is table-local — are never
-     forwarded to a node.
+     fed from its wired edge if present, otherwise from a same-named flow input,
+     otherwise passed as `null` (an unwired field is allowed — see field coverage
+     above). Unrelated inputs — including `variant_id`, which is table-local — are
+     never forwarded to a node.
    - `Scoring::check()` evaluates the table unchanged and returns the unified
      envelope (carrying `answer`, `answer_types`, `_id`).
 3. **Assemble** — `assembleOutputs()` reads each declared output's
