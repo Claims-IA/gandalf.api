@@ -70,7 +70,7 @@ and finally assembles the flow's named `outputs` from the per-node results.
   "title": "Credit approval",
   "description": "",
 
-  // Public input contract. `type` ∈ numeric | boolean | string.
+  // Public input contract. `type` ∈ numeric | boolean | string | date.
   "inputs": [
     { "key": "salary",  "type": "numeric" },
     { "key": "history", "type": "string"  }
@@ -268,15 +268,24 @@ family** (`FlowRepository::typesCompatible` / `typeFamily`):
 | `text`    | `string`, `alpha_num`            |
 | `numeric` | `numeric`, `number`, `integer`   |
 | `boolean` | `boolean`, `bool`                |
+| `date`    | `date`                           |
 | —         | `json` (and any unknown type) is **never** wireable, in or out |
 
-So a numeric score cannot feed a `string` field, and a `boolean` field can only
-be fed by a `boolean` source. A mismatch is rejected at save with a 422.
+So a numeric score cannot feed a `string` field, a `boolean` field can only
+be fed by a `boolean` source, and a `date` input can only feed a `date` field
+(and a `date` field can only be fed by a `date` input). A mismatch is rejected
+at save with a 422.
 
 > **Note:** a table output is always `numeric` (scoring) or the table's
 > `decision_type` (`alpha_num` | `numeric` | `string` | `json`) — **never
-> `boolean`**. A downstream `boolean` field can therefore only be fed by a
-> `boolean` flow input, not by an upstream node.
+> `boolean` or `date`**. A downstream `boolean` or `date` field can therefore
+> only be fed by a flow input of the same type, not by an upstream node: a date
+> never flows between nodes.
+
+At run time a `date` input takes the same values as a table `date` field: an
+ISO 8601 date `YYYY-MM-DD` (a date-time is accepted, its time part ignored); an
+invalid value fails the node's field validation with a 422 (see
+[API_GUIDE.md](API_GUIDE.md#field-types)).
 
 ---
 
@@ -286,12 +295,14 @@ All routes are application-scoped (`X-Application` header) and ACL-gated.
 
 | Method & path | Handler | ACL scope |
 | ------------- | ------- | --------- |
-| `GET    /api/v1/admin/flows` | list flows | `tables_view` |
+| `GET    /api/v1/admin/flows` | list flows (filters: `title`, `description`, `category_id`, `table_id`) | `tables_view` |
 | `POST   /api/v1/admin/flows` | create flow | `tables_create` |
 | `GET    /api/v1/admin/flows/{id}` | read flow | `tables_view` |
 | `PUT    /api/v1/admin/flows/{id}` | update flow | `tables_update` |
 | `DELETE /api/v1/admin/flows/{id}` | delete flow | `tables_delete` |
 | `GET    /api/v1/admin/flows/{id}/runs` | paginated run history | `tables_view` |
+| `POST   /api/v1/admin/flows/{id}/copyto/{project_id}` | copy the flow to another project | `tables_create` |
+| `POST   /api/v1/admin/flows/{id}/moveto/{project_id}` | move the flow to another project | `tables_create`, `tables_delete` |
 | `POST   /api/v1/flows/{id}/decisions` | **run the flow** | `decisions_make` |
 
 CRUD is provided by the Nebo15 `AbstractController`; writes go through
@@ -300,6 +311,33 @@ CRUD is provided by the Nebo15 `AbstractController`; writes go through
 **Update semantics:** a `PUT` only overrides the keys present in the body — a
 partial update (e.g. `title` only) merges over the stored graph and never wipes
 `nodes`/`edges`/`outputs`. The merged graph is what gets re-validated.
+
+**Renaming a table field** (same field `_id`, new `key`, through the table
+update): the project's flows using the table follow the rename. Edges into the
+field target the new key, and a field that was fed implicitly by the same-named
+flow input gets an explicit edge from that input, so a flow keeps its inputs
+and its behavior. When a field is removed and another one renamed to its key in
+the same update, the edge into the removed field is dropped; an edge that no
+renamed field's edge replaces is kept. Each flow is saved on its own, and the
+table update's response `meta` reports `field_renames`, `flows_updated`,
+`flows_failed` (not updated, to fix by hand) and `flows_invalid` (updated, but
+the graph no longer validates, e.g. an untyped input that fed a numeric field
+implicitly now feeds it through an explicit edge, which is type-checked: the
+flow runs as before, its next save is refused until it is fixed). A changelog
+rollback of the table makes the flows follow the restored keys the same way.
+`GET /api/v1/admin/flows?table_id=…` lists the flows using a table.
+
+**Copy and move to another project** (project admins only, the caller must also
+be a member of the target project): a flow can only run when its tables live in
+its own project, so its referenced tables are brought into the target and each
+node's `table_id` is remapped. A table already present in the target is reused
+rather than copied again when it has the same origin (the original itself, or an
+earlier copy of it: every table copy remembers its root table) and the graph can
+use it as is: every field wired into it still exists with the same type, every
+other field is still fed by a same-named flow input, and its output keeps its
+type family when it feeds another node. Otherwise the table is duplicated. So
+copying several flows that share a table brings that table over once. A move
+never moves tables: the source project keeps them for its other flows.
 
 ---
 
@@ -421,8 +459,9 @@ A `FlowValidationException` renders as **HTTP 422**:
 Deferred by design (noted as future evolutions):
 
 - **Single output per node** — `from_output` is always `final_decision`.
-- **No `boolean` table output** — `decision_type` cannot be `boolean`, so boolean
-  node-to-node wiring is impossible (see [Type compatibility](#type-compatibility)).
+- **No `boolean` or `date` table output** — `decision_type` cannot be `boolean`
+  or `date`, so boolean or date node-to-node wiring is impossible (see
+  [Type compatibility](#type-compatibility)).
 - **No per-node variant selection** — a node runs its table's auto-selected /
   default variant; `variant_id` is not threaded per node.
 - **No nested flows** — a node references a table, not a sub-flow (recursion /

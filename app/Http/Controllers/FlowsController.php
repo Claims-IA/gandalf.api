@@ -47,6 +47,7 @@ class FlowsController extends AbstractController
             'title'       => 'sometimes|min:1',
             'description' => 'sometimes|min:1',
             'category_id' => 'sometimes|string',
+            'table_id'    => 'sometimes|string',
         ],
     ];
 
@@ -86,11 +87,12 @@ class FlowsController extends AbstractController
     }
 
     /**
-     * Copy a flow into another project, bringing copies of its referenced tables.
+     * Copy a flow into another project, bringing its referenced tables.
      *
      * Admin-only; the caller must be a member of the target project (guardCopyMove).
-     * The referenced tables are duplicated into the target and the node table_ids
-     * remapped, so the copied flow stays executable there.
+     * Each referenced table is reused when a compatible table of the same origin is
+     * already in the target, duplicated otherwise, and the node table_ids remapped,
+     * so the copied flow stays executable there (FlowRepository::copyTo).
      *
      * @param  string $id         Flow ObjectID.
      * @param  string $project_id Target project/application ObjectID.
@@ -113,7 +115,8 @@ class FlowsController extends AbstractController
      *
      * Admin-only; the caller must be a member of the target project. The flow
      * disappears from the source project; its referenced tables are COPIED (not
-     * moved) into the target so other source flows keep working.
+     * moved) into the target so other source flows keep working, or reused when a
+     * compatible table of the same origin is already there (FlowRepository::moveTo).
      *
      * @param  string $id         Flow ObjectID.
      * @param  string $project_id Target project/application ObjectID.

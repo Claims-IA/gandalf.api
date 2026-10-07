@@ -24,7 +24,7 @@
  *
  *   ## FIELDS
  *   key,title,type
- *   <key>,<title>,<numeric|boolean|string>
+ *   <key>,<title>,<numeric|boolean|string|date>
  *   ...
  *
  *   ## RULES
@@ -492,7 +492,7 @@ class TableImportService
                 if (empty($field['key'])) {
                     $errors[] = "Champ #$i : la clé (key) est obligatoire.";
                 }
-                $validTypes = ['numeric', 'boolean', 'string'];
+                $validTypes = ['numeric', 'boolean', 'string', 'date'];
                 if (!empty($field['type']) && !in_array($field['type'], $validTypes)) {
                     $errors[] = "Champ '{$field['key']}' : type invalide '{$field['type']}'. Valeurs acceptées: " . implode(', ', $validTypes) . '.';
                 }
@@ -506,10 +506,17 @@ class TableImportService
 
         if (isset($data['fields']) && isset($variant['rules'])) {
             $validFieldKeys = array_column($data['fields'], 'key');
+            $fieldTypes = array_column($data['fields'], 'type', 'key');
             foreach ($variant['rules'] as $ruleIdx => $rule) {
                 foreach ($rule['conditions'] ?? [] as $condIdx => $cond) {
                     if (!in_array($cond['field_key'], $validFieldKeys, true)) {
                         $errors[] = "Règle #$ruleIdx, condition #$condIdx: champ inconnu '{$cond['field_key']}'.";
+                    } elseif (($fieldTypes[$cond['field_key']] ?? null) === 'date'
+                        && !DateValue::isValidConditionValue($cond['condition'] ?? '', $cond['value'] ?? null)) {
+                        // This legacy path does not run TableRulesProvider: check the date
+                        // grammar here, or the condition would be stored and never match.
+                        $errors[] = "Règle #$ruleIdx, condition #$condIdx: condition de date invalide pour '{$cond['field_key']}' "
+                            . '(opérateurs =, !=, <, <=, >, >= et intervalles ; dates AAAA-MM-JJ ou today±N).';
                     }
                 }
             }

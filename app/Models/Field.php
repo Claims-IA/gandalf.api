@@ -76,6 +76,18 @@ class Field extends Base
      */
     public function setKeyAttribute($value)
     {
-        $this->attributes['key'] = strtolower(str_replace(' ', '_', trim($value)));
+        $this->attributes['key'] = self::normalizeKey($value);
+    }
+
+    /**
+     * The stored form of a field key (also used for conditions' field_key and
+     * wherever a submitted key is compared with stored ones).
+     *
+     * @param  string $value
+     * @return string
+     */
+    public static function normalizeKey($value)
+    {
+        return strtolower(str_replace(' ', '_', trim((string) $value)));
     }
 }

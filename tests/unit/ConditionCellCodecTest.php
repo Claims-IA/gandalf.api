@@ -304,4 +304,72 @@ class ConditionCellCodecTest extends \Codeception\TestCase\Test
             $this->assertSame($normalized, $this->codec->decode($cell2)['value']);
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Date columns: comparison values and bounds are dates, not numbers
+    // -------------------------------------------------------------------------
+
+    public function dateDecodeProvider(): array
+    {
+        return [
+            // cell, expected operator, expected value
+            'gte iso'             => ['>= 2026-01-01', '$gte', '2026-01-01'],
+            'lt today'            => ['< today', '$lt', 'today'],
+            'relative normalized' => ['>= Today - 30D', '$gte', 'today-30d'],
+            'interval iso'        => ['[2026-01-01..2026-12-31]', '$between', '2026-01-01;2026-12-31'],
+            'interval relative'   => [']today-1y..today]', '$between_lexcl', 'today-1y;today'],
+            'not interval'        => ['not [2026-01-01..2026-06-30]', '$not_between', '2026-01-01;2026-06-30'],
+            'bare date = eq'      => ['2026-03-15', '$eq', '2026-03-15'],
+            'keywords unchanged'  => ['*', '$any', true],
+        ];
+    }
+
+    /**
+     * @dataProvider dateDecodeProvider
+     */
+    public function testDateDecode(string $cell, string $operator, $value)
+    {
+        $this->assertSame(['condition' => $operator, 'value' => $value], $this->codec->decode($cell, 'date'));
+    }
+
+    public function dateRejectProvider(): array
+    {
+        return [
+            'number comparison' => ['> 42'],
+            'french date'       => ['>= 15/03/2026'],
+            'numeric interval'  => ['[1..5]'],
+            'half date range'   => ['[2026-01-01..soon]'],
+        ];
+    }
+
+    /**
+     * @dataProvider dateRejectProvider
+     */
+    public function testDateDecodeRejectsNonDates(string $cell)
+    {
+        $this->setExpectedException(ConditionCellParseException::class);
+        $this->codec->decode($cell, 'date');
+    }
+
+    public function testDateRoundTrip()
+    {
+        foreach ([
+            ['$gte', 'today-30d'],
+            ['$lt', '2026-01-01'],
+            ['$between', 'today-1y;today'],
+            ['$between_rexcl', '2026-01-01;2026-12-31'],
+            ['$not_between', '2026-01-01;2026-06-30'],
+            ['$eq', '2026-03-15'],
+            ['$ne', 'today'],
+        ] as [$op, $value]) {
+            $decoded = $this->codec->decode($this->codec->encode($op, $value), 'date');
+            $this->assertSame(['condition' => $op, 'value' => $value], $decoded, "round trip for $op");
+        }
+    }
+
+    public function testNumericColumnsStillRejectDates()
+    {
+        $this->setExpectedException(ConditionCellParseException::class);
+        $this->codec->decode('>= 2026-01-01');
+    }
 }

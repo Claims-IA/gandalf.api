@@ -35,12 +35,17 @@
  * Round-trip invariant: decode(encode($op, $value)) === [$op, $value]
  * (with $value normalized to string; see stringify()).
  *
+ * Comparison and interval values are numbers, except in a date column where
+ * they are dates: ISO "2026-01-01" or relative "today", "today-30d" (see
+ * DateValue). decode() therefore takes the column's field type.
+ *
  * @package App\Services\Excel
  */
 
 namespace App\Services\Excel;
 
 use App\Exceptions\ConditionCellParseException;
+use App\Services\DateValue;
 
 class ConditionCellCodec
 {
@@ -117,11 +122,12 @@ class ConditionCellCodec
      * (the validation layer requires every rule to cover every field, and the
      * engine's $any operator is a purpose-built always-true).
      *
-     * @param  string $cell  Raw cell text.
+     * @param  string $cell       Raw cell text.
+     * @param  string $fieldType  Type of the column's field ('date' expects dates, not numbers).
      * @return array{condition: string, value: mixed}
      * @throws ConditionCellParseException  On unparseable syntax.
      */
-    public function decode(string $cell): array
+    public function decode(string $cell, string $fieldType = 'string'): array
     {
         $cell = trim($cell);
 
@@ -151,7 +157,7 @@ class ConditionCellCodec
 
         // Negated interval: "not [a..b]" or "![a..b]"
         if (preg_match('/^(not\s+|!)(?=[\[\]])/i', $cell, $m)) {
-            $interval = $this->decodeInterval(substr($cell, strlen($m[1])), $cell);
+            $interval = $this->decodeInterval(substr($cell, strlen($m[1])), $cell, $fieldType);
             if ($interval !== null) {
                 if ($interval['condition'] !== '$between') {
                     throw new ConditionCellParseException(
@@ -165,7 +171,7 @@ class ConditionCellCodec
 
         // Interval: [a..b] and exclusive variants
         if ($cell[0] === '[' || $cell[0] === ']') {
-            $interval = $this->decodeInterval($cell, $cell);
+            $interval = $this->decodeInterval($cell, $cell, $fieldType);
             if ($interval !== null) {
                 return $interval;
             }
@@ -190,7 +196,7 @@ class ConditionCellCodec
                     );
                 }
                 if (in_array($operator, ['$gt', '$gte', '$lt', '$lte'], true)) {
-                    $value = $this->normalizeNumeric($value, $cell);
+                    $value = $this->normalizeComparable($value, $cell, $fieldType);
                 }
                 return ['condition' => $operator, 'value' => $value];
             }
@@ -269,12 +275,13 @@ class ConditionCellCodec
      * Try to parse an interval cell "[a..b]" (any bracket variant).
      * Returns null when the text does not match the interval shape at all.
      *
-     * @param  string $text      The candidate interval (negation prefix already stripped).
-     * @param  string $original  Original cell text, for error messages.
+     * @param  string $text       The candidate interval (negation prefix already stripped).
+     * @param  string $original   Original cell text, for error messages.
+     * @param  string $fieldType  Type of the column's field.
      * @return array{condition: string, value: string}|null
-     * @throws ConditionCellParseException  On interval shape with non-numeric bounds.
+     * @throws ConditionCellParseException  On interval shape with bounds of the wrong type.
      */
-    private function decodeInterval(string $text, string $original): ?array
+    private function decodeInterval(string $text, string $original, string $fieldType): ?array
     {
         if (!preg_match('/^([\[\]])\s*(.+?)\s*\.\.\s*(.+?)\s*([\[\]])$/', $text, $m)) {
             return null;
@@ -282,8 +289,8 @@ class ConditionCellCodec
 
         [, $open, $min, $max, $close] = $m;
 
-        $min = $this->normalizeNumeric($min, $original, 'borne');
-        $max = $this->normalizeNumeric($max, $original, 'borne');
+        $min = $this->normalizeComparable($min, $original, $fieldType, 'borne');
+        $max = $this->normalizeComparable($max, $original, $fieldType, 'borne');
 
         // Map bracket pair to operator: "[" opening / "]" closing = inclusive
         $operator = match ($open . $close) {
@@ -348,6 +355,26 @@ class ConditionCellCodec
             return $this->quote($value);
         }
         return $value;
+    }
+
+    /**
+     * Normalize a comparison value or interval bound: a date expression in a
+     * date column, a number everywhere else.
+     *
+     * @throws ConditionCellParseException
+     */
+    private function normalizeComparable(string $value, string $cell, string $fieldType, string $what = 'valeur'): string
+    {
+        if ($fieldType !== 'date') {
+            return $this->normalizeNumeric($value, $cell, $what);
+        }
+        $date = DateValue::canonical($value);
+        if ($date === null) {
+            throw new ConditionCellParseException(
+                "\"$cell\" : la $what \"$value\" n'est pas une date (AAAA-MM-JJ, today, today-30d…)."
+            );
+        }
+        return $date;
     }
 
     /**

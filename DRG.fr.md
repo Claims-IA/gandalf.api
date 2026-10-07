@@ -74,7 +74,7 @@ résultats de chaque nœud.
   "title": "Credit approval",
   "description": "",
 
-  // Contrat d'entrée public. `type` ∈ numeric | boolean | string.
+  // Contrat d'entrée public. `type` ∈ numeric | boolean | string | date.
   "inputs": [
     { "key": "salary",  "type": "numeric" },
     { "key": "history", "type": "string"  }
@@ -280,16 +280,24 @@ famille de types** (`FlowRepository::typesCompatible` / `typeFamily`) :
 | `text`    | `string`, `alpha_num`            |
 | `numeric` | `numeric`, `number`, `integer`   |
 | `boolean` | `boolean`, `bool`                |
+| `date`    | `date`                           |
 | —         | `json` (et tout type inconnu) n'est **jamais** câblable, en entrée comme en sortie |
 
-Ainsi un score numérique ne peut alimenter un champ `string`, et un champ
-`boolean` ne peut être alimenté que par une source `boolean`. Un désaccord est
-rejeté au save avec un 422.
+Ainsi un score numérique ne peut alimenter un champ `string`, un champ
+`boolean` ne peut être alimenté que par une source `boolean`, et une entrée
+`date` ne peut alimenter qu'un champ `date` (et un champ `date` ne peut être
+alimenté que par une entrée `date`). Un désaccord est rejeté au save avec un 422.
 
 > **Note :** une sortie de table est toujours `numeric` (scoring) ou le
 > `decision_type` de la table (`alpha_num` | `numeric` | `string` | `json`) —
-> **jamais `boolean`**. Un champ `boolean` aval ne peut donc être alimenté que par
-> une entrée de flow `boolean`, pas par un nœud amont.
+> **jamais `boolean` ni `date`**. Un champ `boolean` ou `date` aval ne peut donc
+> être alimenté que par une entrée de flow du même type, pas par un nœud amont :
+> une date ne circule jamais entre nœuds.
+
+À l'exécution, une entrée `date` prend les mêmes valeurs qu'un champ `date` de
+table : une date ISO 8601 `AAAA-MM-JJ` (une date-heure est acceptée, sa partie
+heure ignorée) ; une valeur invalide fait échouer la validation des champs du
+nœud avec une 422 (voir [API_GUIDE.fr.md](API_GUIDE.fr.md#types-de-champs)).
 
 ---
 
@@ -300,12 +308,14 @@ protégées par ACL.
 
 | Méthode & chemin | Handler | Scope ACL |
 | ---------------- | ------- | --------- |
-| `GET    /api/v1/admin/flows` | lister les flows | `tables_view` |
+| `GET    /api/v1/admin/flows` | lister les flows (filtres : `title`, `description`, `category_id`, `table_id`) | `tables_view` |
 | `POST   /api/v1/admin/flows` | créer un flow | `tables_create` |
 | `GET    /api/v1/admin/flows/{id}` | lire un flow | `tables_view` |
 | `PUT    /api/v1/admin/flows/{id}` | mettre à jour un flow | `tables_update` |
 | `DELETE /api/v1/admin/flows/{id}` | supprimer un flow | `tables_delete` |
 | `GET    /api/v1/admin/flows/{id}/runs` | historique paginé des exécutions | `tables_view` |
+| `POST   /api/v1/admin/flows/{id}/copyto/{project_id}` | copier le flow vers un autre projet | `tables_create` |
+| `POST   /api/v1/admin/flows/{id}/moveto/{project_id}` | déplacer le flow vers un autre projet | `tables_create`, `tables_delete` |
 | `POST   /api/v1/flows/{id}/decisions` | **exécuter le flow** | `decisions_make` |
 
 Le CRUD est fourni par l'`AbstractController` Nebo15 ; les écritures passent par
@@ -315,6 +325,36 @@ Le CRUD est fourni par l'`AbstractController` Nebo15 ; les écritures passent pa
 — une mise à jour partielle (p. ex. `title` seul) fusionne par-dessus le graphe
 stocké et n'efface jamais `nodes`/`edges`/`outputs`. C'est le graphe fusionné qui
 est revalidé.
+
+**Renommage d'un champ de table** (même `_id` de champ, nouvelle `key`, via la
+mise à jour de la table) : les flows du projet qui utilisent la table suivent le
+renommage. Les fils vers le champ visent la nouvelle clé, et un champ qui était
+alimenté implicitement par l'entrée du flow de même nom reçoit un fil explicite
+depuis cette entrée : le flow garde ses entrées et son comportement. Quand un
+champ est supprimé et un autre renommé avec sa clé dans la même mise à jour, le
+fil vers le champ supprimé est retiré ; un fil qu'aucun fil de champ renommé ne
+remplace est conservé. Chaque flow est enregistré séparément, et le `meta` de la
+réponse de mise à jour de la table indique `field_renames`, `flows_updated`,
+`flows_failed` (non mis à jour, à corriger à la main) et `flows_invalid` (mis à
+jour, mais le graphe ne passe plus la validation, par exemple une entrée non
+typée qui alimentait implicitement un champ numérique l'alimente désormais par
+un fil explicite, dont le type est vérifié : le flow s'exécute comme avant, son
+prochain enregistrement est refusé tant qu'il n'est pas corrigé). Un rollback de
+la table via le changelog fait suivre les clés restaurées de la même façon.
+`GET /api/v1/admin/flows?table_id=…` liste les flows qui utilisent une table.
+
+**Copie et déplacement vers un autre projet** (réservés aux admins du projet, qui
+doivent aussi être membres du projet cible) : un flow ne s'exécute que si ses
+tables sont dans son propre projet, donc ses tables sont amenées dans le projet
+cible et le `table_id` de chaque nœud est réaffecté. Une table déjà présente dans
+la cible est réutilisée au lieu d'être recopiée si elle a la même origine (la
+table d'origine elle-même, ou une copie antérieure : chaque copie de table retient
+sa table racine) et si le graphe peut l'utiliser telle quelle : chaque champ
+branché existe encore avec le même type, chaque autre champ est encore alimenté
+par une entrée du flow de même nom, et sa sortie garde sa famille de types
+lorsqu'elle alimente un autre nœud. Sinon la table est dupliquée. Copier plusieurs
+flows qui partagent une table n'amène donc cette table qu'une fois. Un déplacement
+ne déplace jamais les tables : le projet source les garde pour ses autres flows.
 
 ---
 
@@ -438,9 +478,9 @@ Une `FlowValidationException` est rendue en **HTTP 422** :
 Reportées à dessein (notées comme évolutions futures) :
 
 - **Une seule sortie par nœud** — `from_output` vaut toujours `final_decision`.
-- **Pas de sortie de table `boolean`** — `decision_type` ne peut pas être
-  `boolean`, donc le câblage booléen de nœud à nœud est impossible (voir
-  [Compatibilité de types](#compatibilité-de-types)).
+- **Pas de sortie de table `boolean` ni `date`** — `decision_type` ne peut être
+  ni `boolean` ni `date`, donc le câblage booléen ou date de nœud à nœud est
+  impossible (voir [Compatibilité de types](#compatibilité-de-types)).
 - **Pas de sélection de variante par nœud** — un nœud exécute la variante
   auto-sélectionnée / par défaut de sa table ; `variant_id` n'est pas transmis par
   nœud.

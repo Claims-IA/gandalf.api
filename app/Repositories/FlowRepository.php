@@ -61,6 +61,11 @@ class FlowRepository extends AbstractRepository
         if (!empty($filters['category_id'])) {
             $where['category_id'] = $filters['category_id'];
         }
+        // Flows having a node on the given table (e.g. the flows a field rename
+        // of that table will update).
+        if (!empty($filters['table_id'])) {
+            $where['nodes.table_id'] = (string) $filters['table_id'];
+        }
         // Always scope to the authenticated application for tenant isolation.
         $where['applications'] = ApplicationableHelper::getApplicationId();
 
@@ -110,15 +115,16 @@ class FlowRepository extends AbstractRepository
      *
      * A flow is only executable when every node's table lives in the same
      * application (validateGraph / FlowEngine resolve tables per-application via
-     * findProjectTable). So we first duplicate each referenced table into the
-     * target, remap the nodes' table_id to the new copies, then create the flow
-     * copy owned by the target.
+     * findProjectTable). So each referenced table is first brought into the
+     * target — reused when a compatible table of the same origin is already
+     * there, duplicated otherwise (see copyReferencedTables) — the nodes'
+     * table_id are remapped, then the flow copy is created in the target.
      *
      * The graph is NOT re-validated through createOrUpdate here: validateGraph
      * runs against the CURRENT (source) application, whereas the remapped ids
-     * point at the target's tables. The source graph was already valid and we
-     * only swap table ids (for identical copies) and the owning application, so
-     * writing directly is safe.
+     * point at the target's tables. The source graph was already valid and a
+     * table is only swapped for a copy, or for a table that canStandIn() checked
+     * against this very graph, so writing directly is safe.
      *
      * @param  string $id         Source flow id (scoped to the current application).
      * @param  string $project_id Target application id.
@@ -133,7 +139,12 @@ class FlowRepository extends AbstractRepository
         unset($values['applications']);
         unset($values['category_id']);
 
-        $values['nodes'] = $this->copyReferencedTables($source->nodes ?: [], $project_id);
+        $values['nodes'] = $this->copyReferencedTables(
+            $source->nodes ?: [],
+            $source->edges ?: [],
+            $source->inputs ?: [],
+            $project_id
+        );
 
         /** @var Flow $model */
         $model = $this->getModel()->newInstance();
@@ -151,8 +162,9 @@ class FlowRepository extends AbstractRepository
      *
      * The flow document changes ownership (disappears from the source), but its
      * referenced tables are COPIED into the target (never moved) so that other
-     * flows in the source application keep working. Node table_ids are remapped
-     * to those copies. As in copyTo, the graph is not re-validated against the
+     * flows in the source application keep working — or reused when a compatible
+     * table of the same origin is already there. Node table_ids are remapped
+     * accordingly. As in copyTo, the graph is not re-validated against the
      * source application; applications is set directly (not via the buggy
      * ApplicationableTrait::removeApplication).
      *
@@ -165,7 +177,12 @@ class FlowRepository extends AbstractRepository
         /** @var Flow $flow */
         $flow = $this->read($id);
 
-        $flow->nodes = $this->copyReferencedTables($flow->nodes ?: [], $project_id);
+        $flow->nodes = $this->copyReferencedTables(
+            $flow->nodes ?: [],
+            $flow->edges ?: [],
+            $flow->inputs ?: [],
+            $project_id
+        );
         // String id, consistent with how `applications` is stored across the codebase.
         $flow->applications = [(string) $project_id];
         $flow->category_id = null;
@@ -175,23 +192,32 @@ class FlowRepository extends AbstractRepository
     }
 
     /**
-     * Duplicate every table referenced by a flow's nodes into the target
-     * application and return the nodes with their table_id remapped to the copies.
+     * Bring every table referenced by a flow's nodes into the target application
+     * and return the nodes with their table_id remapped.
      *
-     * Distinct table ids are copied once each (a table used by several nodes maps
-     * to a single copy). Tables are read from the current (source) application via
-     * findProjectTable; a node whose table cannot be resolved keeps its original
-     * id (validateGraph would already have rejected such a flow on save, so this
-     * is defensive only).
+     * A table already present in the target (same origin, see Table::originId,
+     * and still usable by this graph, see canStandIn) is reused; otherwise the
+     * table is duplicated. So copying or moving several flows that share a table,
+     * one call after the other, brings that table over once. Distinct table ids
+     * are handled once each (a table used by several nodes maps to a single target
+     * table), and two distinct source tables never map onto the same target table
+     * (a flow using two copies of one table keeps two tables). Tables are read
+     * from the current (source) application via findProjectTable; a node whose
+     * table cannot be resolved keeps its original id (validateGraph would already
+     * have rejected such a flow on save, so this is defensive only).
      *
      * @param  array  $nodes       The source flow's nodes ([{ node_id, table_id }]).
+     * @param  array  $edges       The source flow's edges.
+     * @param  array  $inputs      The source flow's inputs ([{ key, type }]).
      * @param  string $project_id  Target application id.
      * @return array  Nodes with remapped table_id.
      */
-    private function copyReferencedTables($nodes, $project_id)
+    private function copyReferencedTables($nodes, $edges, $inputs, $project_id)
     {
         $tablesRepo = new TablesRepository();
-        $idMap = [];   // oldTableId => newTableId
+        $idMap = [];   // oldTableId => target table id
+
+        $inputTypes = $this->inputTypes($inputs);
 
         foreach ($nodes as $node) {
             $oldId = isset($node['table_id']) ? (string) $node['table_id'] : null;
@@ -199,10 +225,15 @@ class FlowRepository extends AbstractRepository
                 continue;
             }
             $table = $this->findProjectTable($oldId);
-            if ($table) {
-                $copy = $tablesRepo->duplicateInto($table, $project_id);
-                $idMap[$oldId] = (string) $copy->_id;
+            if (!$table) {
+                continue;
             }
+            // Nodes of this flow that use the table: the stand-in must fit them all.
+            $nodeIds = $this->nodesUsingTable($nodes, $oldId);
+            $existing = $this->findReusableTable($table, $project_id, $nodeIds, $edges, $inputTypes, array_values($idMap));
+            $idMap[$oldId] = $existing
+                ? (string) $existing->_id
+                : (string) $tablesRepo->duplicateInto($table, $project_id)->_id;
         }
 
         return array_map(function ($node) use ($idMap) {
@@ -213,6 +244,295 @@ class FlowRepository extends AbstractRepository
             }
             return $node;
         }, $nodes);
+    }
+
+    /**
+     * Make the current application's flows follow a rename of fields of one of
+     * their tables (see TablesRepository::createOrUpdate and the changelog
+     * rollback). Each flow is rewritten by renameEdges and saved on its own: a
+     * failure is logged and reported, the other flows are still updated.
+     *
+     * A rewritten flow is saved even when its graph no longer validates (e.g. an
+     * input that fed the renamed field implicitly, of an incompatible type, now
+     * feeds it through an explicit edge, which validateGraph type-checks): the
+     * flow keeps running as before, and is reported in flows_invalid, as its next
+     * save would be refused until it is fixed.
+     *
+     * @param  string $tableId
+     * @param  array  $renames  old key => new key
+     * @return array  ['flows_updated' => titles, 'flows_failed' => titles, 'flows_invalid' => titles (among flows_updated)]
+     */
+    public function followFieldRenames($tableId, array $renames)
+    {
+        $tableId = (string) $tableId;
+        $flows = Flow::where('applications', (string) ApplicationableHelper::getApplicationId())
+            ->where('nodes.table_id', $tableId)
+            ->get();
+
+        $result = ['flows_updated' => [], 'flows_failed' => [], 'flows_invalid' => []];
+        foreach ($flows as $flow) {
+            try {
+                $edges = self::renameEdges(
+                    $flow->edges ?: [],
+                    $this->nodesUsingTable($flow->nodes ?: [], $tableId),
+                    $this->inputTypes($flow->inputs ?: []),
+                    $renames
+                );
+                if ($edges === null) {
+                    continue;
+                }
+                $flow->edges = $edges;
+                $flow->save();
+                $result['flows_updated'][] = $flow->title;
+            } catch (\Throwable $e) {
+                error_log("Flow {$flow->_id} could not follow a field rename of table $tableId: " . $e->getMessage());
+                $result['flows_failed'][] = $flow->title;
+                continue;
+            }
+            try {
+                $this->validateGraph([
+                    'inputs' => $flow->inputs ?: [],
+                    'outputs' => $flow->outputs ?: [],
+                    'nodes' => $flow->nodes ?: [],
+                    'edges' => $edges,
+                ]);
+            } catch (\Throwable $e) {
+                $result['flows_invalid'][] = $flow->title;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * A flow's edges after a rename of fields of the table used by $nodeIds, or
+     * null when nothing changes. Edges into a renamed field target the new key;
+     * a renamed field that was fed implicitly by the same-named flow input gets
+     * an explicit edge from that input (edges win over same-named inputs in
+     * FlowEngine), so the flow keeps its inputs, i.e. its own API contract, and
+     * its behavior. Another edge into the node and key that a renamed field's
+     * edge now feeds targeted a field removed in the same update, and is dropped;
+     * an edge that no renamed field's edge replaces is kept (it may point at a
+     * key the rename restores, e.g. a rollback). Renames apply in one pass from
+     * the original keys (a swap stays correct). Ids and keys are written as
+     * strings (PHP turns numeric array keys into integers).
+     *
+     * @param  array $edges
+     * @param  array $nodeIds    Nodes using the table.
+     * @param  array $inputKeys  Flow input keys (key => anything).
+     * @param  array $renames    old key => new key
+     * @return array|null
+     */
+    public static function renameEdges(array $edges, array $nodeIds, array $inputKeys, array $renames)
+    {
+        $nodes = [];
+        foreach ($nodeIds as $nodeId) {
+            $nodes[(string) $nodeId] = true;
+        }
+
+        $result = [];
+        $wired = [];   // "node:old key" fed by an edge before the rename
+        $moved = [];   // indexes in $result of the retargeted and added edges
+        $fed = [];     // "node:new key" fed by those edges
+        foreach ($edges as $edge) {
+            $edge = (array) $edge;
+            $into = isset($edge['into']) ? (array) $edge['into'] : [];
+            if (isset($into['node'], $into['field'], $nodes[(string) $into['node']])) {
+                $field = (string) $into['field'];
+                if (isset($renames[$field])) {
+                    $wired[$into['node'] . ':' . $field] = true;
+                    $fed[$into['node'] . ':' . $renames[$field]] = true;
+                    $into['field'] = (string) $renames[$field];
+                    $edge['into'] = $into;
+                    $moved[count($result)] = true;
+                }
+            }
+            $result[] = $edge;
+        }
+        foreach (array_keys($nodes) as $nodeId) {
+            foreach ($renames as $old => $new) {
+                if (!isset($wired[$nodeId . ':' . $old]) && isset($inputKeys[$old])) {
+                    $fed[$nodeId . ':' . $new] = true;
+                    $moved[count($result)] = true;
+                    $result[] = ['from' => ['input' => (string) $old], 'into' => ['node' => (string) $nodeId, 'field' => (string) $new]];
+                }
+            }
+        }
+        if (!$moved) {
+            return null;
+        }
+
+        $kept = [];
+        foreach ($result as $i => $edge) {
+            $into = isset($edge['into']) ? (array) $edge['into'] : [];
+            if (!isset($moved[$i]) && isset($into['node'], $into['field'])
+                && is_scalar($into['node']) && is_scalar($into['field'])
+                && isset($fed[$into['node'] . ':' . $into['field']])) {
+                continue;
+            }
+            $kept[] = $edge;
+        }
+
+        return $kept;
+    }
+
+    /**
+     * Ids of the nodes that use the given table.
+     *
+     * @param  array  $nodes
+     * @param  string $tableId
+     * @return array
+     */
+    private function nodesUsingTable($nodes, $tableId)
+    {
+        $ids = [];
+        foreach ($nodes as $node) {
+            $node = (array) $node;
+            if (isset($node['table_id'], $node['node_id']) && (string) $node['table_id'] === (string) $tableId) {
+                $ids[] = (string) $node['node_id'];
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * A flow's inputs as key => declared type ('string' when missing, as in
+     * validateGraph).
+     *
+     * @param  array $inputs
+     * @return array
+     */
+    private function inputTypes($inputs)
+    {
+        $types = [];
+        foreach ($inputs as $input) {
+            $input = (array) $input;
+            if (isset($input['key'])) {
+                $types[$input['key']] = isset($input['type']) ? $input['type'] : 'string';
+            }
+        }
+
+        return $types;
+    }
+
+    /**
+     * A table of the target application that can replace $source in this flow:
+     * same origin (the original itself, or any copy of it), not already used for
+     * another source table of the flow, and usable as is by the graph
+     * (canStandIn). The original wins over copies, then the oldest copy, so the
+     * choice is stable. Null when there is none.
+     *
+     * @param  Table  $source      The flow's table in the source application.
+     * @param  string $projectId   Target application id.
+     * @param  array  $nodeIds     The flow's nodes that use $source.
+     * @param  array  $edges       The flow's edges.
+     * @param  array  $inputTypes  The flow's inputs (key => declared type).
+     * @param  array  $taken       Target table ids already used for other source tables.
+     * @return Table|null
+     */
+    private function findReusableTable(Table $source, $projectId, array $nodeIds, $edges, array $inputTypes, array $taken)
+    {
+        $origin = $source->originId();
+        $candidates = Table::where('applications', (string) $projectId)
+            ->where(function ($query) use ($origin) {
+                $query->where('_id', $origin)->orWhere('origin_table_id', $origin);
+            })
+            ->orderBy('created_at')
+            // Only what canStandIn reads: variants and rules are not loaded.
+            ->get(['_id', 'fields', 'matching_type', 'decision_type', 'origin_table_id', 'created_at'])
+            ->all();
+        // Stable sort: the original first, copies keep their creation order.
+        usort($candidates, function ($a, $b) use ($origin) {
+            return ((string) $a->_id !== $origin) <=> ((string) $b->_id !== $origin);
+        });
+
+        $sourceTypes = $this->fieldTypes($source);
+        $sourceOutputFamily = $this->typeFamily($this->tableOutputType($source));
+        foreach ($candidates as $candidate) {
+            if (in_array((string) $candidate->_id, $taken, true)) {
+                continue;
+            }
+            if ($this->canStandIn($candidate, $sourceTypes, $sourceOutputFamily, $nodeIds, $edges, $inputTypes)) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether $candidate can replace the source table (described by its field
+     * types and output family) for the given nodes, the graph staying valid and
+     * runnable:
+     *   - every field wired into those nodes still exists, with the same type;
+     *   - every other field of $candidate is fed by a same-named flow input of a
+     *     compatible type (stricter than validateGraph's field coverage, which
+     *     only checks the key: the value would otherwise fail the field's
+     *     validation at run time);
+     *   - when those nodes' output feeds another node, it keeps its type family.
+     *
+     * @param  Table       $candidate
+     * @param  array       $sourceTypes         Source table fields (key => type).
+     * @param  string|null $sourceOutputFamily  Type family of the source table's output.
+     * @param  array       $nodeIds
+     * @param  array       $edges
+     * @param  array       $inputTypes          Flow inputs (key => declared type).
+     * @return bool
+     */
+    private function canStandIn(Table $candidate, array $sourceTypes, $sourceOutputFamily, array $nodeIds, $edges, array $inputTypes)
+    {
+        $candidateTypes = $this->fieldTypes($candidate);
+        $sameOutputFamily = $this->typeFamily($this->tableOutputType($candidate)) === $sourceOutputFamily;
+
+        foreach ($nodeIds as $nodeId) {
+            $wired = [];
+            foreach ($edges as $edge) {
+                $edge = (array) $edge;
+                $into = isset($edge['into']) ? (array) $edge['into'] : [];
+                $from = isset($edge['from']) ? (array) $edge['from'] : [];
+                // Node ids compared as strings: nodesUsingTable casts them, and a
+                // flow stored through the API may hold integer ids.
+                if (isset($into['node'], $into['field']) && (string) $into['node'] === (string) $nodeId) {
+                    $key = $into['field'];
+                    if (!isset($candidateTypes[$key], $sourceTypes[$key]) || $candidateTypes[$key] !== $sourceTypes[$key]) {
+                        return false;
+                    }
+                    $wired[$key] = true;
+                }
+                if (isset($from['node']) && (string) $from['node'] === (string) $nodeId && !$sameOutputFamily) {
+                    return false;
+                }
+            }
+            foreach ($candidateTypes as $key => $type) {
+                if (isset($wired[$key])) {
+                    continue;
+                }
+                if (!isset($inputTypes[$key]) || !$this->typesCompatible($inputTypes[$key], $type)) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * A table's fields as key => type.
+     *
+     * @param  Table $table
+     * @return array
+     */
+    private function fieldTypes(Table $table)
+    {
+        $types = [];
+        foreach (($table->fields ?: []) as $field) {
+            if (isset($field['key'])) {
+                $types[$field['key']] = isset($field['type']) ? $field['type'] : 'string';
+            }
+        }
+
+        return $types;
     }
 
     /**
@@ -480,7 +800,7 @@ class FlowRepository extends AbstractRepository
      *
      * @param  Table  $table
      * @param  string $key
-     * @return string  numeric | boolean | string
+     * @return string  numeric | boolean | string | date
      */
     private function fieldType(Table $table, $key)
     {
@@ -522,10 +842,11 @@ class FlowRepository extends AbstractRepository
      *   - text    : string, alpha_num  (equivalent — input fields only know 'string')
      *   - numeric : numeric  (with the synonyms number/integer)
      *   - boolean : boolean  (with the synonym bool)
+     *   - date    : date  (only flow inputs produce it: no decision_type is a date)
      *   - json    : never wireable, in or out.
      *
-     * @param  string $sourceType  numeric | string | alpha_num | boolean | json
-     * @param  string $targetType  numeric | boolean | string
+     * @param  string $sourceType  numeric | string | alpha_num | boolean | date | json
+     * @param  string $targetType  numeric | boolean | string | date
      * @return bool
      */
     private function typesCompatible($sourceType, $targetType)
@@ -549,7 +870,7 @@ class FlowRepository extends AbstractRepository
      * null for 'json' and any unrecognised type, which makes them un-wireable.
      *
      * @param  string $type
-     * @return string|null  'text' | 'numeric' | 'boolean' | null
+     * @return string|null  'text' | 'numeric' | 'boolean' | 'date' | null
      */
     private function typeFamily($type)
     {
@@ -564,6 +885,8 @@ class FlowRepository extends AbstractRepository
             case 'boolean':
             case 'bool':
                 return 'boolean';
+            case 'date':
+                return 'date';
             default:
                 // json and anything unrecognised: not a valid wire endpoint.
                 return null;

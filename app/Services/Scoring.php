@@ -64,6 +64,10 @@ class Scoring
      */
     public function check($id, $values, $appId, $showMeta = false)
     {
+        // Preset results are cached per field key for ONE decision. FlowEngine
+        // reuses this instance for every node, so a cached value must not leak
+        // into the next table's evaluation.
+        $this->presets = [];
         $table = $this->tablesRepository->read($id);
         // Validate that all required fields are present and of the correct type
         $validator = \Validator::make($values, $this->createValidationRules($table));
@@ -126,8 +130,11 @@ class Scoring
                     // (can happen if a field was removed after a decision was submitted)
                     continue;
                 }
-                // Apply preset transform (if any) then evaluate the condition
-                $this->checkCondition($condition, $this->prepareFieldPreset($field, $values[$condition->field_key]));
+                // Apply preset transform (if any) then evaluate the condition. A preset
+                // replaces the raw value with its own result, so the field type (which
+                // drives date comparisons) only applies to untransformed values.
+                $fieldType = ($field->preset and $field->preset->condition) ? null : $field->type;
+                $this->checkCondition($condition, $this->prepareFieldPreset($field, $values[$condition->field_key]), $fieldType);
 
                 if (!$condition->matched) {
                     $conditions_matched = false;
@@ -198,16 +205,18 @@ class Scoring
      * Delegates to ConditionsTypes::checkConditionValue() and stores the boolean
      * result on the condition model so it can be included in the Decision snapshot.
      *
-     * @param  Condition $condition  The condition to evaluate.
-     * @param  mixed     $value      The (possibly preset-transformed) field value.
+     * @param  Condition   $condition  The condition to evaluate.
+     * @param  mixed       $value      The (possibly preset-transformed) field value.
+     * @param  string|null $fieldType  The field type (see ConditionsTypes::checkConditionValue).
      * @return void
      */
-    private function checkCondition(Condition $condition, $value)
+    private function checkCondition(Condition $condition, $value, $fieldType = null)
     {
         $condition->matched = $this->conditionsTypes->checkConditionValue(
             $condition->condition,
             $condition->value,
-            $value
+            $value,
+            $fieldType
         );
     }
 
@@ -228,8 +237,9 @@ class Scoring
         if (array_key_exists($field->key, $this->presets)) {
             $value = $this->presets[$field->key];
         } elseif ($preset = $field->preset and $preset->condition) {
-            // Apply the preset condition (e.g. $is_set converts the value to true/false)
-            $value = $this->conditionsTypes->checkConditionValue($preset->condition, $preset->value, $value);
+            // Apply the preset condition (e.g. $is_set converts the value to true/false).
+            // The preset compares the raw value, so it follows the field type (dates).
+            $value = $this->conditionsTypes->checkConditionValue($preset->condition, $preset->value, $value, $field->type);
             // Cache for subsequent conditions that reference the same field
             $this->presets[$field->key] = $value;
         }
@@ -284,6 +294,10 @@ class Scoring
             case 'bool':
             case 'boolean':
                 $rule = 'boolean';
+                break;
+
+            case 'date':
+                $rule = 'isoDate';
                 break;
 
             default:

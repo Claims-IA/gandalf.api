@@ -128,7 +128,8 @@ class ExcelErrorTranslator
         }
 
         if (str_contains($lower, 'condition type')) {
-            return 'la valeur n\'est pas compatible avec l\'opérateur (les opérateurs >, >=, <, <= et les intervalles attendent des nombres).';
+            return 'la valeur n\'est pas compatible avec l\'opérateur (les opérateurs >, >=, <, <= et les intervalles attendent des nombres, '
+                . 'ou des dates AAAA-MM-JJ / today-30d dans une colonne date, où in:, contains:, starts: et ends: ne sont pas permis).';
         }
         if (str_contains($lower, 'rule than type')) {
             return 'la décision n\'est pas compatible avec le decision_type de la table'

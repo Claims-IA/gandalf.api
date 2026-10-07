@@ -51,13 +51,13 @@ class TableRulesProvider
             'category_id' => 'sometimes|string',
             'matching_type' => 'required|in:first,scoring_sum,scoring_max,scoring_min,scoring_count',
             'decision_type' => 'required|in:alpha_num,numeric,string,json|decision_type',
-            'fields' => 'required|array',
+            'fields' => 'required|array|distinctFieldIds',
             'fields.*._id' => 'sometimes|mongoId',
             'fields.*.title' => 'required|string',
             // Only 'variant_id' is globally reserved (historical check-time
             // parameter); Excel sentinel collisions are handled at export time.
             'fields.*.key' => 'required|string|not_in:variant_id',
-            'fields.*.type' => 'required|in:numeric,boolean,string',
+            'fields.*.type' => 'required|in:numeric,boolean,string,date',
             'fields.*.source' => 'required|in:request',
             'fields.*.preset' => 'present|array',
             'fields.*.preset._id' => 'mongoId',

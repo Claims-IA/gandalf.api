@@ -26,6 +26,7 @@
 10. [Decision engine deep dive][19]
 	- [Matching types][20]
 	- [Condition operators][21]
+	- [Date conditions][27]
 	- [Presets][22]
 	- [Variant selection][23]
 11. [Field types][24]
@@ -579,10 +580,10 @@ Fallback: when no rule matches (or score is zero), the variant's `default_decisi
 | `$any`           | Always `true` including `null` | —                   |
 | `$eq`            | Equal to                       | any scalar          |
 | `$ne`            | Not equal to                   | any scalar          |
-| `$gt`            | Greater than                   | numeric             |
-| `$gte`           | Greater than or equal          | numeric             |
-| `$lt`            | Less than                      | numeric             |
-| `$lte`           | Less than or equal             | numeric             |
+| `$gt`            | Greater than                   | numeric or date     |
+| `$gte`           | Greater than or equal          | numeric or date     |
+| `$lt`            | Less than                      | numeric or date     |
+| `$lte`           | Less than or equal             | numeric or date     |
 | `$between`       | `min ≤ x ≤ max`                | `"300;700"`         |
 | `$between_excl`  | `min < x < max`                | `"300;700"`         |
 | `$between_lexcl` | `min < x ≤ max`                | `"300;700"`         |
@@ -593,6 +594,49 @@ Fallback: when no rule matches (or score is zero), the variant's `default_decisi
 > **Null values:** Only `$is_null` and `$any` match a `null` field value. All other operators return `false`.
 
 `$in` / `$nin` support quoted tokens for values with commas: `"'visa, mastercard', amex"`.
+
+---
+
+### Date conditions
+
+On a `date` field, conditions compare **calendar days**. Allowed operators: `$any`, `$is_set`,
+`$is_null`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$between`, `$between_excl`,
+`$between_lexcl`, `$between_rexcl`, `$not_between`. Text and list operators (`$in`, `$nin`,
+`$contains`, `$not_contains`, `$starts_with`, `$ends_with`) are rejected with a `422` when the
+table is saved.
+
+The condition `value` is an absolute or a relative date:
+
+| Form             | Example                                          | Meaning                                                                           |
+| ---------------- | ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| ISO date         | `2026-01-01`                                     | That day (a date-time is accepted, its day is used)                               |
+| `today`          | `today`                                          | The current day                                                                   |
+| `today` ± offset | `today-30d`, `today+1w`, `today-6m`, `today-18y` | The current day shifted by N days (`d`), weeks (`w`), months (`m`) or years (`y`) |
+
+- A relative expression takes **one** signed offset. It is case-insensitive and tolerates spaces
+  (`Today - 30D`); the canonical form is lowercase without spaces (`today-30d`).
+- Month and year arithmetic is calendar-based and clamped to the end of the month:
+  March 31 − 1 month = February 28; February 29 + 1 year = February 28.
+- Ranges (`$between*`, `$not_between`) use the usual `"min;max"` format, each bound being an
+  absolute or relative date: `"2026-01-01;2026-12-31"`, `"today-1y;today"`. As for numeric
+  ranges, the lower bound must resolve strictly before the upper bound when the table is saved.
+- `today` is the current date in the timezone set by `DECISION_TIMEZONE` (e.g. `Europe/Paris`),
+  falling back to `APP_TIMEZONE` (UTC when unset). Relative conditions are re-evaluated at each
+  decision.
+- Comparisons are by calendar day: `$eq 2026-03-15` matches any request value on March 15,
+  whatever its time.
+
+| Condition                          | Meaning                                  |
+| ---------------------------------- | ---------------------------------------- |
+| `$between today-30d;today`         | Within the last 30 days                  |
+| `$gte today-30d`                   | Since 30 days ago (future dates included) |
+| `$lt today-30d`                    | Older than 30 days                       |
+| `$lt today`                        | In the past                              |
+| `$lte today-18y` (on a birth date) | 18 years old or more                     |
+
+```json
+{ "field_key": "birth_date", "condition": "$lte", "value": "today-18y" }
+```
 
 ---
 
@@ -628,11 +672,20 @@ Override per-request: include `variant_id` in the decision request body.
 
 ## Field types
 
-| Type      | Accepted values     |
-| --------- | ------------------- |
-| `numeric` | `700`, `3.14`, `-1` |
-| `boolean` | `true`, `false`     |
-| `string`  | Any text            |
+| Type      | Accepted values                                 |
+| --------- | ----------------------------------------------- |
+| `numeric` | `700`, `3.14`, `-1`                             |
+| `boolean` | `true`, `false`                                 |
+| `string`  | Any text                                        |
+| `date`    | ISO 8601 date `YYYY-MM-DD`, e.g. `"2026-03-15"` |
+
+A `date` field works at calendar-day granularity. An ISO 8601 date-time is also accepted
+(`YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]`, or with a space instead of `T`), but its time part is
+ignored: the day is the date as written, without timezone conversion
+(`"2026-03-15T23:30:00+02:00"` is March 15). Relative expressions such as `today` are only valid
+in [conditions][27], not in decision requests. As for other types, the field must be present and
+may be `null` (only `$is_null` and `$any` then match). An invalid value returns a `422`:
+`The <field> must be an ISO 8601 date (YYYY-MM-DD).`
 
 Keys are normalised: lowercased, spaces → underscores. The key `variant_id` is reserved.
 
@@ -736,3 +789,4 @@ curl -X PUT https://api.example.com/api/v1/admin/decisions/<decision_id>/meta \
 [24]:	#field-types
 [25]:	#decision-types
 [26]:	#quick-start-guide
+[27]:	#date-conditions

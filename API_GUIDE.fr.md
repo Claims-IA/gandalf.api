@@ -26,6 +26,7 @@
 10. [Fonctionnement du moteur de décision](#fonctionnement-du-moteur-de-décision)
     - [Types de correspondance](#types-de-correspondance)
     - [Opérateurs de condition](#opérateurs-de-condition)
+    - [Conditions sur les dates](#conditions-sur-les-dates)
     - [Présets](#présets)
     - [Sélection de variante](#sélection-de-variante)
 11. [Types de champs](#types-de-champs)
@@ -641,10 +642,10 @@ et `default_description` de la variante.
 | `$any` | Toujours `true`, y compris si la valeur est `null` | — (ignoré) |
 | `$eq` | Égal à | n'importe quelle valeur scalaire |
 | `$ne` | Différent de | n'importe quelle valeur scalaire |
-| `$gt` | Strictement supérieur à | numérique |
-| `$gte` | Supérieur ou égal à | numérique |
-| `$lt` | Strictement inférieur à | numérique |
-| `$lte` | Inférieur ou égal à | numérique |
+| `$gt` | Strictement supérieur à | numérique ou date |
+| `$gte` | Supérieur ou égal à | numérique ou date |
+| `$lt` | Strictement inférieur à | numérique ou date |
+| `$lte` | Inférieur ou égal à | numérique ou date |
 | `$between` | `min ≤ x ≤ max` (bornes incluses) | `"300;700"` |
 | `$between_excl` | `min < x < max` (bornes exclues) | `"300;700"` |
 | `$between_lexcl` | `min < x ≤ max` (borne gauche exclue) | `"300;700"` |
@@ -660,6 +661,50 @@ et `default_description` de la variante.
 Utilisez des guillemets simples pour délimiter les tokens contenant des virgules ou des espaces :
 ```
 "'visa, mastercard', amex"   →   ["visa, mastercard", "amex"]
+```
+
+---
+
+### Conditions sur les dates
+
+Sur un champ `date`, les conditions comparent des **jours calendaires**. Opérateurs autorisés :
+`$any`, `$is_set`, `$is_null`, `$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$between`,
+`$between_excl`, `$between_lexcl`, `$between_rexcl`, `$not_between`. Les opérateurs de texte et de
+liste (`$in`, `$nin`, `$contains`, `$not_contains`, `$starts_with`, `$ends_with`) sont refusés
+avec une `422` à l'enregistrement de la table.
+
+La `value` d'une condition est une date absolue ou relative :
+
+| Forme | Exemple | Signification |
+|-------|---------|---------------|
+| Date ISO | `2026-01-01` | Ce jour-là (une date-heure est acceptée, seul son jour compte) |
+| `today` | `today` | Le jour courant |
+| `today` ± décalage | `today-30d`, `today+1w`, `today-6m`, `today-18y` | Le jour courant décalé de N jours (`d`), semaines (`w`), mois (`m`) ou années (`y`) |
+
+- Une expression relative accepte **un seul** décalage signé. Elle est insensible à la casse et
+  tolère les espaces (`Today - 30D`) ; la forme canonique est en minuscules sans espaces (`today-30d`).
+- L'arithmétique des mois et des années est calendaire, ramenée à la fin du mois si besoin :
+  31 mars − 1 mois = 28 février ; 29 février + 1 an = 28 février.
+- Les intervalles (`$between*`, `$not_between`) utilisent le format habituel `"min;max"`, chaque
+  borne étant une date absolue ou relative : `"2026-01-01;2026-12-31"`, `"today-1y;today"`. Comme
+  pour les intervalles numériques, la borne basse doit être strictement antérieure à la borne haute
+  à l'enregistrement de la table.
+- `today` est la date du jour dans le fuseau défini par `DECISION_TIMEZONE` (ex. `Europe/Paris`),
+  à défaut `APP_TIMEZONE` (UTC si non défini). Les conditions relatives sont réévaluées à chaque
+  décision.
+- Les comparaisons se font au jour près : `$eq 2026-03-15` correspond à toute valeur de requête
+  du 15 mars, quelle que soit l'heure.
+
+| Condition | Signification |
+|-----------|---------------|
+| `$between today-30d;today` | Dans les 30 derniers jours |
+| `$gte today-30d` | Depuis 30 jours (dates futures comprises) |
+| `$lt today-30d` | Il y a plus de 30 jours |
+| `$lt today` | Dans le passé |
+| `$lte today-18y` (sur une date de naissance) | 18 ans ou plus |
+
+```json
+{ "field_key": "date_naissance", "condition": "$lte", "value": "today-18y" }
 ```
 
 ---
@@ -707,6 +752,16 @@ corps de la requête de décision.
 | `numeric` | `700`, `3.14`, `-1` |
 | `boolean` | `true`, `false` |
 | `string` | N'importe quel texte |
+| `date` | Date ISO 8601 `AAAA-MM-JJ`, ex. `"2026-03-15"` |
+
+Un champ `date` travaille au jour près. Une date-heure ISO 8601 est aussi acceptée
+(`AAAA-MM-JJTHH:MM[:SS[.fff]][Z|±HH:MM]`, ou avec une espace à la place du `T`), mais sa partie
+heure est ignorée : le jour retenu est la date telle qu'écrite, sans conversion de fuseau
+(`"2026-03-15T23:30:00+02:00"` est le 15 mars). Les expressions relatives comme `today` ne sont
+valables que dans les [conditions](#conditions-sur-les-dates), pas dans les requêtes de décision.
+Comme pour les autres types, le champ doit être présent et peut valoir `null` (seuls `$is_null` et
+`$any` correspondent alors). Une valeur invalide renvoie une `422` :
+`The <champ> must be an ISO 8601 date (YYYY-MM-DD).`
 
 Les clés de champs sont normalisées automatiquement : converties en minuscules, espaces remplacés
 par des underscores. La clé `variant_id` est réservée et ne peut pas être utilisée.

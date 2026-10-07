@@ -6,16 +6,32 @@
  * domain model. Registered globally via ValidationServiceProvider::boot() so
  * these rules can be referenced in any validation ruleset. Currently provides:
  * 'mongoId' for validating 24-character hex MongoDB ObjectIDs, 'json' for
- * validating that a string is valid JSON, and 'betweenString' for validating
- * the "min;max" range format used by the $between condition operator.
+ * validating that a string is valid JSON, 'betweenString' for validating
+ * the "min;max" range format used by the $between condition operator, and
+ * 'isoDate' for the ISO 8601 values of date fields.
  *
  * @package App\Validators
  */
 
 namespace App\Validators;
 
+use App\Services\DateValue;
+
 class GeneralValidator
 {
+    /**
+     * Validate an ISO 8601 date ("YYYY-MM-DD", optionally followed by a time
+     * part) — the format of date field values in decision requests.
+     *
+     * @param  string $attribute  The attribute name being validated.
+     * @param  mixed  $value      The value to test.
+     * @return bool
+     */
+    public function isoDate($attribute, $value)
+    {
+        return DateValue::isIsoDate($value);
+    }
+
     /**
      * Validate that the value is a valid MongoDB ObjectID (24 hex chars with mixed digits/letters).
      *

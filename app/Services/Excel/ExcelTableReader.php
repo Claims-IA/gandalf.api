@@ -334,10 +334,12 @@ class ExcelTableReader
         foreach ($columns['fields'] as $col => $fieldDef) {
             $letter = Coordinate::stringFromColumnIndex($col);
             $address = $letter . $row;
-            $cellText = $this->cellToString($sheet, $address, $fieldDef['key'], $row);
+            $cellText = $fieldDef['type'] === 'date'
+                ? $this->dateCellToString($sheet, $address, $fieldDef['key'], $row)
+                : $this->cellToString($sheet, $address, $fieldDef['key'], $row);
 
             try {
-                $parsed = $this->codec->decode($cellText);
+                $parsed = $this->codec->decode($cellText, $fieldDef['type']);
             } catch (ConditionCellParseException $e) {
                 $this->errors[] = $this->makeError($letter, $row, $fieldDef['key'], $e->getMessage());
                 // Keep a placeholder so downstream indexes stay aligned
@@ -437,6 +439,22 @@ class ExcelTableReader
         }
 
         return $this->rawToString($cell->getValue());
+    }
+
+    /**
+     * Cell text of a date column. A date typed without prefix is turned by
+     * Excel into a date serial number: read it back as its ISO date, so a
+     * typed "2026-03-15" stays an equality on March 15.
+     */
+    private function dateCellToString(Worksheet $sheet, string $address, string $fieldKey, int $row): string
+    {
+        $cell = $sheet->getCell($address);
+        $raw = $cell->getValue();
+        if ((is_float($raw) || is_int($raw)) && ExcelDate::isDateTime($cell)) {
+            return ExcelDate::excelToDateTimeObject((float) $raw)->format('Y-m-d');
+        }
+
+        return $this->cellToString($sheet, $address, $fieldKey, $row);
     }
 
     /**
