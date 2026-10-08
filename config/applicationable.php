@@ -57,6 +57,8 @@ return [
 
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_get'],
             '~^\/api\/v1\/projects\/current$~' => ['tables_view'],
+            // The export holds every decision and change of the project.
+            '~^\/api\/v1\/projects\/export$~' => ['project_update'],
             '~^\/api\/v1\/projects\/collaborators$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['tables_view'],
         ],
@@ -64,6 +66,10 @@ return [
             '~^\/api\/v1\/admin\/tables$~' => ['tables_create'],
             '~^\/api\/v1\/admin\/flows$~' => ['tables_create'],
             '~^\/api\/v1\/admin\/tables\/(.+)\/copy$~' => ['tables_create'],
+            '~^\/api\/v1\/admin\/flows\/(.+)\/copy$~' => ['tables_create'],
+            // Import creates (tables_create) or updates (tables_update) a table:
+            // checked in TablesController::import once the kind is known.
+            '~^\/api\/v1\/admin\/tables\/import$~' => ['tables_view'],
             // Cross-project copy/move (also gated on project-admin role in the
             // controller via CopyMoveGuard). Copy needs create; move additionally
             // removes from the source, so it needs delete too.
@@ -76,7 +82,9 @@ return [
             '~^\/api\/v1\/flows\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v1\/projects\/collaborators\/confirm$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/collaborators\/invitation\/resend$~' => ['users_manage'],
+            '~^\/api\/v1\/invite$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['users_manage'],
+            '~^\/api\/v1\/projects\/users\/admin$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_manage'],
         ],
         'put' => [
@@ -85,8 +93,10 @@ return [
             '~^\/api\/v1\/admin\/categories$~' => ['project_update'],
             '~^\/api\/v1\/admin\/tables\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/flows\/(.+)$~' => ['tables_update'],
+            '~^\/api\/v1\/admin\/decisions\/(.+)\/meta$~' => ['decisions_make'],
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['users_manage'],
+            '~^\/api\/v1\/projects$~' => ['project_update'],
             '~^\/api\/v1\/projects\/(.+)$~' => ['project_update'],
         ],
         'delete' => [

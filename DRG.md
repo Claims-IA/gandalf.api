@@ -328,7 +328,7 @@ rollback of the table makes the flows follow the restored keys the same way.
 `GET /api/v1/admin/flows?table_id=…` lists the flows using a table.
 
 **Copy and move to another project** (project admins only, the caller must also
-be a member of the target project): a flow can only run when its tables live in
+be a member of the target project with the `tables_create` scope): a flow can only run when its tables live in
 its own project, so its referenced tables are brought into the target and each
 node's `table_id` is remapped. A table already present in the target is reused
 rather than copied again when it has the same origin (the original itself, or an

@@ -24,6 +24,7 @@ use App\Validators\TableRulesProvider;
 use App\Http\Controllers\Concerns\CopyMoveGuard;
 use Nebo15\REST\AbstractController;
 use Nebo15\REST\Interfaces\ListableInterface;
+use Nebo15\LumenApplicationable\Exceptions\AccessDeniedException;
 
 /**
  * Class TablesController
@@ -162,10 +163,10 @@ class TablesController extends AbstractController
     /**
      * Move a decision table to another project (change ownership, no copy).
      *
-     * Admin-only, and the caller must be a member of the target project (enforced
-     * by guardCopyMove). The source table (scoped to the current application) is
-     * reassigned to $project_id and its category reset. It disappears from the
-     * source project and appears in the target.
+     * Admin-only, and the caller must be a member of the target project with the
+     * tables_create scope (enforced by guardCopyMove). The source table (scoped
+     * to the current application) is reassigned to $project_id and its category
+     * reset. It disappears from the source project and appears in the target.
      *
      * @param  string $id         MongoDB ObjectID of the table to move.
      * @param  string $project_id MongoDB ObjectID of the target project/application.
@@ -278,12 +279,19 @@ class TablesController extends AbstractController
             ], 422);
         }
 
+        // The route only requires tables_view: creating a table needs
+        // tables_create, updating one needs tables_update.
+        $member = $this->request->user()->getApplicationUser();
+        $canCreate = (bool) $member->canTables_create();
+
         try {
             if ($this->importService->isRoundTripExcel($file)) {
                 $outcome = $this->importService->fromExcelRoundTrip(
                     $file->getRealPath(),
                     $this->request->input('mode', 'auto'),
-                    (bool) $this->request->input('force', false)
+                    (bool) $this->request->input('force', false),
+                    $canCreate,
+                    (bool) $member->canTables_update()
                 );
                 return $this->response->json(
                     $outcome['table']->toArray(),
@@ -298,6 +306,9 @@ class TablesController extends AbstractController
                     'message' => 'mode=update requiert un classeur Excel round-trip '
                         . '(exporté via ?format=excel) — ce fichier ne peut que créer une nouvelle table.',
                 ], 422);
+            }
+            if (!$canCreate) {
+                throw new AccessDeniedException('', 0, null, ['tables_create']);
             }
             $table = $this->importService->fromFile($file);
         } catch (TableConflictException $e) {

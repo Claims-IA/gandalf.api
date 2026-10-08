@@ -2,7 +2,8 @@
 /**
  * Application
  *
- * Custom Lumen application class that overrides two framework behaviours: it
+ * Custom Lumen application class that overrides three framework behaviours: it
+ * keeps the method and path the router dispatches (for the ACL middleware), it
  * suppresses E_DEPRECATED notices (needed because illuminate 5.2 triggers them
  * on PHP 8+), and it swaps the Monolog handler in production to write
  * single-line JSON entries to stdout instead of the default file handler.
@@ -16,6 +17,30 @@ use Monolog\Formatter\LineFormatter;
 
 class Application extends \Laravel\Lumen\Application
 {
+    /**
+     * Container key of the [method, path] pair the router dispatches.
+     */
+    const ROUTED_REQUEST = 'gandalf.routed_request';
+
+    /**
+     * Keep the [method, path] pair the router dispatches, as Lumen computes it
+     * (from the globals in run(), from the request in dispatch($request)).
+     *
+     * ApplicationAclMiddleware checks this pair: deriving it again from the
+     * request object diverged from the routing (trailing slash, method override,
+     * X-Original-URL rewriting the request URI, HEAD routed as GET).
+     *
+     * @param  \Symfony\Component\HttpFoundation\Request|null $request
+     * @return array  [method, pathInfo]
+     */
+    protected function parseIncomingRequest($request)
+    {
+        $routed = parent::parseIncomingRequest($request);
+        $this->instance(self::ROUTED_REQUEST, $routed);
+
+        return $routed;
+    }
+
     /**
      * Register the error handling for the application.
      *

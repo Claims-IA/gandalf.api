@@ -52,6 +52,7 @@ use App\Services\Excel\ExcelTableReader;
 use App\Services\Excel\TableMergeService;
 use App\Validators\TableRulesProvider;
 use Illuminate\Http\UploadedFile;
+use Nebo15\LumenApplicationable\Exceptions\AccessDeniedException;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 
 class TableImportService
@@ -101,15 +102,27 @@ class TableImportService
      * Create flow (mode=create, or a file without embedded ids): all ids are
      * dropped and a fresh single-variant table is created.
      *
-     * @param  string $path   Absolute path of the uploaded workbook.
-     * @param  string $mode   'auto' (ids → update, else create), 'create', 'update'.
-     * @param  bool   $force  Skip the optimistic-lock check on update.
+     * @param  string $path       Absolute path of the uploaded workbook.
+     * @param  string $mode       'auto' (ids → update, else create), 'create', 'update'.
+     * @param  bool   $force      Skip the optimistic-lock check on update.
+     * @param  bool   $canCreate  Whether the caller has the tables_create scope.
+     * @param  bool   $canUpdate  Whether the caller has the tables_update scope.
+     *                            Both default to false: the import route itself
+     *                            only requires tables_view.
      * @return array{table: Table, updated: bool}
      * @throws ExcelImportException                    422 — parse/merge/validation errors.
      * @throws \App\Exceptions\TableConflictException  409 — stale export.
      * @throws \Illuminate\Database\Eloquent\ModelNotFoundException 404 — table gone/other tenant.
+     * @throws AccessDeniedException                   403 — creation without tables_create,
+     *                                                 update without tables_update.
      */
-    public function fromExcelRoundTrip(string $path, string $mode = 'auto', bool $force = false): array
+    public function fromExcelRoundTrip(
+        string $path,
+        string $mode = 'auto',
+        bool $force = false,
+        bool $canCreate = false,
+        bool $canUpdate = false
+    ): array
     {
         $result = $this->excelReader->read($path);
 
@@ -139,12 +152,18 @@ class TableImportService
         }
 
         if ($update) {
+            if (!$canUpdate) {
+                throw new AccessDeniedException('', 0, null, ['tables_update']);
+            }
             // ModelNotFoundException (→404) when the id is unknown or belongs
             // to another application (repository is tenant-scoped)
             $existing = $this->repository->read($result->tableId);
             $payload = $this->mergeService->mergeIntoTable($existing, $result, $force);
             $tableId = $result->tableId;
         } else {
+            if (!$canCreate) {
+                throw new AccessDeniedException('', 0, null, ['tables_create']);
+            }
             $payload = $this->mergeService->buildCreatePayload($result);
             $tableId = null;
         }

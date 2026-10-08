@@ -66,10 +66,10 @@ The API uses **OAuth 2.0**. Three authentication methods are supported:
 
 ### 1. OAuth Bearer token (admin & user endpoints)
 
-Obtain a token via `POST /oauth/token` with the `password` grant:
+Obtain a token via `POST /api/v1/oauth/` with the `password` grant:
 
 ```http
-POST /oauth/token
+POST /api/v1/oauth/
 Authorization: Basic base64(client_id:client_secret)
 Content-Type: application/json
 
@@ -234,13 +234,15 @@ Returns `ok` (plain text). No authentication required. For load balancer health 
 
 ### Auth — OAuth 2.0
 
-#### `POST /oauth/token`
+#### `POST /api/v1/oauth/`
 
-| Grant type           | Use case                                        |
-| -------------------- | ----------------------------------------------- |
-| `password`           | User logs in with username + password           |
-| `client_credentials` | Machine-to-machine (consumer) auth              |
-| `refresh_token`      | Exchange a refresh token for a new access token |
+| Grant type      | Use case                                        |
+| --------------- | ----------------------------------------------- |
+| `password`      | User logs in with username + password           |
+| `refresh_token` | Exchange a refresh token for a new access token |
+
+Consumers (machine-to-machine) do not request a token: they send their
+credentials in HTTP Basic auth on the decision endpoints.
 
 ---
 
@@ -341,7 +343,8 @@ Excludes the requesting user. Paginated.
 
 #### `POST /api/v1/invite` — Invite a user
 
-Requires Bearer token + `X-Application`.
+Requires Bearer token + `X-Application` and the `users_manage` scope. Only a project
+admin can invite with the `admin` role (`403` otherwise).
 
 ```json
 {
@@ -367,7 +370,8 @@ Permanently deletes the application and **all** its decision tables. **Irreversi
 
 #### `GET /api/v1/projects/export`
 
-Runs `mongoexport` and returns a download URL for a `.tar.gz` archive.
+Runs `mongoexport` and returns a download URL for a `.tar.gz` archive. Requires the
+`project_update` scope (project admin): the archive holds every decision and change.
 
 ```json
 { "data": { "url": "https://api.example.com/dump/export_....tar.gz" } }
@@ -468,7 +472,8 @@ Full audit record with rules, conditions, and `matched` states.
 
 #### `PUT /api/v1/admin/decisions/{id}/meta`
 
-Attach metadata to a decision:
+Attach metadata to a decision. Requires the `decisions_make` scope (writing to
+decisions; `decisions_view` alone only reads them):
 
 ```json
 {
@@ -537,21 +542,23 @@ The `rules` array is included only when the application's `show_meta` setting is
 
 Every table save creates an automatic changelog snapshot. All queries are scoped to the current application.
 
-#### `GET /api/v1/admin/{collection}/changelog`
+#### `GET /api/v1/admin/changelog/{collection}`
 
 List all changelog entries for a collection (e.g. `tables`).
 
-#### `GET /api/v1/admin/{collection}/{model_id}/changelog`
+#### `GET /api/v1/admin/changelog/{collection}/{model_id}`
 
 Changelog history for a specific resource.
 
-#### `GET /api/v1/admin/{collection}/{model_id}/diff?compare_with={changelog_id}`
+#### `GET /api/v1/admin/changelog/{collection}/{model_id}/diff?compare_with={changelog_id}`
 
 Structured diff between two snapshots. Returns `added`, `removed`, `changed`.
 
-#### `PUT /api/v1/admin/{collection}/{model_id}/{changelog_id}/rollback`
+#### `POST /api/v1/admin/changelog/{collection}/{model_id}/rollback/{changelog_id}`
 
 Restore a resource to a previous snapshot. A new changelog entry is created for the rollback.
+The resource must still belong to the current application: after a move to another project,
+the snapshots left in the source project cannot pull it back (`404`). Requires `tables_update`.
 
 ---
 
@@ -707,7 +714,7 @@ Keys are normalised: lowercased, spaces → underscores. The key `variant_id` is
 ### 1. Get a token
 
 ```bash
-curl -X POST https://api.example.com/oauth/token \
+curl -X POST https://api.example.com/api/v1/oauth/ \
   -H "Authorization: Basic $(echo -n 'client_id:client_secret' | base64)" \
   -H "Content-Type: application/json" \
   -d '{"grant_type":"password","username":"admin","password":"admin"}'

@@ -168,10 +168,11 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 
 ### Middleware (`app/Http/Middleware/`)
 
-| Class                | Purpose                                                                               |
-| -------------------- | ------------------------------------------------------------------------------------- |
-| `JsonMiddleware`     | Sets `Accept: application/json` and `Content-Type: application/json` on every request |
-| `NewRelicMiddleware` | Names each New Relic transaction as `URI (METHOD)` for per-endpoint APM visibility    |
+| Class                      | Purpose                                                                                                                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JsonMiddleware`           | Sets `Accept: application/json` and `Content-Type: application/json` on every request                                                                    |
+| `NewRelicMiddleware`       | Names each New Relic transaction as `URI (METHOD)` for per-endpoint APM visibility                                                                       |
+| `ApplicationAclMiddleware` | Bound to the `applicationable.acl` route alias in place of the package middleware: scope checks on the routed method and path, members only by default |
 
 ### Exceptions (`app/Exceptions/`)
 
@@ -425,10 +426,19 @@ to a day number (days since 1970-01-01).
 	   → Resolves $request->user() to the authenticated User model
 	
 	4. LumenApplicationable middleware validates the X-Application header
-	   → Resolves the Application model and checks the user's role and scope
+	   → Resolves the Application model and the caller's member entry
+	     (null for a non-member: this middleware does not check membership)
 	
-	5. applicationable.acl middleware checks that the user's scope includes
-	   the required permission for the route (e.g. 'tables_create', 'decisions_make')
+	5. applicationable.acl middleware (App\Http\Middleware\ApplicationAclMiddleware)
+	   applies the first regex of config/applicationable.php 'acl' matching the
+	   [method, path] pair the router dispatched, kept by
+	   App\Application::parseIncomingRequest() (path trimmed of slashes,
+	   $_POST['_method'] or the real method, HEAD checked as GET; request headers
+	   such as X-HTTP-Method-Override or X-Original-URL play no part). The caller
+	   must be a member (or a consumer) of the application with every listed scope
+	   (e.g. 'tables_create', 'decisions_make'). A route with an application
+	   context and no matching regex is open to members only;
+	   tests/unit/AclCoverageTest.php fails when such a route appears.
 	
 	6. Controller method executes with $request->user() and Application available
 

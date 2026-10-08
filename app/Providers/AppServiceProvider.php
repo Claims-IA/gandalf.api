@@ -3,7 +3,8 @@
  * AppServiceProvider
  *
  * Registers core application service bindings in the IoC container. Notably it
- * binds DbTransfer as a singleton and, when Intercom or Mixpanel integrations are
+ * binds DbTransfer as a singleton, replaces the 'applicationable.acl' route
+ * middleware with ApplicationAclMiddleware and, when Intercom or Mixpanel integrations are
  * disabled via environment variables, replaces their real implementations with
  * inline no-op anonymous classes. This allows the EventListener to be constructed
  * and injected normally without runtime errors in environments that do not have
@@ -42,6 +43,13 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton('\App\Services\DbTransfer', function () {
             return new DbTransfer;
         });
+
+        // Routes that no ACL regex covers are closed to non-members (the package
+        // middleware let them through). Registered after the package provider,
+        // so this binding of 'applicationable.acl' wins.
+        $this->app->routeMiddleware([
+            'applicationable.acl' => \App\Http\Middleware\ApplicationAclMiddleware::class,
+        ]);
 
         // When Intercom/Mixpanel are disabled, bind no-op stubs so EventListener can be resolved.
         // Using anonymous classes that extend the real classes means type checks still pass.

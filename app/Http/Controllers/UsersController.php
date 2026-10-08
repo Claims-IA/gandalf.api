@@ -20,6 +20,7 @@ use App\Models\Invitation;
 use Nebo15\REST\Response;
 use Nebo15\REST\AbstractController;
 use Nebo15\REST\Interfaces\ListableInterface;
+use Nebo15\LumenApplicationable\Exceptions\AccessDeniedException;
 use Nebo15\LumenApplicationable\Models\Application;
 
 /**
@@ -341,6 +342,11 @@ class UsersController extends AbstractController
         // Restrict the allowed scope values to those the current user already possesses
         $this->validationRules['invite']['scope'] = 'required|array|in:' . join(',', $current_user->scope);
         $this->validateRoute();
+        // The role is applied when the invitee joins: only a project admin may
+        // invite another admin (users_manage alone must not grant the admin role).
+        if (strtolower((string) $this->request->input('role')) === 'admin' && !$current_user->isAdmin()) {
+            throw new AccessDeniedException('Only a project admin can invite an admin.');
+        }
         $project = $application->toArray();
         $fill = $this->request->all();
         // Embed the minimal project reference (id + title) into the invitation document

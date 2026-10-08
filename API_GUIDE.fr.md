@@ -67,10 +67,10 @@ L'API utilise **OAuth 2.0**. Trois méthodes d'authentification sont supportées
 
 ### 1. Token Bearer OAuth (endpoints admin et utilisateur)
 
-Obtenez un token via `POST /oauth/token` avec le grant `password` :
+Obtenez un token via `POST /api/v1/oauth/` avec le grant `password` :
 
 ```http
-POST /oauth/token
+POST /api/v1/oauth/
 Authorization: Basic base64(client_id:client_secret)
 Content-Type: application/json
 
@@ -237,13 +237,15 @@ Retourne `ok` en texte brut. Aucune authentification requise. Destiné aux sonde
 
 ### Auth — OAuth 2.0
 
-#### `POST /oauth/token`
+#### `POST /api/v1/oauth/`
 
 | Type de grant | Cas d'usage |
 |---------------|-------------|
 | `password` | Connexion d'un utilisateur avec nom d'utilisateur + mot de passe |
-| `client_credentials` | Authentification machine-à-machine (consommateur) |
 | `refresh_token` | Renouveler un token d'accès à partir d'un refresh token |
+
+Les consommateurs (machine à machine) ne demandent pas de token : ils envoient leurs
+identifiants en HTTP Basic sur les endpoints de décision.
 
 ---
 
@@ -352,7 +354,8 @@ Résultats paginés.
 
 #### `POST /api/v1/invite` — Inviter un utilisateur
 
-Nécessite un token Bearer + `X-Application`.
+Nécessite un token Bearer + `X-Application` et le scope `users_manage`. Seul un admin du
+projet peut inviter avec le rôle `admin` (`403` sinon).
 
 ```json
 {
@@ -383,7 +386,8 @@ Supprime définitivement l'application et **toutes** ses tables de décision. **
 #### `GET /api/v1/projects/export`
 
 Lance un `mongoexport` et retourne une URL de téléchargement vers une archive `.tar.gz`
-contenant les tables, décisions et journaux de modifications.
+contenant les tables, décisions et journaux de modifications. Nécessite le scope
+`project_update` (admin du projet).
 
 ```json
 { "data": { "url": "https://api.example.com/dump/export_....tar.gz" } }
@@ -516,7 +520,8 @@ Enregistrement d'audit complet avec les règles, conditions et leur état `match
 
 #### `PUT /api/v1/admin/decisions/{id}/meta` — Ajouter des métadonnées
 
-Associez des métadonnées arbitraires à une décision après coup :
+Associez des métadonnées arbitraires à une décision après coup. Nécessite le scope
+`decisions_make` (écriture sur les décisions ; `decisions_view` seul ne permet que la lecture) :
 
 ```json
 {
@@ -592,23 +597,25 @@ Retourne la représentation allégée d'une décision, sans les champs internes 
 Chaque sauvegarde de table crée automatiquement un instantané dans le journal.
 Toutes les requêtes sont isolées à l'application courante.
 
-#### `GET /api/v1/admin/{collection}/changelog`
+#### `GET /api/v1/admin/changelog/{collection}`
 
 Liste toutes les entrées du journal pour une collection (ex. : `tables`).
 
-#### `GET /api/v1/admin/{collection}/{model_id}/changelog`
+#### `GET /api/v1/admin/changelog/{collection}/{model_id}`
 
 Historique du journal pour une ressource spécifique.
 
-#### `GET /api/v1/admin/{collection}/{model_id}/diff?compare_with={changelog_id}`
+#### `GET /api/v1/admin/changelog/{collection}/{model_id}/diff?compare_with={changelog_id}`
 
 Différence structurée entre deux instantanés. Retourne les objets `added` (ajouté),
 `removed` (supprimé) et `changed` (modifié).
 
-#### `PUT /api/v1/admin/{collection}/{model_id}/{changelog_id}/rollback`
+#### `POST /api/v1/admin/changelog/{collection}/{model_id}/rollback/{changelog_id}`
 
 Restaure la ressource à l'état d'un instantané précédent. Une nouvelle entrée de journal
-est créée pour tracer l'opération de restauration.
+est créée pour tracer l'opération de restauration. La ressource doit toujours appartenir à
+l'application courante : après un déplacement vers un autre projet, les instantanés restés
+dans le projet source ne peuvent pas la ramener (`404`). Requiert `tables_update`.
 
 ---
 
@@ -786,7 +793,7 @@ Le `decision_type` d'une table valide les valeurs `than` et `default_decision` :
 ### 1. Obtenir un token
 
 ```bash
-curl -X POST https://api.example.com/oauth/token \
+curl -X POST https://api.example.com/api/v1/oauth/ \
   -H "Authorization: Basic $(echo -n 'client_id:client_secret' | base64)" \
   -H "Content-Type: application/json" \
   -d '{"grant_type":"password","username":"admin","password":"admin"}'

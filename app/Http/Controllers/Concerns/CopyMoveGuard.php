@@ -12,7 +12,8 @@
  *   - 403 when the caller is not an admin of the SOURCE application;
  *   - 422 when the target application is the source application (no-op move);
  *   - 404 when the target application does not exist;
- *   - 403 when the caller is not a member of the TARGET application.
+ *   - 403 when the caller is not a member of the TARGET application, or has no
+ *     tables_create scope there.
  *
  * The source table/flow itself is already scoped to the current application by
  * AbstractRepository::read (via the Applicationable contract), so ownership of
@@ -64,9 +65,19 @@ trait CopyMoveGuard
 
         // The caller must also be a member of the target application to write into it.
         $callerId = $this->request->user()->getId();
-        if (!$targetApp->getUser($callerId)) {
+        $targetUser = $targetApp->getUser($callerId);
+        if (!$targetUser) {
             return $this->response->json(
                 ['message' => 'You are not a member of the target application.'],
+                403
+            );
+        }
+
+        // The ACL only checks the source application (X-Application): writing
+        // into the target needs the same scope as creating a table there.
+        if (!$targetUser->canTables_create()) {
+            return $this->response->json(
+                ['message' => 'You need the tables_create scope in the target application.'],
                 403
             );
         }

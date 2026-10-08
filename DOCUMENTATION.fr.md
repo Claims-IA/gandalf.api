@@ -171,10 +171,11 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 
 ### Middlewares (`app/Http/Middleware/`)
 
-| Classe               | Rôle                                                                                      |
-| -------------------- | ----------------------------------------------------------------------------------------- |
-| `JsonMiddleware`     | Définit `Accept: application/json` et `Content-Type: application/json` sur chaque requête |
-| `NewRelicMiddleware` | Nomme chaque transaction New Relic sous la forme `URI (METHOD)` pour la visibilité APM    |
+| Classe                     | Rôle                                                                                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JsonMiddleware`           | Définit `Accept: application/json` et `Content-Type: application/json` sur chaque requête                                                                                 |
+| `NewRelicMiddleware`       | Nomme chaque transaction New Relic sous la forme `URI (METHOD)` pour la visibilité APM                                                                                    |
+| `ApplicationAclMiddleware` | Lié à l'alias de route `applicationable.acl` à la place du middleware du paquet : scopes vérifiés sur la méthode et le chemin routés, réservé aux membres par défaut |
 
 ### Exceptions (`app/Exceptions/`)
 
@@ -436,10 +437,19 @@ numéro de jour (jours depuis le 1970-01-01).
 	   → Résout $request->user() vers le modèle User authentifié
 	
 	4. Le middleware LumenApplicationable valide l'en-tête X-Application
-	   → Résout le modèle Application et vérifie le rôle et le scope de l'utilisateur
+	   → Résout le modèle Application et l'entrée membre de l'appelant
+	     (null pour un non-membre : ce middleware ne vérifie pas l'appartenance)
 	
-	5. Le middleware applicationable.acl vérifie que le scope de l'utilisateur inclut
-	   la permission requise pour la route (ex. 'tables_create', 'decisions_make')
+	5. Le middleware applicationable.acl (App\Http\Middleware\ApplicationAclMiddleware)
+	   applique la première regex de config/applicationable.php 'acl' qui correspond
+	   à la paire [méthode, chemin] routée, conservée par
+	   App\Application::parseIncomingRequest() (chemin sans slash final,
+	   $_POST['_method'] ou méthode réelle, HEAD contrôlé comme GET ; les en-têtes
+	   comme X-HTTP-Method-Override ou X-Original-URL n'interviennent pas).
+	   L'appelant doit être membre (ou consumer) de l'application et avoir chaque
+	   scope listé (ex. 'tables_create', 'decisions_make'). Une route avec contexte
+	   de projet sans regex correspondante est réservée aux membres ;
+	   tests/unit/AclCoverageTest.php échoue si une telle route apparaît.
 	
 	6. La méthode du contrôleur s'exécute avec $request->user() et Application disponibles
 
