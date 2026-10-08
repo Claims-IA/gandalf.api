@@ -76,7 +76,7 @@ components:
       type: http
       scheme: bearer
       description: >
-        OAuth 2.0 access token issued by `POST /oauth/token`.
+        OAuth 2.0 access token issued by `POST /api/v1/oauth/`.
         Include as `Authorization: Bearer <token>`.
     BasicAuth:
       type: http
@@ -1504,7 +1504,7 @@ paths:
                 example: ok
 
   # ── Auth ────────────────────────────────────────────────────────────────────
-  /oauth/token:
+  /api/v1/oauth/:
     post:
       tags: [Auth]
       summary: Obtain an OAuth access token

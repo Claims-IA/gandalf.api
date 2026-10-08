@@ -155,11 +155,11 @@ La vérification de l'email (`POST /api/v1/users/verify/email`) active le compte
 
 Gandalf API s'appuie sur OAuth 2.0 avec deux types de flux :
 
-| Flux                   | Usage                               | Endpoint                                                 |
-|------------------------|-------------------------------------|----------------------------------------------------------|
-| **Password Grant**     | Connexion d'un utilisateur humain   | `POST /oauth/token` avec `grant_type=password`           |
-| **Client Credentials** | Appels machine-à-machine (consumer) | `POST /oauth/token` avec `grant_type=client_credentials` |
-| **Refresh Token**      | Renouveler un token expiré          | `POST /oauth/token` avec `grant_type=refresh_token`      |
+| Flux                   | Usage                               | Endpoint                                                   |
+|------------------------|-------------------------------------|------------------------------------------------------------|
+| **Password Grant**     | Connexion d'un utilisateur humain   | `POST /api/v1/oauth/` avec `grant_type=password`           |
+| **Client Credentials** | Appels machine-à-machine (consumer) | `POST /api/v1/oauth/` avec `grant_type=client_credentials` |
+| **Refresh Token**      | Renouveler un token expiré          | `POST /api/v1/oauth/` avec `grant_type=refresh_token`      |
 
 Les tokens obtenus sont passés dans l'en-tête `Authorization: Bearer <token>` pour les appels authentifiés.
 
@@ -315,7 +315,7 @@ Avant tout appel admin, obtenez un token OAuth avec le flux Password Grant.
 **Requête**
 
 ```http
-POST /oauth/token
+POST /api/v1/oauth/
 Authorization: Basic <base64(client_id:client_secret)>
 Content-Type: application/json
 
@@ -887,7 +887,7 @@ La documentation de l'API existe au format [openAPI](./openapi.yaml).
 
 | Méthode  | Endpoint                            | Description                               |
 |----------|-------------------------------------|-------------------------------------------|
-| `POST`   | `/oauth/token`                      | Obtenir un token OAuth                    |
+| `POST`   | `/api/v1/oauth/`                    | Obtenir un token OAuth                    |
 | `POST`   | `/oauth/revoke`                     | Révoquer un token                         |
 | `POST`   | `/api/v1/users`                     | Créer un utilisateur                      |
 | `POST`   | `/api/v1/users/verify/email`        | Vérifier l'email                          |

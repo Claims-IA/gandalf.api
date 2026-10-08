@@ -66,10 +66,10 @@ The API uses **OAuth 2.0**. Three authentication methods are supported:
 
 ### 1. OAuth Bearer token (admin & user endpoints)
 
-Obtain a token via `POST /oauth/token` with the `password` grant:
+Obtain a token via `POST /api/v1/oauth/` with the `password` grant:
 
 ```http
-POST /oauth/token
+POST /api/v1/oauth/
 Authorization: Basic base64(client_id:client_secret)
 Content-Type: application/json
 
@@ -234,7 +234,7 @@ Returns `ok` (plain text). No authentication required. For load balancer health 
 
 ### Auth — OAuth 2.0
 
-#### `POST /oauth/token`
+#### `POST /api/v1/oauth/`
 
 | Grant type           | Use case                                        |
 | -------------------- | ----------------------------------------------- |
@@ -537,21 +537,23 @@ The `rules` array is included only when the application's `show_meta` setting is
 
 Every table save creates an automatic changelog snapshot. All queries are scoped to the current application.
 
-#### `GET /api/v1/admin/{collection}/changelog`
+#### `GET /api/v1/admin/changelog/{collection}`
 
 List all changelog entries for a collection (e.g. `tables`).
 
-#### `GET /api/v1/admin/{collection}/{model_id}/changelog`
+#### `GET /api/v1/admin/changelog/{collection}/{model_id}`
 
 Changelog history for a specific resource.
 
-#### `GET /api/v1/admin/{collection}/{model_id}/diff?compare_with={changelog_id}`
+#### `GET /api/v1/admin/changelog/{collection}/{model_id}/diff?compare_with={changelog_id}`
 
 Structured diff between two snapshots. Returns `added`, `removed`, `changed`.
 
-#### `PUT /api/v1/admin/{collection}/{model_id}/{changelog_id}/rollback`
+#### `POST /api/v1/admin/changelog/{collection}/{model_id}/rollback/{changelog_id}`
 
 Restore a resource to a previous snapshot. A new changelog entry is created for the rollback.
+The resource must still belong to the current application: after a move to another project,
+the snapshots left in the source project cannot pull it back (`404`). Requires `tables_update`.
 
 ---
 
@@ -707,7 +709,7 @@ Keys are normalised: lowercased, spaces → underscores. The key `variant_id` is
 ### 1. Get a token
 
 ```bash
-curl -X POST https://api.example.com/oauth/token \
+curl -X POST https://api.example.com/api/v1/oauth/ \
   -H "Authorization: Basic $(echo -n 'client_id:client_secret' | base64)" \
   -H "Content-Type: application/json" \
   -d '{"grant_type":"password","username":"admin","password":"admin"}'
