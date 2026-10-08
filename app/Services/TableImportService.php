@@ -105,15 +105,24 @@ class TableImportService
      * @param  string $path       Absolute path of the uploaded workbook.
      * @param  string $mode       'auto' (ids → update, else create), 'create', 'update'.
      * @param  bool   $force      Skip the optimistic-lock check on update.
-     * @param  bool   $canUpdate  Whether the caller has the tables_update scope (the
-     *                            import route itself only requires tables_create).
+     * @param  bool   $canCreate  Whether the caller has the tables_create scope.
+     * @param  bool   $canUpdate  Whether the caller has the tables_update scope.
+     *                            Both default to false: the import route itself
+     *                            only requires tables_view.
      * @return array{table: Table, updated: bool}
      * @throws ExcelImportException                    422 — parse/merge/validation errors.
      * @throws \App\Exceptions\TableConflictException  409 — stale export.
      * @throws \Illuminate\Database\Eloquent\ModelNotFoundException 404 — table gone/other tenant.
-     * @throws AccessDeniedException                   403 — update without tables_update.
+     * @throws AccessDeniedException                   403 — creation without tables_create,
+     *                                                 update without tables_update.
      */
-    public function fromExcelRoundTrip(string $path, string $mode = 'auto', bool $force = false, bool $canUpdate = true): array
+    public function fromExcelRoundTrip(
+        string $path,
+        string $mode = 'auto',
+        bool $force = false,
+        bool $canCreate = false,
+        bool $canUpdate = false
+    ): array
     {
         $result = $this->excelReader->read($path);
 
@@ -152,6 +161,9 @@ class TableImportService
             $payload = $this->mergeService->mergeIntoTable($existing, $result, $force);
             $tableId = $result->tableId;
         } else {
+            if (!$canCreate) {
+                throw new AccessDeniedException('', 0, null, ['tables_create']);
+            }
             $payload = $this->mergeService->buildCreatePayload($result);
             $tableId = null;
         }

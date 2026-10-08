@@ -442,12 +442,14 @@ numéro de jour (jours depuis le 1970-01-01).
 	
 	5. Le middleware applicationable.acl (App\Http\Middleware\ApplicationAclMiddleware)
 	   applique la première regex de config/applicationable.php 'acl' qui correspond
-	   à la méthode et au chemin routés par Lumen (chemin sans slash final,
-	   $_POST['_method'] ou méthode réelle, pas X-HTTP-Method-Override), ainsi qu'à
-	   la lecture Symfony de la requête ; l'appelant doit être membre (ou consumer)
-	   de l'application et avoir chaque scope listé (ex. 'tables_create', 'decisions_make').
-	   Une route avec contexte de projet sans regex correspondante est réservée aux
-	   membres ; tests/unit/AclCoverageTest.php échoue si une telle route apparaît.
+	   à la paire [méthode, chemin] routée, conservée par
+	   App\Application::parseIncomingRequest() (chemin sans slash final,
+	   $_POST['_method'] ou méthode réelle, HEAD contrôlé comme GET ; les en-têtes
+	   comme X-HTTP-Method-Override ou X-Original-URL n'interviennent pas).
+	   L'appelant doit être membre (ou consumer) de l'application et avoir chaque
+	   scope listé (ex. 'tables_create', 'decisions_make'). Une route avec contexte
+	   de projet sans regex correspondante est réservée aux membres ;
+	   tests/unit/AclCoverageTest.php échoue si une telle route apparaît.
 	
 	6. La méthode du contrôleur s'exécute avec $request->user() et Application disponibles
 

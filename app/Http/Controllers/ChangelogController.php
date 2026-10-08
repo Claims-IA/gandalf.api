@@ -117,15 +117,14 @@ class ChangelogController extends Controller implements ControllerInterface
     /**
      * Roll back a document to the state captured in a specific changelog entry.
      *
-     * The Changelog library replaces the current document attributes with those
-     * stored in the snapshot, then persists the result and creates a new changelog
-     * entry for the rollback action itself.
+     * The document attributes are replaced with those stored in the snapshot and
+     * saved; the model observer records a new changelog entry for the rollback.
      *
-     * The library finds the snapshot by application but reloads and saves the
-     * document without that filter, `applications` included: a document moved
-     * to another application since the snapshot would be pulled back here and
-     * overwritten. Only a document that still belongs to the current application
-     * is rolled back (404 otherwise).
+     * Changelog::rollback() is not used: it finds the snapshot by application
+     * but reloads the document without that filter, so a document moved to
+     * another application since the snapshot was pulled back here and
+     * overwritten. The document is loaded within the current application
+     * (404 when it is no longer there) and the snapshot applied to it.
      *
      * @param  string $table        The MongoDB collection name.
      * @param  string $model_id     The MongoDB ObjectID of the document.
@@ -135,21 +134,25 @@ class ChangelogController extends Controller implements ControllerInterface
     public function rollback($table, $model_id, $changelog_id)
     {
         $applicationId = ApplicationableHelper::getApplicationId();
-        $where = ['model.attributes.applications' => $applicationId];
-
-        $model = $this->changelogModel->findById($changelog_id, $table, $model_id, $where)->getModelClass();
-        $model->newQuery()
+        $changelog = $this->changelogModel->findById(
+            $changelog_id,
+            $table,
+            $model_id,
+            ['model.attributes.applications' => $applicationId]
+        );
+        $model = $changelog->getModelClass();
+        $document = $model->newQuery()
             ->where($model->getKeyName(), $model_id)
             ->where('applications', (string) $applicationId)
             ->firstOrFail();
 
         // A table rollback can rename fields back (same field _id, other key):
         // the flows that followed the rename must follow the rollback too.
-        // (The rollback result only says whether the save succeeded, so the
-        // fields after it are read back.)
+        // (The save result only says whether it succeeded, so the fields after
+        // it are read back.)
         $fieldsBefore = $table === 'tables' ? $this->tableFields($model_id) : [];
 
-        $result = $this->changelogModel->rollback($table, $model_id, $changelog_id, $where);
+        $result = ['reverted' => $document->setRawAttributes($changelog->model['attributes'])->save()];
 
         if ($table === 'tables') {
             $renames = TablesRepository::fieldRenamesBetween($fieldsBefore, $this->tableFields($model_id));

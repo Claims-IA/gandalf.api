@@ -113,6 +113,41 @@ class TablesImportExportCest
     // Tests
     // -------------------------------------------------------------------------
 
+    public function importScopesFollowCreateOrUpdate(ApiTester $I)
+    {
+        $admin = $I->createUser(); // project admin of _before
+        $editor = $I->createUser(true);
+        $I->loginUser($admin);
+        $table = $this->createTable($I);
+        $path = $this->exportToFile($I, $table->_id);
+
+        // Can create tables but not update them: the round trip is an update.
+        $I->sendPOST('api/v1/projects/users', [
+            'user_id' => $editor->_id, 'role' => 'manager', 'scope' => ['tables_view', 'tables_create'],
+        ]);
+        $I->seeResponseCodeIs(201);
+        $I->loginUser($editor);
+        $this->importFile($I, $path);
+        $I->seeResponseCodeIs(403);
+        $I->seeResponseContains('tables_update');
+        $this->importFile($I, $path, ['mode' => 'create']);
+        $I->seeResponseCodeIs(201);
+
+        // Can update tables but not create them: the round trip goes through.
+        $I->loginUser($admin);
+        $I->sendPUT('api/v1/projects/users', [
+            'user_id' => $editor->_id, 'role' => 'manager', 'scope' => ['tables_view', 'tables_update'],
+        ]);
+        $I->seeResponseCodeIs(200);
+        $I->loginUser($editor);
+        $this->importFile($I, $path);
+        $I->seeResponseCodeIs(200);
+        $this->importFile($I, $path, ['mode' => 'create']);
+        $I->seeResponseCodeIs(403);
+        $I->seeResponseContains('tables_create');
+        unlink($path);
+    }
+
     public function roundTripIdentity(ApiTester $I)
     {
         $table = $this->createTable($I);

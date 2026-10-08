@@ -1509,12 +1509,15 @@ paths:
       tags: [Auth]
       summary: Obtain an OAuth access token
       description: |
-        Exchange client credentials or a user password for an access token.
+        Exchange a user password, or a refresh token, for an access token (the OAuth
+        client authenticates with HTTP Basic).
 
         **Grant types supported:**
-        - `client_credentials` — returns a client-level token for consumer endpoints.
         - `password` — returns a user-level token for admin and user endpoints.
         - `refresh_token` — exchange a refresh token for a new access token.
+
+        Consumers do not request a token: they send their credentials in HTTP Basic
+        auth on the decision endpoints.
       operationId: oauthToken
       security:
         - BasicAuth: []
@@ -1527,7 +1530,7 @@ paths:
               properties:
                 grant_type:
                   type: string
-                  enum: [client_credentials, password, refresh_token]
+                  enum: [password, refresh_token]
                   example: "password"
                 username:
                   type: string
@@ -2084,6 +2087,8 @@ paths:
                     type: object
                   data:
                     $ref: '#/components/schemas/Invitation'
+        "403":
+          description: Caller lacks the `users_manage` scope, or is not a project admin and invites with the `admin` role.
         "422":
           description: Validation error or insufficient scope.
 
@@ -2144,6 +2149,8 @@ paths:
                         type: string
                         description: Public URL to the generated `.tar.gz` archive.
                         example: "https://api.example.com/dump/export_507f1f77bcf86cd799439011.tar.gz"
+        "403":
+          description: Caller is not a member of the project with the `project_update` scope.
 
   # ── Collaborators ────────────────────────────────────────────────────────────
   /api/v1/projects/collaborators:
@@ -3143,8 +3150,9 @@ paths:
       summary: Import a decision table (create or round-trip update)
       description: |
         Imports a decision table file into the current project (`X-Application` header).
-        Requires `tables_create`; updating an existing table (round-trip workbook)
-        also requires `tables_update` (403 otherwise, before any change).
+        Requires `tables_view`; creating a table also requires `tables_create`, and
+        updating an existing one (round-trip workbook) requires `tables_update`
+        (403 otherwise, before any change).
 
         **Round-trip Excel workbooks** (exported via `?format=excel`, carrying the
         hidden `_meta` sheet) **update the original table** by default:

@@ -163,4 +163,19 @@ class AclCest
         $I->seeResponseCodeIs(403);
         $I->seeResponseContains('users_manage');
     }
+
+    public function onlyAnAdminInvitesAnAdmin(ApiTester $I)
+    {
+        $owner = $I->createUser(true);
+        $manager = $I->createUser(true);
+
+        $I->loginUser($owner);
+        $I->createProjectAndSetHeader();
+        $this->addMember($I, $manager, ['tables_view', 'users_manage']);
+
+        $I->loginUser($manager);
+        $I->sendPOST('api/v1/invite', ['email' => 'invitee@example.com', 'role' => 'admin', 'scope' => ['tables_view']]);
+        $I->seeResponseCodeIs(403);
+        $I->seeResponseContains('Only a project admin can invite an admin.');
+    }
 }

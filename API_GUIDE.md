@@ -236,11 +236,13 @@ Returns `ok` (plain text). No authentication required. For load balancer health 
 
 #### `POST /api/v1/oauth/`
 
-| Grant type           | Use case                                        |
-| -------------------- | ----------------------------------------------- |
-| `password`           | User logs in with username + password           |
-| `client_credentials` | Machine-to-machine (consumer) auth              |
-| `refresh_token`      | Exchange a refresh token for a new access token |
+| Grant type      | Use case                                        |
+| --------------- | ----------------------------------------------- |
+| `password`      | User logs in with username + password           |
+| `refresh_token` | Exchange a refresh token for a new access token |
+
+Consumers (machine-to-machine) do not request a token: they send their
+credentials in HTTP Basic auth on the decision endpoints.
 
 ---
 
@@ -341,7 +343,8 @@ Excludes the requesting user. Paginated.
 
 #### `POST /api/v1/invite` — Invite a user
 
-Requires Bearer token + `X-Application`.
+Requires Bearer token + `X-Application` and the `users_manage` scope. Only a project
+admin can invite with the `admin` role (`403` otherwise).
 
 ```json
 {
@@ -367,7 +370,8 @@ Permanently deletes the application and **all** its decision tables. **Irreversi
 
 #### `GET /api/v1/projects/export`
 
-Runs `mongoexport` and returns a download URL for a `.tar.gz` archive.
+Runs `mongoexport` and returns a download URL for a `.tar.gz` archive. Requires the
+`project_update` scope (project admin): the archive holds every decision and change.
 
 ```json
 { "data": { "url": "https://api.example.com/dump/export_....tar.gz" } }
@@ -468,7 +472,8 @@ Full audit record with rules, conditions, and `matched` states.
 
 #### `PUT /api/v1/admin/decisions/{id}/meta`
 
-Attach metadata to a decision:
+Attach metadata to a decision. Requires the `decisions_make` scope (writing to
+decisions; `decisions_view` alone only reads them):
 
 ```json
 {

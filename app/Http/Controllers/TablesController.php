@@ -24,6 +24,7 @@ use App\Validators\TableRulesProvider;
 use App\Http\Controllers\Concerns\CopyMoveGuard;
 use Nebo15\REST\AbstractController;
 use Nebo15\REST\Interfaces\ListableInterface;
+use Nebo15\LumenApplicationable\Exceptions\AccessDeniedException;
 
 /**
  * Class TablesController
@@ -278,14 +279,19 @@ class TablesController extends AbstractController
             ], 422);
         }
 
+        // The route only requires tables_view: creating a table needs
+        // tables_create, updating one needs tables_update.
+        $member = $this->request->user()->getApplicationUser();
+        $canCreate = (bool) $member->canTables_create();
+
         try {
             if ($this->importService->isRoundTripExcel($file)) {
-                // The route requires tables_create; updating a table also needs tables_update.
                 $outcome = $this->importService->fromExcelRoundTrip(
                     $file->getRealPath(),
                     $this->request->input('mode', 'auto'),
                     (bool) $this->request->input('force', false),
-                    (bool) $this->request->user()->getApplicationUser()->canTables_update()
+                    $canCreate,
+                    (bool) $member->canTables_update()
                 );
                 return $this->response->json(
                     $outcome['table']->toArray(),
@@ -300,6 +306,9 @@ class TablesController extends AbstractController
                     'message' => 'mode=update requiert un classeur Excel round-trip '
                         . '(exporté via ?format=excel) — ce fichier ne peut que créer une nouvelle table.',
                 ], 422);
+            }
+            if (!$canCreate) {
+                throw new AccessDeniedException('', 0, null, ['tables_create']);
             }
             $table = $this->importService->fromFile($file);
         } catch (TableConflictException $e) {

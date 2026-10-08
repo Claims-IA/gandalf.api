@@ -431,12 +431,14 @@ to a day number (days since 1970-01-01).
 	
 	5. applicationable.acl middleware (App\Http\Middleware\ApplicationAclMiddleware)
 	   applies the first regex of config/applicationable.php 'acl' matching the
-	   method and path that Lumen routes (path trimmed of slashes, $_POST['_method']
-	   or the real method, not X-HTTP-Method-Override), and also Symfony's reading
-	   of the request; the caller must be a member (or a consumer) of the
-	   application with every listed scope (e.g. 'tables_create', 'decisions_make').
-	   A route with an application context and no matching regex is open to
-	   members only; tests/unit/AclCoverageTest.php fails when such a route appears.
+	   [method, path] pair the router dispatched, kept by
+	   App\Application::parseIncomingRequest() (path trimmed of slashes,
+	   $_POST['_method'] or the real method, HEAD checked as GET; request headers
+	   such as X-HTTP-Method-Override or X-Original-URL play no part). The caller
+	   must be a member (or a consumer) of the application with every listed scope
+	   (e.g. 'tables_create', 'decisions_make'). A route with an application
+	   context and no matching regex is open to members only;
+	   tests/unit/AclCoverageTest.php fails when such a route appears.
 	
 	6. Controller method executes with $request->user() and Application available
 

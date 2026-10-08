@@ -242,8 +242,10 @@ Retourne `ok` en texte brut. Aucune authentification requise. Destiné aux sonde
 | Type de grant | Cas d'usage |
 |---------------|-------------|
 | `password` | Connexion d'un utilisateur avec nom d'utilisateur + mot de passe |
-| `client_credentials` | Authentification machine-à-machine (consommateur) |
 | `refresh_token` | Renouveler un token d'accès à partir d'un refresh token |
+
+Les consommateurs (machine à machine) ne demandent pas de token : ils envoient leurs
+identifiants en HTTP Basic sur les endpoints de décision.
 
 ---
 
@@ -352,7 +354,8 @@ Résultats paginés.
 
 #### `POST /api/v1/invite` — Inviter un utilisateur
 
-Nécessite un token Bearer + `X-Application`.
+Nécessite un token Bearer + `X-Application` et le scope `users_manage`. Seul un admin du
+projet peut inviter avec le rôle `admin` (`403` sinon).
 
 ```json
 {
@@ -383,7 +386,8 @@ Supprime définitivement l'application et **toutes** ses tables de décision. **
 #### `GET /api/v1/projects/export`
 
 Lance un `mongoexport` et retourne une URL de téléchargement vers une archive `.tar.gz`
-contenant les tables, décisions et journaux de modifications.
+contenant les tables, décisions et journaux de modifications. Nécessite le scope
+`project_update` (admin du projet).
 
 ```json
 { "data": { "url": "https://api.example.com/dump/export_....tar.gz" } }
@@ -516,7 +520,8 @@ Enregistrement d'audit complet avec les règles, conditions et leur état `match
 
 #### `PUT /api/v1/admin/decisions/{id}/meta` — Ajouter des métadonnées
 
-Associez des métadonnées arbitraires à une décision après coup :
+Associez des métadonnées arbitraires à une décision après coup. Nécessite le scope
+`decisions_make` (écriture sur les décisions ; `decisions_view` seul ne permet que la lecture) :
 
 ```json
 {

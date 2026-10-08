@@ -67,7 +67,9 @@ return [
             '~^\/api\/v1\/admin\/flows$~' => ['tables_create'],
             '~^\/api\/v1\/admin\/tables\/(.+)\/copy$~' => ['tables_create'],
             '~^\/api\/v1\/admin\/flows\/(.+)\/copy$~' => ['tables_create'],
-            '~^\/api\/v1\/admin\/tables\/import$~' => ['tables_create'],
+            // Import creates (tables_create) or updates (tables_update) a table:
+            // checked in TablesController::import once the kind is known.
+            '~^\/api\/v1\/admin\/tables\/import$~' => ['tables_view'],
             // Cross-project copy/move (also gated on project-admin role in the
             // controller via CopyMoveGuard). Copy needs create; move additionally
             // removes from the source, so it needs delete too.
