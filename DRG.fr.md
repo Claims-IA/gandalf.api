@@ -344,7 +344,7 @@ la table via le changelog fait suivre les clés restaurées de la même façon.
 `GET /api/v1/admin/flows?table_id=…` liste les flows qui utilisent une table.
 
 **Copie et déplacement vers un autre projet** (réservés aux admins du projet, qui
-doivent aussi être membres du projet cible) : un flow ne s'exécute que si ses
+doivent aussi être membres du projet cible avec le scope `tables_create`) : un flow ne s'exécute que si ses
 tables sont dans son propre projet, donc ses tables sont amenées dans le projet
 cible et le `table_id` de chaque nœud est réaffecté. Une table déjà présente dans
 la cible est réutilisée au lieu d'être recopiée si elle a la même origine (la

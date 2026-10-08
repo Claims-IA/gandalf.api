@@ -2036,9 +2036,11 @@ paths:
         Sends an invitation email to the given address. The invitee is
         granted the specified `role` and `scope` within the current application.
 
+        Requires the `users_manage` scope.
+
         **Privilege escalation prevention:** The requested `scope` must be a
         subset of the inviting user's own scope; extra scopes are rejected with
-        HTTP 422.
+        HTTP 422. Only a project admin can invite with the `admin` role (403).
 
         If the invitee already has an account, the `InvitationsObserver` adds
         them directly to the application; otherwise they are added when they register.
@@ -2119,7 +2121,7 @@ paths:
       description: |
         Runs `mongoexport` for the application's tables, decisions, and
         changelogs, packages them into a `.tar.gz` archive, and returns a
-        download URL.
+        download URL. Requires the `project_update` scope (project admin).
       operationId: exportProject
       security:
         - BearerAuth: []
@@ -3141,6 +3143,8 @@ paths:
       summary: Import a decision table (create or round-trip update)
       description: |
         Imports a decision table file into the current project (`X-Application` header).
+        Requires `tables_create`; updating an existing table (round-trip workbook)
+        also requires `tables_update` (403 otherwise, before any change).
 
         **Round-trip Excel workbooks** (exported via `?format=excel`, carrying the
         hidden `_meta` sheet) **update the original table** by default:
@@ -3353,7 +3357,7 @@ paths:
         are per-application, so a source category id would be an orphan in the target.
 
         **Restricted to project admins.** The caller must be an `admin` of the
-        source project AND a member of the target project.
+        source project AND a member of the target project with the `tables_create` scope.
       operationId: copyTableTo
       security:
         - BearerAuth: []
@@ -3381,7 +3385,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Table'
         "403":
-          description: Caller is not a project admin, or not a member of the target project.
+          description: Caller is not a project admin, or not a member of the target project with the `tables_create` scope.
         "404":
           description: Source table or target project not found.
         "422":
@@ -3398,7 +3402,7 @@ paths:
         (categories are per-application).
 
         **Restricted to project admins.** The caller must be an `admin` of the
-        source project AND a member of the target project.
+        source project AND a member of the target project with the `tables_create` scope.
       operationId: moveTableTo
       security:
         - BearerAuth: []
@@ -3426,7 +3430,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Table'
         "403":
-          description: Caller is not a project admin, or not a member of the target project.
+          description: Caller is not a project admin, or not a member of the target project with the `tables_create` scope.
         "404":
           description: Source table or target project not found.
         "422":
@@ -3456,7 +3460,7 @@ paths:
         left untouched. `category_id` is reset to null (per-application).
 
         **Restricted to project admins.** The caller must be an `admin` of the
-        source project AND a member of the target project.
+        source project AND a member of the target project with the `tables_create` scope.
       operationId: copyFlowTo
       security:
         - BearerAuth: []
@@ -3484,7 +3488,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Flow'
         "403":
-          description: Caller is not a project admin, or not a member of the target project.
+          description: Caller is not a project admin, or not a member of the target project with the `tables_create` scope.
         "404":
           description: Source flow or target project not found.
         "422":
@@ -3514,7 +3518,7 @@ paths:
         after the other, therefore brings each table over once.
 
         **Restricted to project admins.** The caller must be an `admin` of the
-        source project AND a member of the target project.
+        source project AND a member of the target project with the `tables_create` scope.
       operationId: moveFlowTo
       security:
         - BearerAuth: []
@@ -3542,7 +3546,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Flow'
         "403":
-          description: Caller is not a project admin, or not a member of the target project.
+          description: Caller is not a project admin, or not a member of the target project with the `tables_create` scope.
         "404":
           description: Source flow or target project not found.
         "422":
@@ -3626,6 +3630,7 @@ paths:
       description: |
         Attaches or replaces the `meta` bag on a decision record. Useful for
         correlating a decision with an external record (order ID, payment reference, etc.).
+        Requires the `decisions_make` scope.
 
         **Constraints:**
         - Maximum 24 keys per decision.
@@ -3953,6 +3958,10 @@ paths:
       description: |
         Restores a document to the state captured in the specified changelog entry.
         A new changelog entry is created recording the rollback action.
+
+        The document must still belong to the current application: after a move to
+        another project, the snapshots left in the source project cannot pull it back
+        (404). Requires `tables_update`.
       operationId: changelogRollback
       security:
         - BearerAuth: []
@@ -3992,4 +4001,4 @@ paths:
                     type: object
                     description: The restored resource document.
         "404":
-          description: Changelog entry or resource not found.
+          description: Changelog entry or resource not found, or resource no longer in the current application.

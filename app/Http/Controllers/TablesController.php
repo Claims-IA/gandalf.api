@@ -162,10 +162,10 @@ class TablesController extends AbstractController
     /**
      * Move a decision table to another project (change ownership, no copy).
      *
-     * Admin-only, and the caller must be a member of the target project (enforced
-     * by guardCopyMove). The source table (scoped to the current application) is
-     * reassigned to $project_id and its category reset. It disappears from the
-     * source project and appears in the target.
+     * Admin-only, and the caller must be a member of the target project with the
+     * tables_create scope (enforced by guardCopyMove). The source table (scoped
+     * to the current application) is reassigned to $project_id and its category
+     * reset. It disappears from the source project and appears in the target.
      *
      * @param  string $id         MongoDB ObjectID of the table to move.
      * @param  string $project_id MongoDB ObjectID of the target project/application.
@@ -280,10 +280,12 @@ class TablesController extends AbstractController
 
         try {
             if ($this->importService->isRoundTripExcel($file)) {
+                // The route requires tables_create; updating a table also needs tables_update.
                 $outcome = $this->importService->fromExcelRoundTrip(
                     $file->getRealPath(),
                     $this->request->input('mode', 'auto'),
-                    (bool) $this->request->input('force', false)
+                    (bool) $this->request->input('force', false),
+                    (bool) $this->request->user()->getApplicationUser()->canTables_update()
                 );
                 return $this->response->json(
                     $outcome['table']->toArray(),

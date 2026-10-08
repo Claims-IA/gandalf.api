@@ -121,6 +121,12 @@ class ChangelogController extends Controller implements ControllerInterface
      * stored in the snapshot, then persists the result and creates a new changelog
      * entry for the rollback action itself.
      *
+     * The library finds the snapshot by application but reloads and saves the
+     * document without that filter, `applications` included: a document moved
+     * to another application since the snapshot would be pulled back here and
+     * overwritten. Only a document that still belongs to the current application
+     * is rolled back (404 otherwise).
+     *
      * @param  string $table        The MongoDB collection name.
      * @param  string $model_id     The MongoDB ObjectID of the document.
      * @param  string $changelog_id The changelog entry ID to restore.
@@ -128,18 +134,22 @@ class ChangelogController extends Controller implements ControllerInterface
      */
     public function rollback($table, $model_id, $changelog_id)
     {
+        $applicationId = ApplicationableHelper::getApplicationId();
+        $where = ['model.attributes.applications' => $applicationId];
+
+        $model = $this->changelogModel->findById($changelog_id, $table, $model_id, $where)->getModelClass();
+        $model->newQuery()
+            ->where($model->getKeyName(), $model_id)
+            ->where('applications', (string) $applicationId)
+            ->firstOrFail();
+
         // A table rollback can rename fields back (same field _id, other key):
         // the flows that followed the rename must follow the rollback too.
         // (The rollback result only says whether the save succeeded, so the
         // fields after it are read back.)
         $fieldsBefore = $table === 'tables' ? $this->tableFields($model_id) : [];
 
-        $result = $this->changelogModel->rollback(
-            $table,
-            $model_id,
-            $changelog_id,
-            ['model.attributes.applications' => ApplicationableHelper::getApplicationId()]
-        );
+        $result = $this->changelogModel->rollback($table, $model_id, $changelog_id, $where);
 
         if ($table === 'tables') {
             $renames = TablesRepository::fieldRenamesBetween($fieldsBefore, $this->tableFields($model_id));
