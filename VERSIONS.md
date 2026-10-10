@@ -508,7 +508,7 @@ This document moves each section from "planned" to "in place" as batches ship.
 | 2b | API: Excel import and export per version, removal of `is_default` | 2 | done, to review |
 | 3 | API: v2 route, test runs, calls per key and the matching deletion guard, v1 deprecation | 2 | done, to review |
 | 4 | API: flow versions, pinned nodes, bulk update of compatible flows | 1 | done, to review |
-| 5 | gandalf.web: table versions | 2, 3 | to do |
+| 5 | gandalf.web: table versions | 2, 3 | done, to review (gandalf.web, branch `feature/table-versions`) |
 | 6 | gandalf.web: flow versions | 4, 5 | to do |
 | 7 | Two-level administration (independent) | | to do |
 

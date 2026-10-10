@@ -534,7 +534,7 @@ livraison.
 | 2b | API : import et export Excel par version, suppression de `is_default` | 2 | fait, à relire |
 | 3 | API : route v2, exécution de test, suivi des appels par clé et garde-fou de suppression associé, obsolescence v1 | 2 | fait, à relire |
 | 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | fait, à relire |
-| 5 | gandalf.web : versions de tables | 2, 3 | à faire |
+| 5 | gandalf.web : versions de tables | 2, 3 | fait, à relire (gandalf.web, branche `feature/table-versions`) |
 | 6 | gandalf.web : versions de flows | 4, 5 | à faire |
 | 7 | Administration à deux niveaux (indépendant) | | à faire |
 
