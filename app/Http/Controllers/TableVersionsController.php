@@ -14,6 +14,8 @@
  *   POST   /versions/{version_id}/decisions  test run of a draft or a version
  *   POST   /activate                         activate a published version
  *   GET    /calls                            recent calls of the project's API keys
+ *   GET    /flows                            flows using the table, version per node
+ *   POST   /flows/update                     bring flows to the active version
  *
  * The ACL (config/applicationable.php) requires the base scope of each route.
  * Two depend on the version and are checked here: deleting a published
@@ -35,6 +37,7 @@ use App\Services\ConditionsTypes;
 use App\Repositories\TablesRepository;
 use App\Validators\TableRulesProvider;
 use App\Repositories\TableVersionsRepository;
+use App\Repositories\FlowVersionsRepository;
 use Illuminate\Contracts\Validation\ValidationException;
 use Nebo15\LumenApplicationable\Models\Application;
 use Nebo15\LumenApplicationable\Exceptions\AccessDeniedException;
@@ -53,14 +56,18 @@ class TableVersionsController extends Controller
 
     private $calls;
 
+    private $flowVersions;
+
     public function __construct(
         Request $request,
         Response $response,
         TablesRepository $tables,
         TableVersionsRepository $versions,
         ConditionsTypes $conditionsTypes,
-        VersionCalls $calls
+        VersionCalls $calls,
+        FlowVersionsRepository $flowVersions
     ) {
+        $this->flowVersions = $flowVersions;
         $this->request = $request;
         $this->response = $response;
         $this->tables = $tables;
@@ -181,7 +188,10 @@ class TableVersionsController extends Controller
     /**
      * Activate a published version. The response meta lists the API keys that
      * recently called the table without a version (`callers_without_version`):
-     * the activation changes what they run.
+     * the activation changes what they run; and the flows still pinned to
+     * another version (`flows_outdated`): it changes nothing for them until
+     * they are brought to it (POST /flows/update). In compatibility mode flows
+     * follow, so none is left behind.
      */
     public function activate(Application $application, $id)
     {
@@ -192,6 +202,9 @@ class TableVersionsController extends Controller
         $divergence = $this->versions->divergence($table, $version);
         $meta = $this->versions->activate($table, $version);
         $meta['callers_without_version'] = $this->calls->withoutVersion($table, $application);
+        $meta['flows_outdated'] = array_values(array_filter($this->flowVersions->flowsUsing($table), function ($flow) {
+            return $flow['outdated'];
+        }));
 
         return $this->response->json($table->toArray(), Response::HTTP_OK, ($divergence ?: []) + $meta);
     }
@@ -225,6 +238,46 @@ class TableVersionsController extends Controller
             Response::HTTP_OK,
             ['window_days' => VersionCalls::windowDays()]
         );
+    }
+
+    /**
+     * The project's flows using the table, with the table version each of
+     * their nodes runs and whether that is the active one.
+     */
+    public function flows($id)
+    {
+        return $this->response->json($this->flowVersions->flowsUsing($this->tables->read($id)));
+    }
+
+    /**
+     * Bring flows to the table's active version (all, or `flow_ids`): a draft
+     * of each, pinned to it, published with `publish` (tables_publish) and
+     * activated with `activate` (tables_activate, implies publish).
+     */
+    public function updateFlows($id)
+    {
+        $this->validateInput($this->request->all(), [
+            'flow_ids' => 'sometimes|array',
+            'flow_ids.*' => 'mongoId',
+            'publish' => 'sometimes|boolean',
+            'activate' => 'sometimes|boolean',
+        ]);
+        $activate = (bool) $this->request->input('activate', false);
+        $publish = $activate || (bool) $this->request->input('publish', false);
+        if ($publish) {
+            $this->requireScope('tables_publish');
+        }
+        if ($activate) {
+            $this->requireScope('tables_activate');
+        }
+        $flowIds = $this->request->input('flow_ids');
+
+        return $this->response->json($this->flowVersions->updateToActive(
+            $this->tables->read($id),
+            $flowIds === null ? null : array_map('strval', (array) $flowIds),
+            $publish,
+            $activate
+        ));
     }
 
     private function present(Table $table, TableVersion $version)

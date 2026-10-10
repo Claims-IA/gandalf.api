@@ -91,12 +91,21 @@ return [
             '~^\/api\/v1\/admin\/tables\/(.+)\/versions\/(.+)\/decisions$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/tables\/(.+)\/versions$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/tables\/(.+)\/activate$~' => ['tables_activate'],
+            // + tables_publish / tables_activate for publish / activate, checked in
+            // TableVersionsController::updateFlows
+            '~^\/api\/v1\/admin\/tables\/(.+)\/flows\/update$~' => ['tables_update'],
+            // Flow versions (VERSIONS.md, batch 4)
+            '~^\/api\/v1\/admin\/flows\/(.+)\/versions\/(.+)\/publish$~' => ['tables_publish'],
+            '~^\/api\/v1\/admin\/flows\/(.+)\/versions\/(.+)\/decisions$~' => ['tables_update'],
+            '~^\/api\/v1\/admin\/flows\/(.+)\/versions$~' => ['tables_update'],
+            '~^\/api\/v1\/admin\/flows\/(.+)\/activate$~' => ['tables_activate'],
             '~^\/api\/v1\/admin\/changelog\/(.+)\/(.+)\/rollback\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/tables\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v1\/flows\/(.+)\/decisions$~' => ['decisions_make'],
             // An inactive version also needs decisions_make_inactive, checked in
             // ConsumerController::tableCheckV2 once the version is known.
             '~^\/api\/v2\/tables\/(.+)\/decisions$~' => ['decisions_make'],
+            '~^\/api\/v2\/flows\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v1\/projects\/collaborators\/confirm$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/collaborators\/invitation\/resend$~' => ['users_manage'],
             '~^\/api\/v1\/invite$~' => ['users_manage'],
@@ -120,6 +129,10 @@ return [
             '~^\/api\/v1\/projects\/(.+)$~' => ['project_update'],
         ],
         'delete' => [
+            // Deleting a flow draft is editing; a published version also needs
+            // tables_publish, checked in FlowVersionsController::delete. Before
+            // the generic rule.
+            '~^\/api\/v1\/admin\/flows\/(.+)\/versions\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/flows\/(.+)$~' => ['tables_delete'],
             '~^\/api\/v1\/projects\/collaborators\/invitation$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/collaborators\/account$~' => ['users_manage'],

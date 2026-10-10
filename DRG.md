@@ -12,12 +12,16 @@ The tables themselves are **unchanged** — every field stays `source: request`.
 All the wiring lives on the **Flow**. A table can be a node of several flows and
 still be called directly through `POST /tables/{id}/decisions`.
 
+Flows are versioned, and each node is pinned to a version of its table: see
+[Versions](#versions).
+
 ## Table of Contents
 
 1. [Mental model](#mental-model)
 2. [Data model](#data-model)
 3. [The unified `answer` contract](#the-unified-answer-contract)
 4. [Lifecycle](#lifecycle)
+   - [Versions](#versions)
 5. [Graph validation rules](#graph-validation-rules)
 6. [Execution](#execution)
 7. [Type compatibility](#type-compatibility)
@@ -76,10 +80,13 @@ and finally assembles the flow's named `outputs` from the per-node results.
     { "key": "history", "type": "string"  }
   ],
 
-  // One entry per referenced table.
+  // The active version (see Versions); the graph below is its copy.
+  "active_version_id": "6a5437d8ad556857e10c1390",
+
+  // One entry per referenced table, pinned to a version of it.
   "nodes": [
-    { "node_id": "n_risk",    "table_id": "69b29698c33fe7db7106c697" },
-    { "node_id": "n_verdict", "table_id": "69b0a1c2c33fe7db7106c701" }
+    { "node_id": "n_risk",    "table_id": "69b29698c33fe7db7106c697", "table_version_id": "6a54…c1" },
+    { "node_id": "n_verdict", "table_id": "69b0a1c2c33fe7db7106c701", "table_version_id": "6a54…c2" }
   ],
 
   // Wiring. `from` is a flow input ({input}) OR an upstream node output
@@ -111,7 +118,8 @@ and finally assembles the flow's named `outputs` from the per-node results.
 ```jsonc
 {
   "_id": "6a5437d895812a10c20a7630",
-  "flow": { "_id": "6a5437d8ad556857e10c1380", "title": "Credit approval" },
+  "flow": { "_id": "6a5437d8ad556857e10c1380", "title": "Credit approval",
+            "version": { "_id": "6a5437d8ad556857e10c1390", "number": 3 } },
   "application": "507f1f77bcf86cd799439011",
   "inputs": { "salary": 1500, "history": "clean" },
   "answer": { "verdict": "approved", "risk": 40 },
@@ -121,9 +129,14 @@ and finally assembles the flow's named `outputs` from the per-node results.
     { "node_id": "n_verdict", "table_id": "69b0…", "input": { "risk": 40 },
       "decision_id": "6a54…b2", "answer": { "final_decision": "approved" } }
   ],
-  "error": null   // { "errors": ["…"] } on a failed/partial run
+  "error": null,  // { "errors": ["…"] } on a failed/partial run
+  "test": false   // a test run from gandalf.web
 }
 ```
+
+Each node of the trace also carries `table_version` (`{ _id, number }` of the
+table version it ran), and each node's `Decision` carries
+`flow: { _id, version: { _id, number } }`.
 
 ---
 
@@ -178,6 +191,54 @@ Validation happens **twice**, by design:
 
 ---
 
+## Versions
+
+Flows are versioned like tables ([VERSIONS.md](VERSIONS.md), batch 4). The flow
+document keeps its identity and points to its **active version**
+(`active_version_id`); a **flow version** (`flow_versions`) holds the graph:
+`inputs`, `outputs`, `nodes`, `edges`. A draft is edited, published (frozen and
+numbered), then activated; the API runs the active version.
+
+**Each node is pinned to a published version of its table**
+(`nodes[].table_version_id`). Activating a new table version therefore changes
+nothing for a flow: the flow keeps running the version it is pinned to until a
+new flow version pins another. A node saved without a pin keeps its current
+one, or takes its table's active version; a pin to a table draft is refused.
+
+| Situation | What a flow does |
+| --------- | ---------------- |
+| Compatibility mode on (release A behaviour, `TABLE_VERSIONS_LEGACY_AUTOPUBLISH`) | A flow save publishes and activates a version when the graph changes; flows follow each activation of their tables' versions (a version pinning the new one, published and activated) and their field renames |
+| Compatibility mode off (release B) | Flows stay on their pinned versions. Activating a table version lists the flows left behind (`meta.flows_outdated`); `POST /admin/tables/{id}/flows/update` brings them to the active version |
+
+**Bringing flows to a table's active version**: for each flow whose active
+version pins the table elsewhere, a draft from that version pins the active
+table version, and its edges follow the field renames between the two table
+versions (the same rules as a table update, see [HTTP API](#http-api)). A flow
+whose graph no longer validates is reported `incompatible` and left as is. The
+drafts can be published, then activated, in the same call (`publish`,
+`activate`, with the `tables_publish` and `tables_activate` scopes).
+
+**Flagged flows**: the flow list carries `outdated: true` for a flow that runs a
+table version other than its table's active one, and
+`GET /admin/tables/{id}/flows` lists the flows using a table, with the version
+each node runs.
+
+**Guards**: a table version a flow or flow version is pinned to cannot be
+deleted (`409 version_in_use`), nor can the active flow version or a flow
+version an API key still calls.
+
+**Migration** (`2026_10_10_150000_FlowVersions`): each flow becomes its version
+1, published and active, each node pinned to the version of its table that is
+active when the migration runs (the version it was running). Idempotent; the
+rollback removes `flow_versions`, the pins and `active_version_id`.
+
+**Copy and move**: a copy starts its own versions, its nodes pinned to the
+target tables' active versions. A moved flow's versions pinned the source
+project's tables: they are deleted and the flow starts again at version 1 in
+the target.
+
+---
+
 ## Graph validation rules
 
 `FlowRepository::validateGraph()` collects **all** problems and throws a single
@@ -189,8 +250,10 @@ checks, and the message each produces:
 | Every node has a `node_id` | `A node is missing node_id.` |
 | Node ids are unique | `Duplicate node_id 'n_risk'.` |
 | A node's `table_id` exists **in this project** | `Node 'n_risk' references a table that does not exist in this project.` |
+| A node's `table_version_id` is a version of its table | `Node 'n_risk' is pinned to a version that is not a version of its table.` |
+| ... and a published one | `Node 'n_risk' is pinned to a draft: pin a published version of its table.` |
 | An edge targets a known node | `Edge #2 targets an unknown node.` |
-| The target field is a real field key on the node's table | `Edge #2 targets field 'x', which is not a field of node 'n_verdict'.` |
+| The target field is a real field key on the node's table (its pinned version) | `Edge #2 targets field 'x', which is not a field of node 'n_verdict'.` |
 | No field is wired by more than one edge | `Field 'risk' of node 'n_verdict' is wired by more than one edge.` |
 | An input source is a declared flow input | `Edge #2 sources input 'foo', which is not a declared flow input.` |
 | A node source is a known node | `Edge #2 sources an unknown node.` |
@@ -213,11 +276,13 @@ the cycle only on a second save.
 
 ## Execution
 
-`FlowEngine::run($flowId, array $inputs, $appId, $showMeta)` returns:
+`FlowEngine::run($flowId, array $inputs, $appId, $showMeta, $version = null, $test = false)`
+runs the flow's active version, or `$version`, and returns:
 
 ```jsonc
 {
   "flow_run_id": "6a5437d895812a10c20a7630",
+  "flow": { "_id": "6a5437d8ad556857e10c1380", "version": { "_id": "6a54…90", "number": 3 } },
   "answer":       { "verdict": "approved", "risk": 40 },
   "answer_types": { "verdict": "string",   "risk": "numeric" },
   "decision_kind": "drg",
@@ -237,8 +302,10 @@ Step by step:
      fed from its wired edge if present, otherwise from a same-named flow input.
      Unrelated inputs — including `variant_id`, which is table-local — are never
      forwarded to a node.
-   - `Scoring::check()` evaluates the table unchanged and returns the unified
-     envelope (carrying `answer`, `answer_types`, `_id`).
+   - the node runs the table version it is pinned to (its table's active
+     version without a pin), and `buildNodeInput()` reads that version's fields;
+   - `Scoring::evaluate()` evaluates it and returns the unified envelope
+     (carrying `answer`, `answer_types`, `_id`).
 3. **Assemble** — `assembleOutputs()` reads each declared output's
    `from_node` / `from_output` from the per-node results into `answer` /
    `answer_types`.
@@ -303,7 +370,20 @@ All routes are application-scoped (`X-Application` header) and ACL-gated.
 | `GET    /api/v1/admin/flows/{id}/runs` | paginated run history | `tables_view` |
 | `POST   /api/v1/admin/flows/{id}/copyto/{project_id}` | copy the flow to another project | `tables_create` |
 | `POST   /api/v1/admin/flows/{id}/moveto/{project_id}` | move the flow to another project | `tables_create`, `tables_delete` |
-| `POST   /api/v1/flows/{id}/decisions` | **run the flow** | `decisions_make` |
+| `POST   /api/v1/flows/{id}/decisions` | **run the flow** (active version; deprecated) | `decisions_make` |
+| `POST   /api/v2/flows/{id}/decisions` | run a version: `{ version, data }` (another version than the active one needs `decisions_make_inactive`) | `decisions_make` |
+| `GET    /api/v1/admin/flows/{id}/versions` | drafts and published versions | `tables_view` |
+| `POST   /api/v1/admin/flows/{id}/versions` | create a draft (`from_version_id`, `name`) | `tables_update` |
+| `GET/PUT/DELETE /api/v1/admin/flows/{id}/versions/{version_id}` | read, edit a draft, delete (a published version: + `tables_publish`) | `tables_view` / `tables_update` |
+| `POST   /api/v1/admin/flows/{id}/versions/{version_id}/publish` | publish a draft (`comment`) | `tables_publish` |
+| `POST   /api/v1/admin/flows/{id}/versions/{version_id}/decisions` | test run of a draft or a version (`{ data }`, flagged `test`) | `tables_update` |
+| `POST   /api/v1/admin/flows/{id}/activate` | activate a published version (`version_id`) | `tables_activate` |
+| `GET    /api/v1/admin/flows/{id}/calls` | recent calls of the project's API keys | `tables_view` |
+| `GET    /api/v1/admin/tables/{id}/flows` | flows using a table, version per node | `tables_view` |
+| `POST   /api/v1/admin/tables/{id}/flows/update` | bring flows to the table's active version | `tables_update` (+ `tables_publish`, `tables_activate`) |
+
+The runs list (`GET /admin/flows/{id}/runs`) leaves test runs out; `test=true`
+lists them instead.
 
 CRUD is provided by the Nebo15 `AbstractController`; writes go through
 `FlowRepository::createOrUpdate`, where the graph is validated.
@@ -313,7 +393,9 @@ partial update (e.g. `title` only) merges over the stored graph and never wipes
 `nodes`/`edges`/`outputs`. The merged graph is what gets re-validated.
 
 **Renaming a table field** (same field `_id`, new `key`, through the table
-update): the project's flows using the table follow the rename. Edges into the
+update), in compatibility mode (see [Versions](#versions); otherwise the renames
+apply when a flow is brought to the new table version): the project's flows
+using the table follow the rename. Edges into the
 field target the new key, and a field that was fed implicitly by the same-named
 flow input gets an explicit edge from that input, so a flow keeps its inputs
 and its behavior. When a field is removed and another one renamed to its key in
@@ -422,13 +504,17 @@ A `FlowValidationException` renders as **HTTP 422**:
 
 | File | Responsibility |
 | ---- | -------------- |
-| `app/Models/Flow.php` | Flow document (title, inputs, outputs, nodes, edges) |
+| `app/Models/Flow.php` | Flow document (title, active version, copy of its graph) |
+| `app/Models/FlowVersion.php` | A version of a flow's graph, nodes pinned to table versions |
+| `app/Services/FlowVersioning.php` | Active version, pins, compatibility mode (`syncFromFlow`, `followTable`), publication |
+| `app/Repositories/FlowVersionsRepository.php` | Drafts, publication, activation, guards, `updateToActive()` |
+| `app/Http/Controllers/FlowVersionsController.php` | Flow version routes |
 | `app/Models/FlowRun.php` | One recorded execution, linking its decisions |
 | `app/Repositories/FlowRepository.php` | CRUD, `validateGraph()`, `getRuns()`, type compatibility |
 | `app/Services/FlowEngine.php` | `run()` — topological execution, wiring, persistence |
 | `app/Services/GraphSort.php` | Shared Kahn topo-sort / cycle detection |
 | `app/Http/Controllers/FlowsController.php` | Admin CRUD + `runs()` |
-| `app/Http/Controllers/ConsumerController.php` | `flowCheck()` — the run endpoint |
+| `app/Http/Controllers/ConsumerController.php` | `flowCheck()` and `flowCheckV2()`: the run endpoints |
 | `app/Exceptions/FlowValidationException.php` | Carries `errors[]` + optional `flow_run_id` |
 | `app/Exceptions/Handler.php` | Renders the 422 |
 | `app/Models/Decision.php` | Unified `answer`/`answer_types`/`decision_kind` envelope |

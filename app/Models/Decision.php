@@ -55,6 +55,9 @@ class Decision extends Base implements Applicationable
         // user), and test runs from gandalf.web (absent on older decisions)
         'consumer',
         'test',
+        // Batch 4: { _id, version: { _id, number } } for a decision made by a
+        // node of a flow run
+        'flow',
         self::CREATED_AT,
         self::UPDATED_AT,
     ];
@@ -72,6 +75,7 @@ class Decision extends Base implements Applicationable
         'final_decision',
         'consumer',
         'test',
+        'flow',
         'applications',
     ];
 

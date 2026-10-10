@@ -14,6 +14,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Table;
 use App\Models\TableVersion;
+use App\Models\FlowVersion;
 use App\Models\User;
 use App\Models\Invitation;
 use App\Services\DbTransfer;
@@ -61,6 +62,7 @@ class ProjectsController extends AbstractController
         // TableObserver::deleted)
         Table::where(['applications' => ['$in' => [$application->_id]]])->delete();
         TableVersion::where(['applications' => ['$in' => [$application->_id]]])->delete();
+        FlowVersion::where(['applications' => ['$in' => [$application->_id]]])->delete();
         (new VersionCalls)->deleteForApplication($application->_id);
         // Then delete the application document itself
         $application->delete();

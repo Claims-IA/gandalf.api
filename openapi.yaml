@@ -250,6 +250,13 @@ components:
             list (see `GET /api/v1/admin/categories`). Purely organisational —
             groups and colours the flow in listings. Null means uncategorised.
           example: "cat_9f3a1c7b2d4e5f60"
+        active_version_id:
+          type: string
+          nullable: true
+          readOnly: true
+          description: >
+            Published flow version the API runs (VERSIONS.md, batch 4); the
+            graph below is its copy.
         inputs:
           type: array
           description: The flow's public input contract.
@@ -286,14 +293,7 @@ components:
         nodes:
           type: array
           items:
-            type: object
-            properties:
-              node_id:
-                type: string
-                example: "n_final"
-              table_id:
-                type: string
-                example: "69b29698c33fe7db7106c697"
+            $ref: '#/components/schemas/FlowNode'
         edges:
           type: array
           description: >
@@ -338,6 +338,109 @@ components:
                   field:
                     type: string
 
+    VersionRef:
+      type: object
+      nullable: true
+      properties:
+        _id:
+          type: string
+        number:
+          type: integer
+          nullable: true
+
+    FlowVersionSummary:
+      type: object
+      description: A flow version without its graph (VERSIONS.md, batch 4).
+      properties:
+        _id:
+          type: string
+        flow_id:
+          type: string
+        status:
+          type: string
+          enum: [draft, published]
+        number:
+          type: integer
+          nullable: true
+        name:
+          type: string
+        comment:
+          type: string
+        origin_version_id:
+          type: string
+          nullable: true
+        autopublished:
+          type: boolean
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_active:
+          type: boolean
+
+    FlowVersion:
+      description: A flow version with its graph; each node pinned to a table version.
+      allOf:
+        - $ref: '#/components/schemas/FlowVersionSummary'
+        - type: object
+          properties:
+            inputs:
+              type: array
+              items:
+                type: object
+            outputs:
+              type: array
+              items:
+                type: object
+            nodes:
+              type: array
+              items:
+                $ref: '#/components/schemas/FlowNode'
+            edges:
+              type: array
+              items:
+                type: object
+
+    FlowNode:
+      type: object
+      properties:
+        node_id:
+          type: string
+          example: "n_final"
+        table_id:
+          type: string
+          example: "69b29698c33fe7db7106c697"
+        table_version_id:
+          type: string
+          nullable: true
+          description: >
+            Published version of the table the node runs (VERSIONS.md, batch 4).
+            Sent without it, a node keeps its pin or takes its table's active
+            version. Null for a table without versions.
+
+    TableFlow:
+      type: object
+      description: A flow using a table, with the table version each of its nodes runs.
+      properties:
+        _id:
+          type: string
+        title:
+          type: string
+        active_version:
+          $ref: '#/components/schemas/VersionRef'
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id:
+                type: string
+              table_version:
+                $ref: '#/components/schemas/VersionRef'
+        outdated:
+          type: boolean
+          description: A node runs a table version other than the active one.
+
     FlowListItem:
       type: object
       description: >
@@ -353,6 +456,12 @@ components:
           example: "Credit approval"
         description:
           type: string
+        active_version_id:
+          type: string
+          nullable: true
+        outdated:
+          type: boolean
+          description: A node runs a table version other than its table's active one.
 
     FlowResult:
       type: object
@@ -361,6 +470,14 @@ components:
         flow_run_id:
           type: string
           example: "6a5437d895812a10c20a7630"
+        flow:
+          type: object
+          description: The flow and the version run.
+          properties:
+            _id:
+              type: string
+            version:
+              $ref: '#/components/schemas/VersionRef'
         answer:
           type: object
           description: The flow's declared outputs, by name.
@@ -387,6 +504,8 @@ components:
           type: string
         table_id:
           type: string
+        table_version:
+          $ref: '#/components/schemas/VersionRef'
         input:
           type: object
           additionalProperties: true
@@ -409,6 +528,11 @@ components:
               type: string
             title:
               type: string
+            version:
+              $ref: '#/components/schemas/VersionRef'
+        test:
+          type: boolean
+          description: A test run from gandalf.web.
         inputs:
           type: object
           additionalProperties: true
@@ -2899,13 +3023,23 @@ paths:
     get:
       tags: [Flows]
       summary: List a flow's run history
-      description: Paginated executions of the flow, most recent first. Requires `tables_view`.
+      description: >
+        Paginated executions of the flow, most recent first. Test runs from
+        gandalf.web are left out; `test=true` lists them instead. Requires
+        `tables_view`.
       operationId: listFlowRuns
       security:
         - BearerAuth: []
       parameters:
         - $ref: '#/components/parameters/XApplication'
         - $ref: '#/components/parameters/PathId'
+        - name: test
+          in: query
+          required: false
+          description: true lists the test runs from gandalf.web instead of the others.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Run history.
@@ -2927,10 +3061,14 @@ paths:
     post:
       tags: [Flows]
       summary: Run a flow
+      deprecated: true
       description: >
-        Executes the flow against the supplied inputs and returns the assembled
-        outputs. Nodes run in topological order; each node's decision is
-        persisted and linked by a FlowRun. Requires `decisions_make`.
+        Executes the flow's active version against the supplied inputs and
+        returns the assembled outputs. Nodes run in topological order, each on
+        the table version it is pinned to; each node's decision is persisted
+        and linked by a FlowRun. Requires `decisions_make`. Deprecated in favour
+        of `POST /api/v2/flows/{id}/decisions` (same headers as the table v1
+        route).
       operationId: runFlow
       security:
         - BearerAuth: []
@@ -2983,6 +3121,461 @@ paths:
                       flow_run_id:
                         type: string
                         description: Id of the FlowRun that recorded this failed execution.
+
+  /api/v2/flows/{id}/decisions:
+    post:
+      tags: [Flows]
+      summary: Run a version of a flow
+      description: >
+        Route v2 (VERSIONS.md, batch 4): `{ version, data }`. Without `version`
+        the active version runs; another published version needs the
+        `decisions_make_inactive` scope (API key or user), otherwise
+        `403 version_not_allowed`. Calls of API keys are counted per requested
+        version (`GET /api/v1/admin/flows/{id}/calls`).
+      operationId: runFlowV2
+      security:
+        - BearerAuth: []
+        - BasicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version:
+                  type: integer
+                  minimum: 1
+                data:
+                  type: object
+                  additionalProperties: true
+              required:
+                - data
+      responses:
+        "200":
+          description: Flow result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowResult'
+        "403":
+          description: Caller without `decisions_make`, or `version_not_allowed`.
+        "404":
+          description: Flow not found, or `version_not_found`.
+        "422":
+          description: Invalid body, or a run-time flow error (see `POST /api/v1/flows/{id}/decisions`).
+
+  /api/v1/admin/flows/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Flows]
+      summary: List a flow's versions
+      description: Drafts (last edited first), then published versions (newest first), without their graph. Requires `tables_view`.
+      operationId: listFlowVersions
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: The flow's versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FlowVersionSummary'
+    post:
+      tags: [Flows]
+      summary: Create a flow draft
+      description: >
+        A draft holding the graph of `from_version_id` (by default the active
+        version), pins kept. Requires `tables_update`.
+      operationId: createFlowVersion
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from_version_id:
+                  type: string
+                  pattern: '^[0-9a-f]{24}$'
+                name:
+                  type: string
+                  maxLength: 128
+      responses:
+        "201":
+          description: The new draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowVersion'
+        "404":
+          description: Flow not found, or `version_not_found`.
+
+  /api/v1/admin/flows/{id}/versions/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+      - $ref: '#/components/parameters/PathVersionId'
+    get:
+      tags: [Flows]
+      summary: Get a flow version
+      operationId: getFlowVersion
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: The version with its graph.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowVersion'
+        "404":
+          description: Flow not found, or `version_not_found`.
+    put:
+      tags: [Flows]
+      summary: Edit a flow draft
+      description: >
+        The keys sent (`inputs`, `outputs`, `nodes`, `edges`) replace the
+        draft's, plus an optional `name`. A node may name its pinned table
+        version (`table_version_id`, a published version of its table); without
+        it, the node keeps its pin or takes its table's active version. The
+        graph is validated as a flow's. Requires `tables_update`.
+      operationId: updateFlowVersion
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                inputs:
+                  type: array
+                  items:
+                    type: object
+                outputs:
+                  type: array
+                  items:
+                    type: object
+                nodes:
+                  type: array
+                  items:
+                    type: object
+                edges:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        "200":
+          description: The edited draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowVersion'
+        "409":
+          description: "`version_published`: the version is published."
+        "422":
+          description: Invalid graph (`flow_validation`), e.g. a node pinned to a table draft.
+    delete:
+      tags: [Flows]
+      summary: Delete a flow version
+      description: >
+        A draft (`tables_update`) or a published version (`tables_publish`).
+        Not the active version, nor a version an API key of the project called
+        by its number within the window.
+      operationId: deleteFlowVersion
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Version deleted.
+        "403":
+          description: A published version, without `tables_publish`.
+        "409":
+          description: "`version_in_use`."
+
+  /api/v1/admin/flows/{id}/versions/{version_id}/publish:
+    post:
+      tags: [Flows]
+      summary: Publish a flow draft
+      description: Freezes and numbers the draft; the active version does not change. Requires `tables_publish`.
+      operationId: publishFlowVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+                  maxLength: 512
+      responses:
+        "200":
+          description: The published version, with a divergence warning when it does not descend from the active one.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    $ref: '#/components/schemas/VersionDivergenceMeta'
+                  data:
+                    $ref: '#/components/schemas/FlowVersion'
+        "409":
+          description: "`version_published`."
+
+  /api/v1/admin/flows/{id}/versions/{version_id}/decisions:
+    post:
+      tags: [Flows]
+      summary: Test run of a flow draft or version
+      description: >
+        Runs a draft or a version from gandalf.web with `{ data }`. The run and
+        its decisions are flagged `test`; the rules are always returned.
+        Requires `tables_update`.
+      operationId: runFlowVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  type: object
+                  additionalProperties: true
+              required:
+                - data
+      responses:
+        "200":
+          description: Flow result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowResult'
+
+  /api/v1/admin/flows/{id}/activate:
+    post:
+      tags: [Flows]
+      summary: Activate a flow version
+      description: >
+        The published version becomes the one the API runs; its graph is copied
+        onto the flow. Requires `tables_activate`.
+      operationId: activateFlowVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version_id:
+                  type: string
+                  pattern: '^[0-9a-f]{24}$'
+              required:
+                - version_id
+      responses:
+        "200":
+          description: >
+            The flow. `meta` carries the divergence warning and
+            `callers_without_version`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Flow'
+        "409":
+          description: "`version_not_published`."
+
+  /api/v1/admin/flows/{id}/calls:
+    get:
+      tags: [Flows]
+      summary: Recent calls of the project's API keys to a flow
+      operationId: listFlowCalls
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: One row per key and requested version, latest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VersionCall'
+
+  /api/v1/admin/tables/{id}/flows:
+    get:
+      tags: [Table versions]
+      summary: Flows using a table
+      description: >
+        The project's flows with a node on the table, the table version each
+        node runs, and `outdated` when it is not the active one. Requires
+        `tables_view`.
+      operationId: listTableFlows
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: Flows using the table.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableFlow'
+
+  /api/v1/admin/tables/{id}/flows/update:
+    post:
+      tags: [Table versions]
+      summary: Bring flows to a table's active version
+      description: >
+        For each flow (all, or `flow_ids`) whose active version pins the table
+        elsewhere: a draft pinning the active table version, edges following
+        the field renames. `publish` (`tables_publish`) publishes the drafts,
+        `activate` (`tables_activate`, implies `publish`) activates them. A flow
+        whose graph no longer validates is reported `incompatible`. Requires
+        `tables_update`.
+      operationId: updateTableFlows
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                flow_ids:
+                  type: array
+                  items:
+                    type: string
+                    pattern: '^[0-9a-f]{24}$'
+                publish:
+                  type: boolean
+                activate:
+                  type: boolean
+      responses:
+        "200":
+          description: One row per flow.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        _id:
+                          type: string
+                        title:
+                          type: string
+                        status:
+                          type: string
+                          enum: [updated, up_to_date, incompatible]
+                        version:
+                          type: object
+                          nullable: true
+                          properties:
+                            _id:
+                              type: string
+                            number:
+                              type: integer
+                              nullable: true
+                            status:
+                              type: string
+                        errors:
+                          type: array
+                          items:
+                            type: string
+        "403":
+          description: "`publish` without `tables_publish`, or `activate` without `tables_activate`."
 
   # ── Categories ───────────────────────────────────────────────────────────────
   /api/v1/admin/categories:

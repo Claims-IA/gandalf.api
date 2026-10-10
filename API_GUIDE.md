@@ -528,7 +528,7 @@ Deletes a draft (`tables_update`) or a published version (`tables_publish`).
 `409 version_in_use` for the active version (activate another one first) and
 for a published version an API key of the project called by its number within
 the last 30 days (`TABLE_VERSIONS_CALL_WINDOW_DAYS`; a deleted key no longer
-counts).
+counts), or that a flow is pinned to.
 
 ---
 
@@ -577,7 +577,10 @@ version and this one, `meta` holds `field_renames`, `flows_updated`,
 
 `meta.callers_without_version` lists the API keys that called the table
 without a version recently (rows of the `calls` route below): the activation
-changes what they run.
+changes what they run. `meta.flows_outdated` lists the flows still pinned to
+another version of the table: the activation changes nothing for them until
+they are brought to it (see below). In the release A compatibility mode, flows
+follow their tables and the list is empty.
 
 **Divergence warning.** Publishing or activating a version that does not
 descend from the active one still succeeds, with a warning: the version lacks
@@ -617,6 +620,23 @@ active one). Only API keys are counted; `meta.window_days` is the window.
   ]
 }
 ```
+
+---
+
+#### Flows using a table
+
+Flows are versioned too, each node pinned to a version of its table: see
+[DRG.md](DRG.md#versions).
+
+- `GET /api/v1/admin/tables/{id}/flows` lists the project's flows using the
+  table, with the table version each node runs and `outdated: true` when it is
+  not the active one.
+- `POST /api/v1/admin/tables/{id}/flows/update` brings them to the table's
+  active version: a draft of each flow pins it, its edges following field
+  renames. Body `{ "flow_ids": [...], "publish": true, "activate": true }`, all
+  optional; `publish` needs `tables_publish`, `activate` needs
+  `tables_activate` and implies `publish`. Each flow is reported `updated`,
+  `up_to_date` or `incompatible` (with the graph errors, left as is).
 
 ---
 
@@ -759,6 +779,10 @@ Errors: `404 version_not_found` (no published version with that number; a
 draft has none), `422 variant_not_found` (variant missing from the version
 run), `422` with the errors under `data.*` for invalid input values (and for a
 body without `data`).
+
+Flows have the same route, `POST /api/v2/flows/{id}/decisions` with
+`{ "version": 2, "data": { ... } }` (no `variant_id`); see
+[DRG.md](DRG.md#http-api).
 
 ---
 

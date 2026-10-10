@@ -131,7 +131,8 @@ class Scoring
      * @param  mixed             $appId
      * @param  bool              $showMeta
      * @param  array             $options  'variant_id' (string|null), 'test' (bool),
-     *                                     'input_key' (validation errors under "<key>.*").
+     *                                     'input_key' (validation errors under "<key>.*"),
+     *                                     'flow' ({ _id, version } for a node of a flow run).
      * @return array  Consumer-safe decision array.
      * @throws ValidationException
      */
@@ -186,6 +187,8 @@ class Scoring
             // gandalf.web, left out of analytics (VERSIONS.md, batch 3)
             'consumer' => VersionCalls::currentKey(),
             'test' => !empty($options['test']),
+            // The flow version a node decision was made in (batch 4)
+            'flow' => isset($options['flow']) ? $options['flow'] : null,
         ];
         $final_decision = null;
         $fieldsCollection = $fields->get();

@@ -99,6 +99,13 @@ Same split as for tables. The `flows` document keeps the identity and
 `active_version_id`. A flow version holds `inputs`, `outputs`, `nodes` and
 `edges`. Each node adds `table_version_id`: the table version it is pinned to.
 
+In place since batch 4 (model `FlowVersion`, service `FlowVersioning`); see
+[DRG.md](DRG.md#versions) for the flow side. As for tables, the flow document
+keeps a copy of its active version's graph, nodes pinned. A node saved without
+a pin keeps its current one or takes its table's active version; a pin must be
+a published version. A `FlowRun` records the flow version and each node's
+table version, and a flow can be test-run (runs and decisions flagged `test`).
+
 ### Decision (`decisions` collection): batches 1, 3 and 4
 
 | Added field | Batch | Notes |
@@ -116,7 +123,7 @@ call names no version), `last_call_at`, `count`, `applications`. It feeds the
 activation screen ("keys calling without a version") and the guard against
 deleting a version still in use.
 
-In place since batch 3 for tables (flows: batch 4), service
+In place since batch 3 for tables and batch 4 for flows, service
 `App\Services\VersionCalls`. Only successful calls of API keys count: a user
 has no code pinned to a version. A key counts as calling while its last call
 is within the window (`TABLE_VERSIONS_CALL_WINDOW_DAYS`, 30 days by default)
@@ -149,7 +156,7 @@ version.
 | Roll back | Reactivate an earlier version | `tables_activate` |
 | Change the split | Mode and percentages of a version's variants, published or not, without republishing | `tables_update`; `tables_activate` for the active version (see [Open points](#open-points)) |
 | Delete a draft | At any time | `tables_update` |
-| Delete a published version | Only if it is not active, no flow version is pinned to it (batch 4) and no key still calls it | `tables_publish` |
+| Delete a published version | Only if it is not active, no flow or flow version is pinned to it and no key still calls it | `tables_publish` |
 
 There is no merge between drafts. Each draft, then each version, records its
 origin version. Publishing and activating flag a draft that does not start from
@@ -159,11 +166,13 @@ Publishing and activating are two separate actions, tied to two scopes. Nothing
 activates a version automatically, outside the
 [compatibility mode](#migration-and-compatibility-mode).
 
-In place since batches 2 and 3, except the deletion guard tied to flows
-(batch 4). During release A,
-activating a version copies its content onto the table, and the application's
-flows follow the field renames between the previous active version and the
-activated one, as they follow a table update.
+In place since batches 2 to 4. During release A, activating a version copies
+its content onto the table. In compatibility mode the application's flows
+follow: each gets a version pinning the activated table version, published and
+activated, and they follow the field renames as they follow a table update.
+Without it, flows stay on their pinned versions: the activation lists them
+(`meta.flows_outdated`) and `POST /api/v1/admin/tables/{id}/flows/update`
+brings them to it (see [DRG.md](DRG.md#versions)).
 
 ---
 
@@ -208,10 +217,10 @@ when given, otherwise according to `variants_probability`. A `variant_id`
 missing from the version run returns an explicit error, so that a client never
 believes it tests one variant while running another.
 
-In place since batch 3, except flow nodes (batch 4: until then they run the
-active version of each table). `App\Services\Scoring::evaluate()` runs any
-version; `check()` (v1, flows) runs the active one and `evaluateRequest()`
-(v2, test runs) takes the v2 body.
+In place since batches 3 and 4. `App\Services\Scoring::evaluate()` runs any
+version: `check()` (route v1) the active one, `evaluateRequest()` (v2, test
+runs) the requested one with the v2 body, and `FlowEngine` each node's pinned
+version.
 
 ---
 
@@ -249,7 +258,8 @@ which already holds the variant run (`table.variant`), plus the version run
 }
 ```
 
-The same shape applies to `POST /api/v2/flows/{id}/decisions` (batch 4).
+The same shape applies to `POST /api/v2/flows/{id}/decisions` (batch 4),
+without `variant_id`: `{ "version": 2, "data": { … } }`.
 
 The v1 route keeps its flat body and runs the active version. It is declared
 deprecated with an end date, through the `Deprecation` and `Sunset` headers.
@@ -283,7 +293,12 @@ In place since batch 3 for tables. Details:
 | POST | `/api/v1/admin/tables/{id}/versions/{version_id}/decisions` | Test run from gandalf.web (decision flagged `test`) |
 | GET | `/api/v1/admin/tables/{id}/calls` | Recent calls of the project's API keys, per requested version |
 
-The equivalent flow routes arrive with batch 4.
+The equivalent flow routes are in place since batch 4, without the split
+(see [DRG.md](DRG.md#http-api)): `/api/v1/admin/flows/{id}/versions…`,
+`/activate`, `/calls`, and the test run with `{ data }`. On the table side,
+`GET /api/v1/admin/tables/{id}/flows` lists the flows using a table and
+`POST /api/v1/admin/tables/{id}/flows/update` brings them to its active
+version.
 
 In place since batches 2 and 3. Details:
 
@@ -356,8 +371,7 @@ fingerprint ignores it, so their next save publishes nothing.
 | Changing `matching_type` or `decision_type` after publication | 409 | `table_type_locked` |
 | Invalid input values | 422 | unchanged, errors under `data.*` in v2 |
 
-In place since batches 2 and 3, except `table_type_locked` (release B) and
-`version_in_use` for a version pinned by a flow (batch 4). A request without
+In place since batches 2 to 4, except `table_type_locked` (release B). A request without
 the scope a version needs (`tables_publish`, `tables_activate`) gets the usual
 `403 access_denied`, with the missing scope in `meta.scopes`. The route v1
 keeps its own error: a `variant_id` the active version lacks is a `404
@@ -395,7 +409,10 @@ variant_not_found`.
 - **Flow migration**: each flow becomes its version 1, published and active,
   **pinned to the version of each table that is active at migration time**.
   The compatibility mode may have created table versions since release A:
-  pinning flows to version 1 would change their behaviour.
+  pinning flows to version 1 would change their behaviour. In place since
+  batch 4 (`2026_10_10_150000_FlowVersions`). While the compatibility mode is
+  on, flows keep following their tables, so their pins stay the active
+  versions until the mode is turned off.
 - **End of the compatibility mode and of the copy**: the content leaves the
   table document, whose identity is all the code still reads.
 
@@ -430,7 +447,8 @@ what must change there. Paths start at the repository root.
 ### Batch 0 findings
 
 - **No API test for flows**: there is no `FlowsCest`. Batch 4 starts by
-  writing one, as a safety net before touching flows.
+  writing one, as a safety net before touching flows. Written in batch 4
+  (`tests/api/FlowsCest.php`).
 - **No Eloquent save of a table outside an authenticated request**:
   `TableObserver::saved()` has no guard when there is no user, and
   `Table::setVariants()` reads the authenticated user. A migration or a command
@@ -489,7 +507,7 @@ This document moves each section from "planned" to "in place" as batches ship.
 | 2 | API: drafts, publication, activation, split, scopes | 1 | done, to review |
 | 2b | API: Excel import and export per version, removal of `is_default` | 2 | done, to review |
 | 3 | API: v2 route, test runs, calls per key and the matching deletion guard, v1 deprecation | 2 | done, to review |
-| 4 | API: flow versions, pinned nodes, bulk update of compatible flows | 1 | to do |
+| 4 | API: flow versions, pinned nodes, bulk update of compatible flows | 1 | done, to review |
 | 5 | gandalf.web: table versions | 2, 3 | to do |
 | 6 | gandalf.web: flow versions | 4, 5 | to do |
 | 7 | Two-level administration (independent) | | to do |

@@ -8,10 +8,11 @@
  * allowing decisions to be evaluated, preventing orphaned applications from
  * consuming quota. Decision creation is delegated entirely to the Scoring service.
  *
- * Table versions (VERSIONS.md, batch 3): the route v2 takes
- * `{ version, variant_id, data }` and runs the requested published version, the
- * route v1 keeps its flat body, runs the active version and is deprecated. Both
- * count the calls of API keys (VersionCalls).
+ * Table versions (VERSIONS.md, batches 3 and 4): the route v2 takes
+ * `{ version, variant_id, data }` (`{ version, data }` for a flow) and runs the
+ * requested published version, the route v1 keeps its flat body, runs the
+ * active version and is deprecated. Both count the calls of API keys
+ * (VersionCalls).
  *
  * @package App\Http\Controllers
  */
@@ -27,6 +28,8 @@ use App\Services\FlowEngine;
 use App\Services\VersionCalls;
 use App\Services\TableVersioning;
 use App\Repositories\TablesRepository;
+use App\Repositories\FlowRepository;
+use App\Repositories\FlowVersionsRepository;
 use Illuminate\Contracts\Validation\ValidationException;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
 use Nebo15\LumenApplicationable\Models\Application;
@@ -145,17 +148,18 @@ class ConsumerController extends Controller
      * Headers announcing the end of the route v1 (RFC 9745 Deprecation,
      * RFC 8594 Sunset), from two dates set in the environment. No date, no header.
      *
-     * @param  string      $tableId
+     * @param  string      $id            Table or flow id.
      * @param  string|null $deprecatedAt  e.g. "2026-11-01" (DECISIONS_V1_DEPRECATED_AT)
      * @param  string|null $sunset        e.g. "2027-06-30" (DECISIONS_V1_SUNSET)
+     * @param  string      $resource      tables | flows
      * @return array
      */
-    public static function v1DeprecationHeaders($tableId, $deprecatedAt, $sunset)
+    public static function v1DeprecationHeaders($id, $deprecatedAt, $sunset, $resource = 'tables')
     {
         $headers = [];
         if ($deprecatedAt && ($time = strtotime($deprecatedAt . ' UTC')) !== false) {
             $headers['Deprecation'] = '@' . $time;
-            $headers['Link'] = '</api/v2/tables/' . $tableId . '/decisions>; rel="successor-version"';
+            $headers['Link'] = '</api/v2/' . $resource . '/' . $id . '/decisions>; rel="successor-version"';
         }
         if ($sunset && ($time = strtotime($sunset . ' UTC')) !== false) {
             $headers['Sunset'] = gmdate('D, d M Y H:i:s', $time) . ' GMT';
@@ -222,13 +226,76 @@ class ConsumerController extends Controller
      * @return \Illuminate\Http\JsonResponse
      * @throws AdminIsNotActivatedException if the application has no active admin users.
      */
-    public function flowCheck(Request $request, FlowEngine $flowEngine, Application $application, $id)
-    {
+    public function flowCheck(
+        Request $request,
+        FlowEngine $flowEngine,
+        VersionCalls $calls,
+        Application $application,
+        $id
+    ) {
         $this->assertActiveAdmin($application);
 
-        return $this->response->json(
-            $flowEngine->run($id, $request->all(), $application->_id, $application->getSettingsElem('show_meta', false))
+        $run = $flowEngine->run($id, $request->all(), $application->_id, $application->getSettingsElem('show_meta', false));
+        $calls->recordFlow($id, null, $application->_id);
+        $response = $this->response->json($run);
+        $response->headers->add(self::v1DeprecationHeaders(
+            $id,
+            env('DECISIONS_V1_DEPRECATED_AT'),
+            env('DECISIONS_V1_SUNSET'),
+            'flows'
+        ));
+
+        return $response;
+    }
+
+    /**
+     * Route v2 for a flow: body `{ "version": 2, "data": { … } }`, `version`
+     * optional. As for a table, another published version than the active one
+     * needs decisions_make_inactive (403 version_not_allowed).
+     *
+     * @param  Request                $request
+     * @param  FlowEngine             $flowEngine
+     * @param  FlowRepository         $flows
+     * @param  FlowVersionsRepository $versions
+     * @param  VersionCalls           $calls
+     * @param  Application            $application
+     * @param  string                 $id
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function flowCheckV2(
+        Request $request,
+        FlowEngine $flowEngine,
+        FlowRepository $flows,
+        FlowVersionsRepository $versions,
+        VersionCalls $calls,
+        Application $application,
+        $id
+    ) {
+        $this->assertActiveAdmin($application);
+        $validator = \Validator::make($request->all(), ['version' => 'integer|min:1', 'data' => 'present|array']);
+        if ($validator->fails()) {
+            throw new ValidationException($validator);
+        }
+        $flow = $flows->read($id);
+        $number = $request->input('version');
+        $version = null;
+        if ($number !== null) {
+            $version = $versions->findPublished($flow, (int) $number);
+            if (!$versions->isActive($flow, $version) && !$this->callerCan('decisions_make_inactive')) {
+                abort(403, 'version_not_allowed');
+            }
+        }
+
+        $run = $flowEngine->run(
+            $flow,
+            (array) $request->input('data'),
+            $application->_id,
+            $application->getSettingsElem('show_meta', false),
+            $version
         );
+        $calls->recordFlow($id, $number === null ? null : (int) $number, $application->_id);
+
+        return $this->response->json($run);
     }
 
     /**

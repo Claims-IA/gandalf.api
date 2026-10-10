@@ -57,6 +57,18 @@ class AclCoverageTest extends \Codeception\TestCase\Test
         'GET /api/v1/admin/tables/{id:[0-9a-z]{24}}/calls' => ['tables_view'],
         // + decisions_make_inactive for an inactive version, checked by ConsumerController
         'POST /api/v2/tables/{id:[0-9a-z]{24}}/decisions' => ['decisions_make'],
+        'POST /api/v2/flows/{id:[0-9a-z]{24}}/decisions' => ['decisions_make'],
+        // Batch 4: flows of a table (+ publish / activate scopes checked by the controller)
+        'GET /api/v1/admin/tables/{id:[0-9a-z]{24}}/flows' => ['tables_view'],
+        'POST /api/v1/admin/tables/{id:[0-9a-z]{24}}/flows/update' => ['tables_update'],
+        // Flow versions: + tables_publish for a published version, checked by FlowVersionsController
+        'POST /api/v1/admin/flows/{id:[0-9a-z]{24}}/versions' => ['tables_update'],
+        'PUT /api/v1/admin/flows/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}' => ['tables_update'],
+        'DELETE /api/v1/admin/flows/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}' => ['tables_update'],
+        'POST /api/v1/admin/flows/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/publish' => ['tables_publish'],
+        'POST /api/v1/admin/flows/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/decisions' => ['tables_update'],
+        'POST /api/v1/admin/flows/{id:[0-9a-z]{24}}/activate' => ['tables_activate'],
+        'GET /api/v1/admin/flows/{id:[0-9a-z]{24}}/calls' => ['tables_view'],
         'POST /api/v1/invite' => ['users_manage'],
         'POST /api/v1/projects/users/admin' => ['users_manage'],
         'PUT /api/v1/projects' => ['project_update'],

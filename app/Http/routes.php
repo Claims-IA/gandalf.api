@@ -174,6 +174,19 @@ $app->group(
         // the recent calls of the project's API keys
         $app->post('/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/decisions', ['uses' => 'TableVersionsController@run']);
         $app->get('/tables/{id:[0-9a-z]{24}}/calls', ['uses' => 'TableVersionsController@calls']);
+        // Batch 4: flows using a table, and bringing them to its active version
+        $app->get('/tables/{id:[0-9a-z]{24}}/flows', ['uses' => 'TableVersionsController@flows']);
+        $app->post('/tables/{id:[0-9a-z]{24}}/flows/update', ['uses' => 'TableVersionsController@updateFlows']);
+        // Flow versions (VERSIONS.md, batch 4): as for tables, without split
+        $app->get('/flows/{id:[0-9a-z]{24}}/versions', ['uses' => 'FlowVersionsController@index']);
+        $app->post('/flows/{id:[0-9a-z]{24}}/versions', ['uses' => 'FlowVersionsController@create']);
+        $app->get('/flows/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}', ['uses' => 'FlowVersionsController@read']);
+        $app->put('/flows/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}', ['uses' => 'FlowVersionsController@update']);
+        $app->delete('/flows/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}', ['uses' => 'FlowVersionsController@delete']);
+        $app->post('/flows/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/publish', ['uses' => 'FlowVersionsController@publish']);
+        $app->post('/flows/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/decisions', ['uses' => 'FlowVersionsController@run']);
+        $app->post('/flows/{id:[0-9a-z]{24}}/activate', ['uses' => 'FlowVersionsController@activate']);
+        $app->get('/flows/{id:[0-9a-z]{24}}/calls', ['uses' => 'FlowVersionsController@calls']);
         // Copy a decision table into a different project (admin only)
         $app->post('/tables/{id:[0-9a-z]{24}}/copyto/{project_id:[0-9a-z]{24}}', ['uses' => 'TablesController@copyTo']);
         // Move a decision table to a different project (admin only)
@@ -222,5 +235,6 @@ $app->group(
     function ($app) {
         /** @var Laravel\Lumen\Application $app */
         $app->post('/tables/{id:[0-9a-z]{24}}/decisions', ['uses' => 'ConsumerController@tableCheckV2']);
+        $app->post('/flows/{id:[0-9a-z]{24}}/decisions', ['uses' => 'ConsumerController@flowCheckV2']);
     }
 );

@@ -14,6 +14,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\CopyMoveGuard;
+use App\Services\FlowVersioning;
 use Nebo15\REST\AbstractController;
 use Nebo15\REST\Interfaces\ListableInterface;
 
@@ -56,7 +57,9 @@ class FlowsController extends AbstractController
      *
      * Overrides the vendor readList (which ignores query filters) to validate
      * and apply the same title/description filters as the tables endpoint, and
-     * to reduce each flow to its list projection (Flow::toListArray).
+     * to reduce each flow to its list projection (Flow::toListArray), flagged
+     * `outdated` when a node runs a table version other than its table's
+     * active one (VERSIONS.md, batch 4).
      *
      * @return \Illuminate\Http\JsonResponse
      */
@@ -68,13 +71,17 @@ class FlowsController extends AbstractController
             $this->getRepository()->readListWithFilters($this->request->all()),
             [],
             function (ListableInterface $model) {
-                return $model->toListArray();
+                return $model->toListArray() + [
+                    'active_version_id' => $model->active_version_id,
+                    'outdated' => app(FlowVersioning::class)->isOutdated($model),
+                ];
             }
         );
     }
 
     /**
-     * Paginated run history for a flow (most recent first).
+     * Paginated run history for a flow (most recent first). Test runs from
+     * gandalf.web are left out; `test=true` lists them instead.
      *
      * @param  string $id  Flow ObjectID.
      * @return \Illuminate\Http\JsonResponse
@@ -82,7 +89,11 @@ class FlowsController extends AbstractController
     public function runs($id)
     {
         return $this->response->jsonPaginator(
-            $this->getRepository()->getRuns($id, $this->request->input('size'))
+            $this->getRepository()->getRuns(
+                $id,
+                $this->request->input('size'),
+                filter_var($this->request->input('test', false), FILTER_VALIDATE_BOOLEAN)
+            )
         );
     }
 

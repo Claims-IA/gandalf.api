@@ -7,8 +7,8 @@
  * - publication: a draft is frozen and numbered;
  * - activation: the published version the API runs;
  * - variant split changes, allowed on published versions;
- * - deletion, refused for the active version and for a version an API key
- *   still calls.
+ * - deletion, refused for the active version, for a version an API key still
+ *   calls and for a version a flow is pinned to.
  *
  * During release A the table document holds a copy of its active version's
  * content: activating a version, or changing the split of the active one,
@@ -19,7 +19,9 @@
 
 namespace App\Repositories;
 
+use App\Models\Flow;
 use App\Models\Table;
+use App\Models\FlowVersion;
 use App\Models\TableVersion;
 use App\Services\VersionCalls;
 use App\Services\TableVersioning;
@@ -224,8 +226,8 @@ class TableVersionsRepository
     /**
      * Delete a version. The active version stays: activate another one first.
      * A published version an API key of the application called by its number
-     * within the window stays too (VersionCalls). Flows pin versions from batch
-     * 4; their guard arrives with them.
+     * within the window stays too (VersionCalls), and so does a version a flow
+     * or one of its versions is pinned to.
      *
      * @param  Table        $table
      * @param  TableVersion $version
@@ -239,7 +241,24 @@ class TableVersionsRepository
         if ($version->isPublished() && $this->calls->isCalled($table, $version->number, $application)) {
             abort(409, 'version_in_use');
         }
+        if ($version->isPublished() && self::isPinned($version)) {
+            abort(409, 'version_in_use');
+        }
         $version->delete();
+    }
+
+    /**
+     * Whether a flow, or a version of a flow, has a node pinned to a table version.
+     *
+     * @param  TableVersion $version
+     * @return bool
+     */
+    public static function isPinned(TableVersion $version)
+    {
+        $id = (string) $version->getId();
+
+        return FlowVersion::where('nodes.table_version_id', $id)->count() > 0
+            || Flow::where('nodes.table_version_id', $id)->count() > 0;
     }
 
     /**

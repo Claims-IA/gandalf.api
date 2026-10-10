@@ -577,7 +577,8 @@ Supprime un brouillon (`tables_update`) ou une version publiée
 (`tables_publish`). `409 version_in_use` pour la version active (activez-en
 d'abord une autre) et pour une version publiée qu'une clé d'API du projet a
 appelée par son numéro dans les 30 derniers jours
-(`TABLE_VERSIONS_CALL_WINDOW_DAYS` ; une clé supprimée ne compte plus).
+(`TABLE_VERSIONS_CALL_WINDOW_DAYS` ; une clé supprimée ne compte plus), ou sur
+laquelle un flow est figé.
 
 ---
 
@@ -627,7 +628,11 @@ de table.
 
 `meta.callers_without_version` liste les clés d'API qui ont appelé la table
 sans préciser de version récemment (lignes de la route `calls` ci-dessous) :
-l'activation change ce qu'elles exécutent.
+l'activation change ce qu'elles exécutent. `meta.flows_outdated` liste les flows
+encore figés sur une autre version de la table : l'activation ne change rien
+pour eux tant qu'ils n'y sont pas amenés (voir plus bas). En mode de
+compatibilité de la mise en production A, les flows suivent leurs tables et la
+liste est vide.
 
 **Avertissement de divergence.** Publier ou activer une version qui ne descend
 pas de la version active réussit, avec un avertissement : la version ne
@@ -669,6 +674,23 @@ sans version, donc la version active). Seules les clés d'API sont comptées ;
   ]
 }
 ```
+
+---
+
+#### Flows qui utilisent une table
+
+Les flows sont versionnés eux aussi, chaque nœud figé sur une version de sa
+table : voir [DRG.fr.md](DRG.fr.md#versions).
+
+- `GET /api/v1/admin/tables/{id}/flows` liste les flows du projet qui utilisent
+  la table, avec la version de table exécutée par chaque nœud et
+  `outdated: true` quand ce n'est pas la version active.
+- `POST /api/v1/admin/tables/{id}/flows/update` les amène à la version active
+  de la table : un brouillon de chaque flow la fige, ses fils suivant les
+  renommages de champs. Corps `{ "flow_ids": [...], "publish": true, "activate": true }`,
+  tout facultatif ; `publish` exige `tables_publish`, `activate` exige
+  `tables_activate` et implique `publish`. Chaque flow est signalé `updated`,
+  `up_to_date` ou `incompatible` (avec les erreurs du graphe, laissé tel quel).
 
 ---
 
@@ -820,6 +842,10 @@ Erreurs : `404 version_not_found` (aucune version publiée de ce numéro ; un
 brouillon n'en a pas), `422 variant_not_found` (variante absente de la version
 exécutée), `422` avec les erreurs sous `data.*` pour des données d'entrée
 invalides (et pour un corps sans `data`).
+
+Les flows ont la même route, `POST /api/v2/flows/{id}/decisions` avec
+`{ "version": 2, "data": { ... } }` (sans `variant_id`) ; voir
+[DRG.fr.md](DRG.fr.md#api-http).
 
 ---
 

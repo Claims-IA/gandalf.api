@@ -147,7 +147,8 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `ConditionsTypes` | Définit tous les opérateurs de comparaison sous forme de closures ; évalue les conditions à l'exécution |
 | `DateValue`       | Analyse les valeurs `date` (dates ISO, relatives `today-30d`) en numéros de jour                        |
 | `TableVersioning` | Retrouve la version active d'une table, publie les versions et recopie la version active sur la table ; pendant la mise en production A, publie et active une version quand un enregistrement change le contenu d'une table |
-| `VersionCalls`    | Compte les appels des clés d'API par table et version demandée (`version_calls`), pour l'écran d'activation et le garde-fou de suppression |
+| `VersionCalls`    | Compte les appels des clés d'API par table ou flow et version demandée (`version_calls`), pour l'écran d'activation et le garde-fou de suppression |
+| `FlowVersioning`  | Versions de flows : version active, nœuds figés sur des versions de table, mode de compatibilité (les flows suivent leurs tables) ; voir [DRG.fr.md](DRG.fr.md#versions) |
 | `Mail`            | Intégration email Postmark (vérification, réinitialisation de mot de passe, invitations)                |
 | `Intercom`        | Intégration CRM Intercom (synchronisation des profils, événements de décision, code sécurisé)           |
 | `Mixpanel`        | Intégration analytics Mixpanel (événements utilisateur, compteurs de décisions)                         |

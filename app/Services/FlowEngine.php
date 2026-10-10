@@ -10,6 +10,11 @@
  * The per-node evaluation reuses the existing Scoring engine unchanged — the
  * engine only orchestrates and wires values via the unified `answer` contract.
  *
+ * Versions (VERSIONS.md, batch 4): the engine runs the flow's active version,
+ * or the version a call names, and each node runs the table version it is
+ * pinned to. The run and each node's decision record the flow version, and
+ * the trace each node's table version.
+ *
  * @package App\Services
  */
 
@@ -18,6 +23,8 @@ namespace App\Services;
 use App\Models\Flow;
 use App\Models\Table;
 use App\Models\FlowRun;
+use App\Models\FlowVersion;
+use App\Models\TableVersion;
 use App\Repositories\FlowRepository;
 use App\Exceptions\FlowValidationException;
 use Illuminate\Contracts\Validation\ValidationException;
@@ -35,30 +42,49 @@ class FlowEngine
      */
     private $flowRepository;
 
-    public function __construct(Scoring $scoring, FlowRepository $flowRepository)
-    {
+    private $flowVersioning;
+
+    private $tableVersioning;
+
+    public function __construct(
+        Scoring $scoring,
+        FlowRepository $flowRepository,
+        FlowVersioning $flowVersioning,
+        TableVersioning $tableVersioning
+    ) {
         $this->scoring = $scoring;
         $this->flowRepository = $flowRepository;
+        $this->flowVersioning = $flowVersioning;
+        $this->tableVersioning = $tableVersioning;
     }
 
     /**
      * Run a flow against the supplied inputs.
      *
-     * @param  string $flowId    ObjectID of the flow.
-     * @param  array  $inputs    Flow input values, keyed by input key.
-     * @param  mixed  $appId     Application id, for scoping the persisted decisions.
-     * @param  bool   $showMeta  Passed through to per-node scoring.
-     * @return array             { answer, answer_types, decision_kind: 'drg', flow_run_id, nodes[] }
+     * @param  string|Flow      $flowId    ObjectID of the flow, or the flow.
+     * @param  array            $inputs    Flow input values, keyed by input key.
+     * @param  mixed            $appId     Application id, for scoping the persisted decisions.
+     * @param  bool             $showMeta  Passed through to per-node scoring.
+     * @param  FlowVersion|null $version   Version to run; the active one by default (a flow
+     *                                     without versions runs its own graph).
+     * @param  bool             $test      A test run from gandalf.web: decisions flagged `test`.
+     * @return array             { answer, answer_types, decision_kind: 'drg', flow_run_id, flow, nodes[] }
      * @throws FlowValidationException  On an unrunnable graph or a wiring error at run time.
      */
-    public function run($flowId, array $inputs, $appId, $showMeta = false)
+    public function run($flowId, array $inputs, $appId, $showMeta = false, $version = null, $test = false)
     {
         /** @var Flow $flow */
-        $flow = $this->flowRepository->read($flowId);
+        $flow = $flowId instanceof Flow ? $flowId : $this->flowRepository->read($flowId);
+        $version = $version ?: $this->flowVersioning->activeVersion($flow);
+        $graph = FlowVersioning::graphOf($version ?: $flow);
+        $flowRef = [
+            '_id' => (string) $flow->getId(),
+            'version' => $version ? ['_id' => (string) $version->getId(), 'number' => $version->number] : null,
+        ];
 
-        $nodes = $flow->nodes ?: [];
-        $edges = $flow->edges ?: [];
-        $outputs = $flow->outputs ?: [];
+        $nodes = $graph['nodes'];
+        $edges = $graph['edges'];
+        $outputs = $graph['outputs'];
 
         $order = $this->orderNodes($nodes, $edges);
         $edgesByTarget = $this->groupEdgesByTarget($edges);
@@ -70,19 +96,26 @@ class FlowEngine
             foreach ($order as $nodeId) {
                 $node = $this->findNode($nodes, $nodeId);
                 $table = $this->requireTable($node, $nodeId);
+                $tableVersion = $this->pinnedVersion($table, $node, $nodeId);
 
                 $values = $this->buildNodeInput(
-                    $table,
+                    $tableVersion ?: $table,
                     $inputs,
                     isset($edgesByTarget[$nodeId]) ? $edgesByTarget[$nodeId] : [],
                     $nodeResults
                 );
 
-                $result = $this->scoring->check((string) $table->_id, $values, $appId, $showMeta);
+                $result = $this->scoring->evaluate($table, $tableVersion, $values, $appId, $showMeta, [
+                    'flow' => $flowRef,
+                    'test' => $test,
+                ]);
                 $nodeResults[$nodeId] = $result;
                 $nodeTrace[$nodeId] = [
                     'node_id' => $nodeId,
                     'table_id' => (string) $table->_id,
+                    'table_version' => $tableVersion
+                        ? ['_id' => (string) $tableVersion->getId(), 'number' => $tableVersion->number]
+                        : null,
                     'input' => $values,
                     'decision_id' => isset($result['_id']) ? $result['_id'] : null,
                     'answer' => isset($result['answer']) ? $result['answer'] : null,
@@ -96,7 +129,7 @@ class FlowEngine
             // Record the partial run so the decisions already produced are linked
             // and traceable, then surface its id on the error so the caller can
             // correlate the 422 with the persisted trace.
-            $failedRun = $this->persistRun($flow, $appId, $inputs, [], $nodeTrace, ['errors' => $messages]);
+            $failedRun = $this->persistRun($flow, $flowRef, $appId, $inputs, [], $nodeTrace, ['errors' => $messages], $test);
 
             if ($e instanceof FlowValidationException) {
                 throw $e->setFlowRunId($failedRun->getId());
@@ -109,10 +142,11 @@ class FlowEngine
 
         list($answer, $answerTypes) = $this->assembleOutputs($outputs, $nodeResults);
 
-        $flowRun = $this->persistRun($flow, $appId, $inputs, $answer, $nodeTrace, null);
+        $flowRun = $this->persistRun($flow, $flowRef, $appId, $inputs, $answer, $nodeTrace, null, $test);
 
         return [
             'flow_run_id' => $flowRun->getId(),
+            'flow' => $flowRef,
             'answer' => $answer,
             'answer_types' => $answerTypes,
             'decision_kind' => 'drg',
@@ -121,19 +155,44 @@ class FlowEngine
     }
 
     /**
+     * The table version a node runs: the one it is pinned to, or its table's
+     * active version for a node without a pin (a table that had no versions
+     * when the node was pinned; null then runs the table as stored).
+     *
+     * @param  Table  $table
+     * @param  array  $node
+     * @param  string $nodeId
+     * @return TableVersion|null
+     * @throws FlowValidationException  When the pinned version no longer exists.
+     */
+    private function pinnedVersion(Table $table, array $node, $nodeId)
+    {
+        $pin = isset($node['table_version_id']) ? $node['table_version_id'] : null;
+        if (!$pin) {
+            return $this->tableVersioning->activeVersion($table);
+        }
+        $version = TableVersion::where('_id', (string) $pin)->where('table_id', (string) $table->getId())->first();
+        if (!$version) {
+            throw new FlowValidationException(["Node '$nodeId' is pinned to a version of its table that no longer exists."]);
+        }
+
+        return $version;
+    }
+
+    /**
      * Build a single node's input map: only the fields the node's table declares,
      * each fed from a wired edge when present, otherwise from a same-named flow
      * input. Unrelated flow inputs (including `variant_id`, which is table-local
      * and must not leak across nodes) are deliberately not forwarded.
      *
-     * @param  Table $table
+     * @param  Table|TableVersion $table  The table version the node runs (or the table).
      * @param  array $inputs        Flow inputs.
      * @param  array $incomingEdges Edges targeting this node.
      * @param  array $nodeResults   Results of already-evaluated nodes.
      * @return array
      * @throws FlowValidationException
      */
-    private function buildNodeInput(Table $table, array $inputs, array $incomingEdges, array $nodeResults)
+    private function buildNodeInput(Table|TableVersion $table, array $inputs, array $incomingEdges, array $nodeResults)
     {
         // Index this node's incoming edges by target field.
         $edgeByField = [];
@@ -230,23 +289,26 @@ class FlowEngine
      * Persist a FlowRun linking the decisions produced by the nodes.
      *
      * @param  Flow       $flow
+     * @param  array      $flowRef  { _id, version } of the flow version run.
      * @param  mixed      $appId
      * @param  array      $inputs
      * @param  array      $answer
      * @param  array      $nodeTrace
      * @param  array|null $error  Non-null for a failed/partial run.
+     * @param  bool       $test   A test run from gandalf.web.
      * @return FlowRun
      */
-    private function persistRun(Flow $flow, $appId, array $inputs, array $answer, array $nodeTrace, $error)
+    private function persistRun(Flow $flow, array $flowRef, $appId, array $inputs, array $answer, array $nodeTrace, $error, $test = false)
     {
         $flowRun = new FlowRun();
         $flowRun->fill([
-            'flow' => ['_id' => (string) $flow->_id, 'title' => $flow->title],
+            'flow' => ['_id' => (string) $flow->_id, 'title' => $flow->title, 'version' => $flowRef['version']],
             'application' => $appId,
             'inputs' => $inputs,
             'answer' => $answer,
             'nodes' => array_values($nodeTrace),
             'error' => $error,
+            'test' => (bool) $test,
         ]);
         // Scope the run to the current application the standard Applicationable way
         // (the `applications` array), so getRuns can filter on it like every other

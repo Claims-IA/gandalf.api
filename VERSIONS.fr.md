@@ -104,6 +104,14 @@ Même découpage que pour les tables. Le document `flows` garde l'identité et
 `edges`. Chaque nœud ajoute `table_version_id` : la version de la table sur
 laquelle il est figé.
 
+En place depuis le lot 4 (modèle `FlowVersion`, service `FlowVersioning`) ;
+voir [DRG.fr.md](DRG.fr.md#versions) pour le côté flow. Comme pour les tables,
+le document du flow garde une copie du graphe de sa version active, nœuds figés.
+Un nœud enregistré sans version figée garde la sienne ou prend la version active
+de sa table ; une version figée doit être publiée. Un `FlowRun` enregistre la
+version du flow et la version de table de chaque nœud, et un flow peut être
+exécuté en test (exécutions et décisions marquées `test`).
+
 ### Décision (collection `decisions`) : lots 1, 3 et 4
 
 | Champ ajouté | Lot | Notes |
@@ -121,7 +129,7 @@ quand l'appel ne précise pas de version), `last_call_at`, `count`,
 `applications`. Elle alimente l'écran d'activation (« clés qui appellent sans
 préciser de version ») et le garde-fou de suppression d'une version.
 
-En place depuis le lot 3 pour les tables (flows : lot 4), service
+En place depuis le lot 3 pour les tables et le lot 4 pour les flows, service
 `App\Services\VersionCalls`. Seuls les appels réussis des clés d'API comptent :
 un utilisateur n'a pas de code figé sur une version. Une clé compte comme
 appelante tant que son dernier appel est dans la fenêtre
@@ -154,7 +162,7 @@ une seule ligne par clé, table et version demandée.
 | Revenir en arrière | Réactiver une version précédente | `tables_activate` |
 | Changer la répartition | Mode et pourcentages des variantes d'une version, publiée ou non, sans republier | `tables_update` ; `tables_activate` pour la version active (voir [Points ouverts](#points-ouverts)) |
 | Supprimer un brouillon | À tout moment | `tables_update` |
-| Supprimer une version publiée | Seulement si elle n'est pas active, qu'aucune version de flow n'est figée dessus (lot 4) et qu'aucune clé ne l'appelle encore | `tables_publish` |
+| Supprimer une version publiée | Seulement si elle n'est pas active, qu'aucun flow ni version de flow n'est figé dessus et qu'aucune clé ne l'appelle encore | `tables_publish` |
 
 Il n'y a pas de fusion entre brouillons. Chaque brouillon, puis chaque version,
 enregistre sa version d'origine. La publication et l'activation signalent un
@@ -164,11 +172,14 @@ changements des versions suivantes.
 Publier et activer sont deux actions distinctes, liées à deux droits. Rien
 n'active une version automatiquement, hors [mode de compatibilité](#migration-et-mode-de-compatibilité).
 
-En place depuis les lots 2 et 3, sauf le garde-fou de suppression lié aux
-flows (lot 4). Pendant
-la mise en production A, activer une version recopie son contenu sur la table,
-et les flows de l'application suivent les renommages de champs entre
-l'ancienne version active et la nouvelle, comme pour une mise à jour de table.
+En place depuis les lots 2 à 4. Pendant la mise en production A, activer une
+version recopie son contenu sur la table. En mode de compatibilité, les flows de
+l'application suivent : chacun reçoit une version qui fige la version de table
+activée, publiée et activée, et ils suivent les renommages de champs comme pour
+une mise à jour de table. Sans ce mode, les flows restent sur leurs versions
+figées : l'activation les liste (`meta.flows_outdated`) et
+`POST /api/v1/admin/tables/{id}/flows/update` les y amène (voir
+[DRG.fr.md](DRG.fr.md#versions)).
 
 ---
 
@@ -214,10 +225,10 @@ Dans la version retenue, la variante est choisie comme aujourd'hui : par
 `variant_id` absent de la version exécutée renvoie une erreur explicite, pour
 qu'un client ne croie pas tester une variante en en exécutant une autre.
 
-En place depuis le lot 3, sauf les nœuds de flow (lot 4 : d'ici là, ils
-exécutent la version active de chaque table). `App\Services\Scoring::evaluate()`
-exécute n'importe quelle version ; `check()` (v1, flows) exécute la version
-active et `evaluateRequest()` (v2, exécutions de test) prend le corps v2.
+En place depuis les lots 3 et 4. `App\Services\Scoring::evaluate()` exécute
+n'importe quelle version : `check()` (route v1) la version active,
+`evaluateRequest()` (v2, exécutions de test) la version demandée avec le corps
+v2, et `FlowEngine` la version figée de chaque nœud.
 
 ---
 
@@ -255,7 +266,8 @@ reprend celle de la v1, qui contient déjà la variante exécutée
 }
 ```
 
-La même forme vaut pour `POST /api/v2/flows/{id}/decisions` (lot 4).
+La même forme vaut pour `POST /api/v2/flows/{id}/decisions` (lot 4), sans
+`variant_id` : `{ "version": 2, "data": { … } }`.
 
 La route v1 garde son corps à plat et exécute la version active. Elle est
 déclarée obsolète avec une date de fin, par les en-têtes `Deprecation` et
@@ -291,7 +303,12 @@ En place depuis le lot 3 pour les tables. Détails :
 | POST | `/api/v1/admin/tables/{id}/versions/{version_id}/decisions` | Exécution de test depuis gandalf.web (décision marquée `test`) |
 | GET | `/api/v1/admin/tables/{id}/calls` | Appels récents des clés d'API du projet, par version demandée |
 
-Les routes équivalentes pour les flows arrivent au lot 4.
+Les routes équivalentes pour les flows sont en place depuis le lot 4, sans la
+répartition (voir [DRG.fr.md](DRG.fr.md#api-http)) :
+`/api/v1/admin/flows/{id}/versions…`, `/activate`, `/calls`, et l'exécution de
+test avec `{ data }`. Côté table, `GET /api/v1/admin/tables/{id}/flows` liste
+les flows qui utilisent une table et `POST /api/v1/admin/tables/{id}/flows/update`
+les amène à sa version active.
 
 En place depuis les lots 2 et 3. Détails :
 
@@ -369,8 +386,8 @@ enregistrement ne publie rien.
 | Changement de `matching_type` ou `decision_type` après publication | 409 | `table_type_locked` |
 | Données d'entrée invalides | 422 | inchangé, erreurs sous `data.*` en v2 |
 
-En place depuis les lots 2 et 3, sauf `table_type_locked` (mise en production
-B) et `version_in_use` pour une version figée par un flow (lot 4). Une requête
+En place depuis les lots 2 à 4, sauf `table_type_locked` (mise en production
+B). Une requête
 sans le droit qu'exige la version (`tables_publish`, `tables_activate`) reçoit
 le `403 access_denied` habituel, avec le droit manquant dans `meta.scopes`. La
 route v1 garde sa propre erreur : un `variant_id` absent de la version active
@@ -413,7 +430,10 @@ répond `404 variant_not_found`.
   active, **figée sur la version active de chaque table au moment de la
   migration**. Le mode de compatibilité a pu créer des versions de tables
   depuis la mise en production A : figer les flows sur la version 1 changerait
-  leur comportement.
+  leur comportement. En place depuis le lot 4
+  (`2026_10_10_150000_FlowVersions`). Tant que le mode de compatibilité est
+  actif, les flows continuent de suivre leurs tables : leurs versions figées
+  restent les versions actives jusqu'à la fin de ce mode.
 - **Fin du mode de compatibilité et de la copie** : le contenu quitte le
   document de la table, dont le code ne lit plus que l'identité.
 
@@ -450,7 +470,7 @@ du dépôt.
 
 - **Aucun test API des flows** : il n'existe pas de `FlowsCest`. Le lot 4
   commence par en écrire un, comme filet de sécurité avant de toucher aux
-  flows.
+  flows. Écrit au lot 4 (`tests/api/FlowsCest.php`).
 - **Pas de sauvegarde Eloquent d'une table hors requête authentifiée** :
   `TableObserver::saved()` n'a pas de garde quand il n'y a pas d'utilisateur,
   et `Table::setVariants()` lit l'utilisateur connecté. Une migration ou une
@@ -513,7 +533,7 @@ livraison.
 | 2 | API : brouillons, publication, activation, répartition, droits | 1 | fait, à relire |
 | 2b | API : import et export Excel par version, suppression de `is_default` | 2 | fait, à relire |
 | 3 | API : route v2, exécution de test, suivi des appels par clé et garde-fou de suppression associé, obsolescence v1 | 2 | fait, à relire |
-| 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | à faire |
+| 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | fait, à relire |
 | 5 | gandalf.web : versions de tables | 2, 3 | à faire |
 | 6 | gandalf.web : versions de flows | 4, 5 | à faire |
 | 7 | Administration à deux niveaux (indépendant) | | à faire |

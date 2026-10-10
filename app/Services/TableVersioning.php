@@ -93,6 +93,8 @@ class TableVersioning
         Table::where('_id', $table->getId())->update(['active_version_id' => $versionId]);
         $table->setAttribute('active_version_id', $versionId);
         $table->syncOriginalAttribute('active_version_id');
+        // Flows run the live table in compatibility mode: they follow.
+        app(FlowVersioning::class)->followTable($table);
 
         return $version;
     }
@@ -148,7 +150,15 @@ class TableVersioning
         return $items;
     }
 
-    private static function normalize($value)
+    /**
+     * A value made comparable for fingerprints: audit keys dropped, BSON ids and
+     * dates as strings, object keys sorted, lists kept in order. Shared with
+     * FlowVersioning.
+     *
+     * @param  mixed $value
+     * @return mixed
+     */
+    public static function normalize($value)
     {
         if ($value instanceof ObjectID) {
             return (string) $value;
@@ -234,7 +244,8 @@ class TableVersioning
      * Release A: make a published version the one its table runs, and copy its
      * content onto the table (the table holds its active version's content).
      * The table save (TableObserver) then finds both contents equal and
-     * publishes nothing.
+     * publishes nothing. In compatibility mode the flows using the table follow
+     * (FlowVersioning::followTable); otherwise they keep their pinned versions.
      *
      * @param  Table        $table
      * @param  TableVersion $version
@@ -245,6 +256,7 @@ class TableVersioning
         self::copyContent($version, $table);
         $table->setAttribute('active_version_id', (string) $version->getId());
         $table->save();
+        app(FlowVersioning::class)->followTable($table);
 
         return $table;
     }

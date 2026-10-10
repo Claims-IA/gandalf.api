@@ -144,7 +144,8 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | `ConditionsTypes` | Defines all comparison operators as closures; evaluates conditions at runtime   |
 | `DateValue`       | Parses `date` values (ISO dates, relative `today-30d`) into day numbers         |
 | `TableVersioning` | Resolves a table's active version, publishes versions and copies the active one onto the table; in release A, publishes and activates a version when a table save changes its content |
-| `VersionCalls`    | Counts the calls of API keys per table and requested version (`version_calls`), for the activation screen and the deletion guard |
+| `VersionCalls`    | Counts the calls of API keys per table or flow and requested version (`version_calls`), for the activation screen and the deletion guard |
+| `FlowVersioning`  | Flow versions: active version, nodes pinned to table versions, compatibility mode (flows follow their tables); see [DRG.md](DRG.md#versions) |
 | `Mail`            | Postmark email integration (verification, password reset, invitations)          |
 | `Intercom`        | Intercom CRM integration (user profile sync, decision events, secure code)      |
 | `Mixpanel`        | Mixpanel analytics integration (user track events, decision counters)           |
