@@ -82,7 +82,7 @@ versions.
 | `origin_version_id` | ObjectId \| null | Version or draft this draft comes from |
 | `autopublished` | bool | Published by the compatibility mode or the migration, not by a person |
 | `fields` | array | Same shape as today (`Field`) |
-| `variants` | array | Same shape as today (`Variant` > `Rule` > `Condition`). A variant keeps its `_id` from one version to the next |
+| `variants` | array | Same shape as today (`Variant` > `Rule` > `Condition`). A variant keeps its `_id` from one version to the next. There is no default variant (batch 2b): `is_default` is no longer stored nor returned |
 | `variants_probability` | string | Split mode (`first`, `random`, `percent`). Editable on a published version |
 | `created_by`, `created_at`, `updated_at` | | |
 | `published_by`, `published_at` | | Set at publication |
@@ -312,6 +312,34 @@ In place since batches 2 and 3. Details:
   `meta.callers_without_version`: the keys whose behaviour the activation
   changes.
 
+### Import and export: batch 2b
+
+In place. `GET /api/v1/admin/tables/{id}/export` takes `version_id` (a draft
+or a published version, the active one by default) and `variant_id` (Excel and
+CSV, the first variant by default). The Excel `_meta` sheet records
+`version_id` and `version_number`, and its lock tokens (`exported_at`,
+`content_hash`) are the exported content's. While the compatibility mode is
+on, the active version is exported from the table, which holds its copy.
+
+Re-importing an Excel workbook (`POST /api/v1/admin/tables/import`) writes
+to its origin:
+
+| Workbook exported from | Import |
+| ---------------------- | ------ |
+| A draft | Updates the draft (`200`), lock on the draft |
+| A published version | Creates a draft from it, named "Import Excel" (`201`) |
+| A published version, compatibility mode on | Updates the table, as before versions |
+| A table, before versions (no `version_id`) | Updates the table |
+
+A draft receives the content only: the title and description stay the
+table's, and the content is validated against the table's types. The response
+carries `meta.imported_into` (`table` or `version`).
+
+`is_default` is gone: the split picks the variant that runs, an export names
+the variant it exports, and the JSON export puts the first variant under its
+`table` key. The flag stays in documents saved before, unread; the content
+fingerprint ignores it, so their next save publishes nothing.
+
 ---
 
 ## Error handling
@@ -459,7 +487,7 @@ This document moves each section from "planned" to "in place" as batches ship.
 | 0 | Technical framing (this document) | | done, to review |
 | 1 | API: table version foundations, migration, compatibility mode | 0 | done, to review |
 | 2 | API: drafts, publication, activation, split, scopes | 1 | done, to review |
-| 2b | API: Excel import and export per version, removal of `is_default` | 2 | to do |
+| 2b | API: Excel import and export per version, removal of `is_default` | 2 | done, to review |
 | 3 | API: v2 route, test runs, calls per key and the matching deletion guard, v1 deprecation | 2 | done, to review |
 | 4 | API: flow versions, pinned nodes, bulk update of compatible flows | 1 | to do |
 | 5 | gandalf.web: table versions | 2, 3 | to do |

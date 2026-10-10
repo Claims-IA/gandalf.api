@@ -136,7 +136,6 @@ class Table extends Base implements ListableInterface, Applicationable
                 '_id'        => $variant->_id,
                 'title'      => $variant->title,
                 'description'=> $variant->description,
-                'is_default' => (bool)$variant->is_default,
             ];
         });
 

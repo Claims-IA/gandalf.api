@@ -19,7 +19,10 @@ class ExcelImportResult
     /** @var string|null 24-hex variant id from _meta */
     public ?string $variantId = null;
 
-    /** @var string ISO-8601 Table.updated_at at export time (optimistic-lock token) */
+    /** @var string|null 24-hex id of the exported version, null in files exported before versions */
+    public ?string $versionId = null;
+
+    /** @var string ISO-8601 updated_at of the exported table or version (optimistic-lock token) */
     public string $exportedAt = '';
 
     /** @var string Content hash of the table at export time ('' on older files) */

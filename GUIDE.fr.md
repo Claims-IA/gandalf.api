@@ -306,9 +306,14 @@ Il est aussi possible de **forcer une variante** en passant son `_id` dans le co
 
 Chaque version de la table a sa propre répartition. Elle se change sur une version déjà publiée sans en créer de nouvelle (route `split`, voir [API_GUIDE.fr.md](API_GUIDE.fr.md#versions-de-table)) : c'est un réglage d'exploitation, pas un changement de règles.
 
-#### Marqueur de variante par défaut
+#### Export d'une variante
 
-Chaque table a exactement une variante avec `is_default: true`. Elle sert de variante par défaut à l'export et à l'import ; elle n'intervient pas dans la sélection de la variante.
+Il n'y a pas de variante par défaut. Les exports Excel et CSV portent sur une
+seule variante : celle désignée par `variant_id`, la première sinon. Ils
+peuvent aussi porter sur une version précise (`version_id`, par défaut la
+version active). Réimporter un classeur Excel exporté depuis un brouillon met
+ce brouillon à jour ; depuis une version publiée, qui est figée, il crée un
+brouillon à partir d'elle (voir [API_GUIDE.fr.md](API_GUIDE.fr.md#versions-de-table)).
 
 ---
 
@@ -393,7 +398,6 @@ Content-Type: application/json
     {
       "title": "Règles standard",
       "description": "Variante de référence",
-      "is_default": true,
       "default_decision": "Refusé",
       "default_title": "Aucune règle applicable",
       "default_description": "La demande ne remplit aucun critère d'approbation.",
@@ -442,7 +446,6 @@ Content-Type: application/json
       {
         "_id": "65f1a2b3c4d5e6f7a8b9c0d5",
         "title": "Règles standard",
-        "is_default": true,
         "default_decision": "Refusé",
         "probability": 0,
         "rules": [
@@ -512,7 +515,6 @@ Content-Type: application/json
     {
       "_id": "65f1a2b3c4d5e6f7a8b9c0d5",
       "title": "Règles standard",
-      "is_default": true,
       "default_decision": "Refusé",
       "rules": [
         {
@@ -725,7 +727,6 @@ Content-Type: application/json
     {
       "_id": "65f1a2b3c4d5e6f7a8b9c0d5",
       "title": "Règles standard",
-      "is_default": true,
       "probability": 80,
       "default_decision": "Refusé",
       "rules": [...]
@@ -733,7 +734,6 @@ Content-Type: application/json
     {
       "title": "Règles assouplie (test)",
       "description": "Seuil de score abaissé à 550",
-      "is_default": false,
       "probability": 20,
       "default_decision": "Refusé",
       "rules": [

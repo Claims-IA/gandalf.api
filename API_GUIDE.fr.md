@@ -672,6 +672,32 @@ sans version, donc la version active). Seules les clés d'API sont comptées ;
 
 ---
 
+#### Exporter et importer une version
+
+`GET /api/v1/admin/tables/{id}/export?format=excel&version_id=...&variant_id=...`
+exporte un brouillon ou une version publiée, par défaut la version active, et
+une variante (Excel et CSV), par défaut la première. Le nom du fichier se
+termine par `-v<numéro>` ou `-draft`. Il n'y a pas de variante par défaut :
+`is_default` n'est plus renvoyé, et il est ignoré quand un client ou un ancien
+fichier l'envoie.
+
+`POST /api/v1/admin/tables/import` avec un classeur Excel exporté depuis une
+version :
+
+- depuis un brouillon : met ce brouillon à jour (`200`), avec le verrou
+  optimiste sur le brouillon (`409` s'il a changé depuis l'export, `force=1`
+  passe outre) ;
+- depuis une version publiée, qui est figée : crée un brouillon à partir d'elle,
+  nommé « Import Excel » (`201`) ;
+- tant que le mode de compatibilité de la mise en production A est actif, le
+  classeur d'une version publiée met la table à jour, comme avant les versions.
+
+La réponse est alors le brouillon, avec `meta.imported_into = "version"`. Seul
+le contenu va dans un brouillon : le titre et la description restent ceux de
+la table.
+
+---
+
 ### Décisions (Admin)
 
 Tous les endpoints admin de décision nécessitent un token Bearer + `X-Application`.

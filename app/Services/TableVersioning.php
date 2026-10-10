@@ -30,6 +30,10 @@ class TableVersioning
     // Stamped on every save (Table::setVariants): never a content difference.
     const AUDIT_KEYS = ['created_at', 'created_by', 'updated_at', 'updated_by'];
 
+    // Stored by saves before batch 2b (the default variant flag), no longer
+    // content: a table saved since must match a version stored before.
+    const DROPPED_VARIANT_KEYS = ['is_default'];
+
     // Two saves of the same table may race for the next version number; the
     // unique (table_id, number) index rejects the loser, which retries.
     const PUBLISH_ATTEMPTS = 3;
@@ -111,7 +115,8 @@ class TableVersioning
      * content match. Lists keep their order: fields, rules and conditions are
      * ordered. A field or variant key that is missing counts as its model
      * default, as a save would store it: content stored before a default was
-     * added (an old table, the migration's copy of it) matches its next save.
+     * added (an old table, the migration's copy of it) matches its next save,
+     * and a variant key that is no longer stored (`is_default`) is ignored.
      *
      * @param  array $attributes  Raw attributes of a Table or a TableVersion.
      * @return string
@@ -120,19 +125,23 @@ class TableVersioning
     {
         return sha1(json_encode(self::normalize([
             'fields' => self::withDefaults($attributes['fields'] ?? [], (new Field)->getAttributes()),
-            'variants' => self::withDefaults($attributes['variants'] ?? [], (new Variant)->getAttributes()),
+            'variants' => self::withDefaults(
+                $attributes['variants'] ?? [],
+                (new Variant)->getAttributes(),
+                self::DROPPED_VARIANT_KEYS
+            ),
             'variants_probability' => (string) ($attributes['variants_probability'] ?? ''),
         ])));
     }
 
-    private static function withDefaults($items, array $defaults)
+    private static function withDefaults($items, array $defaults, array $dropped = [])
     {
         if (!is_array($items)) {
             return $items;
         }
         foreach ($items as $i => $item) {
             if (is_array($item)) {
-                $items[$i] = $item + $defaults;
+                $items[$i] = array_diff_key($item, array_flip($dropped)) + $defaults;
             }
         }
 

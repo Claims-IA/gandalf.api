@@ -66,7 +66,6 @@ class TableRulesProvider
             'variants_probability' => 'sometimes|in:first,random,percent|probabilitySum',
             'variants' => 'required|array',
             'variants.*._id' => 'mongoId',
-            'variants.*.is_default' => 'sometimes|boolean',
             'variants.*.default_decision' => 'required|ruleThanType',
             'variants.*.title' => 'sometimes|string|between:2,128',
             'variants.*.description' => 'sometimes|string|between:2,128',

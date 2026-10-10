@@ -117,6 +117,15 @@ class TableVersioningTest extends \Codeception\TestCase\Test
         $this->assertSame(TableVersioning::contentHash($old), TableVersioning::contentHash($saved));
     }
 
+    public function testTheFormerDefaultVariantFlagIsNotContent()
+    {
+        // Stored before batch 2b, never written since: a table saved after the
+        // change must still match a version stored before it.
+        $stored = $this->content(['variants' => [0 => ['is_default' => true]]]);
+
+        $this->assertSame(TableVersioning::contentHash($stored), TableVersioning::contentHash($this->content()));
+    }
+
     public function testAValueOtherThanTheDefaultIsAContentChange()
     {
         $old = $this->content();

@@ -620,6 +620,29 @@ active one). Only API keys are counted; `meta.window_days` is the window.
 
 ---
 
+#### Export and import a version
+
+`GET /api/v1/admin/tables/{id}/export?format=excel&version_id=...&variant_id=...`
+exports a draft or a published version, the active version by default, and one
+variant (Excel and CSV), the first one by default. The file name ends with
+`-v<number>` or `-draft`. There is no default variant: `is_default` is no
+longer returned, and is ignored when a client or an older file sends it.
+
+`POST /api/v1/admin/tables/import` with an Excel workbook exported from a
+version:
+
+- from a draft: updates that draft (`200`), with the optimistic lock on the
+  draft (`409` when it changed since the export, `force=1` overrides);
+- from a published version, which is frozen: creates a draft from it, named
+  "Import Excel" (`201`);
+- while the release A compatibility mode is on, a published version's workbook
+  updates the table, as before versions.
+
+The response is then the draft, with `meta.imported_into = "version"`. Only
+the content goes into a draft: the title and description stay the table's.
+
+---
+
 ### Decisions (Admin)
 
 All admin decision endpoints require Bearer token + `X-Application`.

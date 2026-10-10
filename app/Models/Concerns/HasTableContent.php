@@ -74,13 +74,13 @@ trait HasTableContent
      * Replace all embedded variants with a new set (including their rules).
      *
      * Snapshots existing variants before deletion to preserve immutable fields
-     * (created_at, created_by, is_default) across updates. Sets updated_at and
-     * updated_by on every variant using the currently authenticated user.
+     * (created_at, created_by) across updates. Sets updated_at and updated_by on
+     * every variant using the currently authenticated user.
      *
-     * is_default rules:
-     *   - Preserved from the existing variant when its _id matches.
-     *   - New variants (no matching _id) receive is_default = false.
-     *   - If no variant ends up with is_default = true, the first one is promoted.
+     * There is no default variant (VERSIONS.md, batch 2b): the split picks the
+     * variant that runs, and an export names the variant it exports. An
+     * `is_default` key sent by a client, or stored by an older version, is
+     * dropped here.
      *
      * @param  array $variants  Array of variant definition arrays (each containing 'rules').
      * @return $this
@@ -99,36 +99,19 @@ trait HasTableContent
 
         $this->variants()->delete();
 
-        $hasDefault  = false;
-        $builtModels = [];
-
         foreach ($variants as $variantData) {
             $existingId = isset($variantData['_id']) ? strval($variantData['_id']) : null;
             $prev       = ($existingId && isset($existing[$existingId])) ? $existing[$existingId] : null;
 
-            // Preserve is_default from the database; new variants default to false
-            $isDefault = $prev ? (bool)$prev->is_default : false;
-
             // Preserve created_at / created_by for existing variants
-            $variantData['is_default']  = $isDefault;
+            unset($variantData['is_default']);
             $variantData['created_at']  = $prev ? $prev->created_at : $now;
             $variantData['created_by']  = $prev ? $prev->created_by : $uid;
             $variantData['updated_at']  = $now;
             $variantData['updated_by']  = $uid;
 
-            if ($isDefault) {
-                $hasDefault = true;
-            }
-
             $model = (new Variant($variantData))->setRules($variantData['rules'] ?? []);
             $this->variants()->associate($model);
-            $builtModels[] = $model;
-        }
-
-        // Ensure exactly one variant carries is_default = true (promote the first if none do)
-        if (!$hasDefault && !empty($builtModels)) {
-            $builtModels[0]->is_default = true;
-            $this->variants()->associate($builtModels[0]);
         }
 
         return $this;

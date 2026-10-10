@@ -820,14 +820,6 @@ components:
             Weight percentage used when `variants_probability` is `percent`.
             All variant probabilities should sum to 100.
           example: 70
-        is_default:
-          type: boolean
-          description: >
-            Marks this variant as the table's default. Exactly one variant per
-            table carries `is_default: true` — when none is set, the first
-            variant is auto-promoted. The default variant is the one exported
-            under the `table` key and used for CSV/Excel export.
-          example: true
         created_at:
           type: string
           format: date-time
@@ -867,10 +859,6 @@ components:
         description:
           type: string
           example: "Standard scoring variant"
-        is_default:
-          type: boolean
-          description: Whether this variant is the table's default variant.
-          example: true
 
     # ── Table ────────────────────────────────────────────────────────────────
     Table:
@@ -978,15 +966,15 @@ components:
         Like `Table` but with `_id` and system-managed fields stripped (timestamps,
         `created_by`/`updated_by`) so a fresh document is always created on import.
 
-        **Variant layout.** The default variant is exported under the top-level
+        **Variant layout.** The first variant is exported under the top-level
         `table` key (a single variant object), while every other variant is listed
-        in the `variants` array. On import, the object under `table` is treated as
-        the default variant (`is_default: true`) and merged ahead of `variants`.
+        in the `variants` array. On import, the object under `table` is placed
+        ahead of `variants`. There is no default variant (VERSIONS.md, batch 2b):
+        an `is_default` key in an older file is ignored.
 
-        **Backward compatibility.** The legacy flat format — where *all* variants
-        (including the default) live in the `variants` array and there is no `table`
-        key — is still accepted on import. In that case the first variant is taken
-        as the default.
+        **Backward compatibility.** The legacy flat format, where *all* variants
+        live in the `variants` array and there is no `table` key, is still
+        accepted on import.
       properties:
         title:
           type: string
@@ -1012,17 +1000,15 @@ components:
             $ref: '#/components/schemas/Field'
         table:
           description: >
-            The default variant, exported as a single object. On import this
-            variant is flagged `is_default: true`. Omitted only in the legacy flat
-            format (see schema description).
+            The first variant, exported as a single object. Omitted only in the
+            legacy flat format (see schema description).
           allOf:
             - $ref: '#/components/schemas/Variant'
         variants:
           type: array
           description: >
-            The non-default variants. In the legacy flat format this array instead
-            holds every variant, including the default one (which is then taken as
-            the first element).
+            The other variants. In the legacy flat format this array instead
+            holds every variant.
           items:
             $ref: '#/components/schemas/Variant'
       required:
@@ -1419,6 +1405,18 @@ components:
               type: array
               items:
                 type: string
+
+    ImportMeta:
+      type: object
+      properties:
+        code:
+          type: integer
+        imported_into:
+          type: string
+          enum: [table, version]
+          description: >
+            Round-trip Excel imports: whether the table or a version (a draft)
+            was written. Absent on imports that create a table from another format.
 
     # ── Decision ─────────────────────────────────────────────────────────────
     DecisionTable:
@@ -3340,8 +3338,13 @@ paths:
         | Format | `?format=` | Content-Type | Notes |
         |--------|-----------|--------------|-------|
         | JSON   | `json` (default) | `application/json` | Full export — all variants, all rules. Can be re-imported as-is (creates a new table). |
-        | CSV    | `csv` | `text/csv` | Default variant only, legacy 3-section format (create-only re-import). |
-        | Excel  | `excel` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | **Round-trip workbook** — one variant per file (`?variant_id=` selects it, default variant when omitted). Re-importing UPDATES the original table. |
+        | CSV    | `csv` | `text/csv` | One variant (`?variant_id=`, first variant when omitted), legacy 3-section format (create-only re-import). |
+        | Excel  | `excel` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | **Round-trip workbook**: one variant per file (`?variant_id=` selects it, first variant when omitted). Re-importing updates its origin (see the import route). |
+
+        **Versions** (VERSIONS.md): `?version_id=` exports a draft or a published
+        version of the table, the active version by default. The file name then
+        ends with `-v<number>` or `-draft`. While the release A compatibility mode
+        is on, the active version is exported from the table, which holds its copy.
 
         ### Excel round-trip workbook (format `gandalf-xlsx-v2`)
 
@@ -3351,8 +3354,9 @@ paths:
           titles, then one rule per row. Hidden column A carries the rule ids (blank =
           new rule, removed row = deleted rule). Add a field by inserting a column and
           filling rows 2–4; remove a field by deleting its column.
-        - `_meta` — hidden: table/variant ids, `exported_at` optimistic-lock token,
-          matching_type, decision_type, default_decision.
+        - `_meta` — hidden: table/version/variant ids, version number,
+          `exported_at` and `content_hash` optimistic-lock tokens (of the exported
+          table or version), matching_type, decision_type, default_decision.
         - `_help` — grammar cheat-sheet.
 
         Condition cells use a human-readable grammar:
@@ -3394,8 +3398,17 @@ paths:
           in: query
           required: false
           description: >
-            Excel only — MongoDB ObjectID of the variant to export.
-            Defaults to the table's default variant.
+            Excel and CSV: MongoDB ObjectID of the variant to export.
+            Defaults to the first variant.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: version_id
+          in: query
+          required: false
+          description: >
+            MongoDB ObjectID of the draft or published version to export.
+            Defaults to the active version.
           schema:
             type: string
             pattern: '^[0-9a-f]{24}$'
@@ -3416,9 +3429,9 @@ paths:
                 type: string
                 format: binary
         "404":
-          description: Table or variant not found.
+          description: Table, variant or version (`version_not_found`) not found.
         "422":
-          description: Invalid `variant_id` format.
+          description: Invalid `variant_id` or `version_id` format.
 
   # ── Import ────────────────────────────────────────────────────────────────────
   /api/v1/admin/tables/import:
@@ -3444,6 +3457,19 @@ paths:
         - an optimistic lock compares the file's `exported_at` with the table's
           `updated_at`: `409` when the table changed since export, `force=1` overrides;
         - the payload runs through the exact same validation as `POST /tables`.
+
+        **Versions** (VERSIONS.md, batch 2b). A workbook exported from a version
+        updates that version instead of the table:
+        - from a **draft**: the draft is updated in place (`200`), with the
+          optimistic lock on the draft;
+        - from a **published version**, which is frozen: a new draft is created
+          from it (`201`, named "Import Excel");
+        - while the release A compatibility mode is on, a published version's
+          workbook updates the table as before.
+        The response is then the draft, with `meta.imported_into = "version"`
+        (`"table"` otherwise). Only the content goes into a draft: the title and
+        description stay the table's, the content is validated against the
+        table's types. Workbooks exported before versions update the table.
 
         **All other files** (JSON, legacy 3-section CSV/Excel, or round-trip files
         sent with `mode=create`) create a new table; existing tables are never
@@ -3492,31 +3518,41 @@ paths:
                     overwrite even if the table changed since the export.
       responses:
         "200":
-          description: Round-trip import — existing table updated in place.
+          description: >
+            Round-trip import: the table, or the draft the file was exported
+            from (`meta.imported_into = "version"`), updated in place.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   meta:
-                    type: object
+                    $ref: '#/components/schemas/ImportMeta'
                   data:
-                    $ref: '#/components/schemas/Table'
+                    oneOf:
+                      - $ref: '#/components/schemas/Table'
+                      - $ref: '#/components/schemas/TableVersion'
         "201":
-          description: Table imported and created successfully.
+          description: >
+            Table imported and created, or a new draft created from the
+            published version the file was exported from
+            (`meta.imported_into = "version"`).
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   meta:
-                    type: object
+                    $ref: '#/components/schemas/ImportMeta'
                   data:
-                    $ref: '#/components/schemas/Table'
+                    oneOf:
+                      - $ref: '#/components/schemas/Table'
+                      - $ref: '#/components/schemas/TableVersion'
         "404":
           description: >
             Round-trip update — the embedded table id does not exist in the
-            current project (deleted, or exported from another project).
+            current project (deleted, or exported from another project), or the
+            embedded version was deleted (`version_not_found`).
         "409":
           description: >
             Round-trip update — the table changed on the server since the file

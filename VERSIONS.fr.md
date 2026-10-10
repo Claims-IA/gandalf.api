@@ -85,7 +85,7 @@ passé aux versions.
 | `origin_version_id` | ObjectId \| null | Version ou brouillon d'où vient ce brouillon |
 | `autopublished` | bool | Version publiée par le mode de compatibilité ou par la migration, et non par une personne |
 | `fields` | array | Même forme qu'aujourd'hui (`Field`) |
-| `variants` | array | Même forme qu'aujourd'hui (`Variant` > `Rule` > `Condition`). Une variante garde son `_id` d'une version à l'autre |
+| `variants` | array | Même forme qu'aujourd'hui (`Variant` > `Rule` > `Condition`). Une variante garde son `_id` d'une version à l'autre. Il n'y a pas de variante par défaut (lot 2b) : `is_default` n'est plus enregistré ni renvoyé |
 | `variants_probability` | string | Mode de répartition (`first`, `random`, `percent`). Modifiable sur une version publiée |
 | `created_by`, `created_at`, `updated_at` | | |
 | `published_by`, `published_at` | | Renseignés à la publication |
@@ -323,6 +323,36 @@ En place depuis les lots 2 et 3. Détails :
   lignes sans version dans `meta.callers_without_version` : les clés dont
   l'activation change le comportement.
 
+### Import et export : lot 2b
+
+En place. `GET /api/v1/admin/tables/{id}/export` prend `version_id` (un
+brouillon ou une version publiée, la version active par défaut) et `variant_id`
+(Excel et CSV, la première variante par défaut). La feuille `_meta` du classeur
+Excel enregistre `version_id` et `version_number`, et ses jetons de verrou
+(`exported_at`, `content_hash`) sont ceux du contenu exporté. Tant que le mode
+de compatibilité est actif, la version active est exportée depuis la table, qui
+en garde la copie.
+
+Réimporter un classeur Excel (`POST /api/v1/admin/tables/import`) écrit dans
+son origine :
+
+| Classeur exporté depuis | Import |
+| ----------------------- | ------ |
+| Un brouillon | Met le brouillon à jour (`200`), verrou sur le brouillon |
+| Une version publiée | Crée un brouillon à partir d'elle, nommé « Import Excel » (`201`) |
+| Une version publiée, mode de compatibilité actif | Met la table à jour, comme avant les versions |
+| Une table, avant les versions (pas de `version_id`) | Met la table à jour |
+
+Un brouillon ne reçoit que le contenu : le titre et la description restent ceux
+de la table, et le contenu est validé avec les types de la table. La réponse
+porte `meta.imported_into` (`table` ou `version`).
+
+`is_default` disparaît : la répartition choisit la variante exécutée, un export
+désigne la variante qu'il exporte, et l'export JSON place la première variante
+sous sa clé `table`. Le marqueur reste dans les documents enregistrés avant,
+sans être lu ; l'empreinte du contenu l'ignore, si bien que leur prochain
+enregistrement ne publie rien.
+
 ---
 
 ## Gestion des erreurs
@@ -481,7 +511,7 @@ livraison.
 | 0 | Cadrage technique (ce document) | | fait, à relire |
 | 1 | API : fondations des versions de tables, migration, mode de compatibilité | 0 | fait, à relire |
 | 2 | API : brouillons, publication, activation, répartition, droits | 1 | fait, à relire |
-| 2b | API : import et export Excel par version, suppression de `is_default` | 2 | à faire |
+| 2b | API : import et export Excel par version, suppression de `is_default` | 2 | fait, à relire |
 | 3 | API : route v2, exécution de test, suivi des appels par clé et garde-fou de suppression associé, obsolescence v1 | 2 | fait, à relire |
 | 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | à faire |
 | 5 | gandalf.web : versions de tables | 2, 3 | à faire |
