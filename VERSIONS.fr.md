@@ -59,7 +59,7 @@ puis une variante selon la répartition de cette version.
 | Champ | Type | Notes |
 | ----- | ---- | ----- |
 | `title`, `description`, `category_id`, `applications` | inchangés | |
-| `matching_type`, `decision_type` | string | Restent au niveau de la table. **Verrouillés dès qu'une version est publiée** : les modifier changerait immédiatement le comportement de toutes les versions. Pour en changer, on crée une nouvelle table |
+| `matching_type`, `decision_type` | string | Restent au niveau de la table. **Verrouillés dès qu'une version est publiée** : les modifier changerait immédiatement le comportement de toutes les versions. Pour en changer, on crée une nouvelle table. Le verrou s'applique avec la mise en production B : pendant A, toutes les tables ont une version publiée et l'éditeur actuel peut encore changer ces types, comme aujourd'hui |
 | `active_version_id` | ObjectId | Version publiée exécutée par défaut |
 
 Les champs de contenu (`fields`, `variants`, `variants_probability`) vivent
@@ -83,6 +83,7 @@ passé aux versions.
 | `name` | string | Nom du brouillon (« Seuil 2000 ») |
 | `comment` | string | Commentaire de publication |
 | `origin_version_id` | ObjectId \| null | Version ou brouillon d'où vient ce brouillon |
+| `autopublished` | bool | Version publiée par le mode de compatibilité ou par la migration, et non par une personne |
 | `fields` | array | Même forme qu'aujourd'hui (`Field`) |
 | `variants` | array | Même forme qu'aujourd'hui (`Variant` > `Rule` > `Condition`). Une variante garde son `_id` d'une version à l'autre |
 | `variants_probability` | string | Mode de répartition (`first`, `random`, `percent`). Modifiable sur une version publiée |
@@ -221,7 +222,7 @@ reprend celle de la v1, qui contient déjà la variante exécutée
     "final_decision": "PNO",
     "table": {
       "_id": "…",
-      "version": { "number": 4 },
+      "version": { "_id": "…", "number": 4 },
       "variant": { "_id": "…", "title": "Seuil 1600" }
     }
   }
@@ -284,8 +285,15 @@ Les routes équivalentes pour les flows arrivent au lot 4.
   Tant que la mise en production B n'est pas faite, un enregistrement par
   `PUT /api/v1/admin/tables/{id}` crée une version, la publie et l'active
   aussitôt, comme aujourd'hui. C'est la seule exception à la règle « rien ne
-  s'active automatiquement ». Elle est pilotée par une variable
-  d'environnement et disparaît avec la mise en production B.
+  s'active automatiquement ». Elle est pilotée par la variable
+  d'environnement `TABLE_VERSIONS_LEGACY_AUTOPUBLISH` (active par défaut) et
+  disparaît avec la mise en production B. En place (lot 1) : après chaque
+  enregistrement d'une table, `TableObserver` appelle
+  `TableVersioning::syncFromTable()`, qui compare l'empreinte du contenu
+  (`contentHash()`) à celle de la version active. Tous les chemins d'écriture
+  passent ainsi par le même contrôle : éditeur, création, copie, déplacement,
+  import Excel, retour arrière du changelog. Le changelog enregistre la version
+  active : revenir à une révision réactive sa version.
 - **Flows** : pas encore versionnés. Ils exécutent la version active de chaque
   table, comme ils exécutent aujourd'hui la table en service.
 
@@ -356,6 +364,11 @@ du dépôt.
 - **Types de table et validation** : `ruleThanType` et `decisionType` valident
   `than` et `default_decision` d'après `matching_type` et `decision_type`. Les
   changer rendrait des versions invalides, ce qui confirme leur verrouillage.
+- **Contenu ancien sans valeurs par défaut** (constaté au lot 1) : une table
+  jamais réenregistrée peut manquer de clés que l'éditeur ajoute (`probability`,
+  `default_title`…). L'empreinte du contenu applique les valeurs par défaut des
+  modèles, sinon le premier enregistrement après la migration publierait une
+  version sans changement réel.
 - **Lacunes existantes, indépendantes du versionnement** : la suppression d'un
   projet ne supprime que ses tables (ni ses flows, ni ses exécutions, ni ses
   décisions, ni son historique) ; l'export d'un projet n'inclut ni les flows ni
@@ -386,7 +399,7 @@ livraison.
 | Lot | Contenu | Dépend de | Statut |
 | --- | ------- | --------- | ------ |
 | 0 | Cadrage technique (ce document) | | fait, à relire |
-| 1 | API : fondations des versions de tables, migration, mode de compatibilité | 0 | à faire |
+| 1 | API : fondations des versions de tables, migration, mode de compatibilité | 0 | fait, à relire |
 | 2 | API : brouillons, publication, activation, répartition, droits, Excel par version | 1 | à faire |
 | 3 | API : route v2, exécution de test, suivi des appels par clé, obsolescence v1 | 2 | à faire |
 | 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | à faire |

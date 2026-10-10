@@ -457,7 +457,7 @@ Exemple complet :
 
 #### `GET /api/v1/admin/tables/{id}` — Consulter une table
 
-Retourne la table complète avec tous ses champs, variantes et règles.
+Retourne la table complète avec tous ses champs, variantes et règles. `active_version_id` est la version publiée exécutée par défaut (voir [VERSIONS.fr.md](VERSIONS.fr.md)).
 
 ---
 
@@ -570,6 +570,7 @@ Le paramètre optionnel `variant_id` force l'évaluation d'une variante spécifi
       "_id": "507f1f77bcf86cd799439017",
       "title": "Scoring Crédit",
       "matching_type": "first",
+      "version": { "_id": "...", "number": 3 },
       "variant": { "_id": "...", "title": "Standard" }
     },
     "title": "Bon crédit",
@@ -583,6 +584,8 @@ Le paramètre optionnel `variant_id` force l'évaluation d'une variante spécifi
 ```
 
 Le tableau `rules` n'est inclus que lorsque le paramètre `show_meta` de l'application est activé.
+
+`table.version` est la version de la table exécutée par la décision (voir [VERSIONS.fr.md](VERSIONS.fr.md)) ; elle vaut `null` pour les décisions antérieures au versionnement des tables.
 
 ---
 

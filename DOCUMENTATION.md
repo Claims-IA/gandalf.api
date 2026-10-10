@@ -113,12 +113,13 @@ All models extend `Base` (which extends Jenssegers MongoDB Eloquent). Embedded d
 | Class           | MongoDB Collection         | Role                                                    |
 | --------------- | -------------------------- | ------------------------------------------------------- |
 | `User`          | `users`                    | Platform user with OAuth tokens and email verification  |
-| `Table`         | `tables`                   | Decision table with variants, fields, and rules         |
+| `Table`         | `tables`                   | Decision table: identity, types, active version, and a copy of its active version's content (release A, see [VERSIONS.md](VERSIONS.md)) |
+| `TableVersion`  | `table_versions`           | One version of a table's content (fields, variants, split): draft, or published and numbered |
 | `Decision`      | `decisions`                | Immutable audit record of a single evaluation           |
-| `Field`         | embedded in Table/Decision | Input field definition (key, type, source, preset)      |
+| `Field`         | embedded in Table/TableVersion/Decision | Input field definition (key, type, source, preset) |
 | `Rule`          | embedded in Variant        | Ordered rule with conditions and outcome value          |
 | `Condition`     | embedded in Rule           | Single field comparison (field\_key, operator, value)   |
-| `Variant`       | embedded in Table          | A/B test variant containing rules and default decision  |
+| `Variant`       | embedded in Table/TableVersion | A/B test variant containing rules and default decision |
 | `Preset`        | embedded in Field          | Pre-processing condition applied before rule evaluation |
 | `Invitation`    | `invitations`              | Pending invitation to join an application               |
 | `ConditionType` | `condition_types`          | Placeholder (condition types managed in code)           |
@@ -140,6 +141,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | `Scoring`         | Core decision engine — evaluates rules, accumulates results, persists decisions |
 | `ConditionsTypes` | Defines all comparison operators as closures; evaluates conditions at runtime   |
 | `DateValue`       | Parses `date` values (ISO dates, relative `today-30d`) into day numbers         |
+| `TableVersioning` | Resolves a table's active version; in release A, publishes and activates a version when a table save changes its content |
 | `Mail`            | Postmark email integration (verification, password reset, invitations)          |
 | `Intercom`        | Intercom CRM integration (user profile sync, decision events, secure code)      |
 | `Mixpanel`        | Mixpanel analytics integration (user track events, decision counters)           |
@@ -202,7 +204,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | Class                 | Model      | Active Hooks                                                                                        |
 | --------------------- | ---------- | --------------------------------------------------------------------------------------------------- |
 | `UserObserver`        | User       | `creating` (auto-username, activate), `created` (send verification email), `saving` (hash password) |
-| `TableObserver`       | Table      | `saved` (write changelog snapshot)                                                                  |
+| `TableObserver`       | Table      | `saved` (sync versions through `TableVersioning`, then write changelog snapshot), `deleted` (delete versions) |
 | `InvitationsObserver` | Invitation | `created` (send invitation email)                                                                   |
 
 ### Console Commands (`app/Console/Commands/`)
@@ -263,6 +265,8 @@ Abstract MongoDB Eloquent model.
 
 ### `App\Models\Table`
 
+The content methods below come from the `HasTableContent` trait, shared with `TableVersion`. `active_version_id` points to the published `TableVersion` run by default.
+
 | Method                                  | Description                                                                |
 | --------------------------------------- | -------------------------------------------------------------------------- |
 | `fields()`                              | Embedded-many relation to `Field` models                                   |
@@ -275,6 +279,21 @@ Abstract MongoDB Eloquent model.
 
 ---
 
+### `App\Models\TableVersion`
+
+One version of a table's content (`table_versions`), with the same content methods as `Table` (`HasTableContent`). See [VERSIONS.md](VERSIONS.md).
+
+| Attribute / method   | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| `table_id`           | Owning table                                                                |
+| `status`             | `draft` or `published`                                                      |
+| `number`             | Assigned at publication, unique per table (`table_versions_number` index)   |
+| `origin_version_id`  | Version this one comes from                                                 |
+| `autopublished`      | Published by the release A compatibility mode or the migration              |
+| `isPublished()`      | Whether the version is published                                            |
+
+---
+
 ### `App\Models\Decision`
 
 | Method              | Description                                                      |
@@ -283,7 +302,7 @@ Abstract MongoDB Eloquent model.
 | `fields()`          | Embedded-many relation to `Field` snapshots                      |
 | `toConsumerArray()` | Returns consumer-safe decision with ISO-8601 timestamps          |
 | `toArray()`         | Overrides parent to cast MongoDB ObjectIDs in `table` to strings |
-| `getTableArray()`   | Returns the `table` sub-document with ObjectIDs as strings       |
+| `getTableArray()`   | Returns the `table` sub-document with ObjectIDs as strings (table, version, variant) |
 
 ---
 
@@ -310,11 +329,23 @@ Abstract MongoDB Eloquent model.
 
 | Method                                                 | Description                                                    |
 | ------------------------------------------------------ | -------------------------------------------------------------- |
-| `check($id, $values, $appId, $showMeta)`               | Full decision evaluation pipeline; returns consumer-safe array |
+| `check($id, $values, $appId, $showMeta)`               | Full decision evaluation pipeline on the table's active version; returns consumer-safe array |
 | `checkCondition(Condition, $value, $fieldType = null)` | Sets `condition->matched` via ConditionsTypes                  |
 | `prepareFieldPreset(Field, $value)`                    | Applies preset transform with per-run caching                  |
-| `createValidationRules(Table)`                         | Builds Lumen validation rules from table field definitions     |
+| `createValidationRules(Table\|TableVersion)`           | Builds Lumen validation rules from the field definitions       |
 | `getValidationRuleByType($type)`                       | Maps field type string to Lumen rule name (`date` → `isoDate`) |
+
+---
+
+### `App\Services\TableVersioning`
+
+| Method                         | Description                                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `activeVersion(Table)`         | The table's active `TableVersion`, or null while it has none                                        |
+| `syncFromTable(Table)`         | After a save: versions follow the table's applications; in compatibility mode, a content change publishes and activates a version |
+| `deleteForTable(Table)`        | Deletes a deleted table's versions                                                                  |
+| `contentHash(array)`           | Content fingerprint: audit keys ignored, ids as strings, object keys sorted, model defaults applied |
+| `legacyAutoPublish()`          | Whether the release A compatibility mode is on (`TABLE_VERSIONS_LEGACY_AUTOPUBLISH`)                |
 
 ---
 
@@ -490,7 +521,9 @@ to a day number (days since 1970-01-01).
 	
 	2. Scoring::check($id, $values, $appId, $showMeta)
 	
-	   a. Load table from MongoDB via TablesRepository::read($id)
+	   a. Load table from MongoDB via TablesRepository::read($id), then its active
+	      version (TableVersioning::activeVersion): steps b to e use the version's
+	      fields and variants. A table without one yet runs as stored.
 	
 	   b. Validate submitted values against the table's field schema
 	      - Each field becomes: "field_key" => "present|{type}"
@@ -527,7 +560,7 @@ to a day number (days since 1970-01-01).
 	   e. If no rule matched (or score is 0): use variant.default_decision
 	
 	   f. Build scoring_data snapshot:
-	      { table, application, applications, title, description,
+	      { table (with version: { _id, number }, null without one), application, applications, title, description,
 	        default_decision, fields, rules (with per-condition matched flags),
 	        request, final_decision }
 	
@@ -602,6 +635,7 @@ The Console Kernel schedules three recurring tasks via Laravel's task scheduler.
 | `MIXPANEL_ENABLED`    | false          | Enable Mixpanel integration                     |
 | `BUGSNAG_ENABLED`     | —              | Enable Bugsnag error reporting                  |
 | `DECISION_TIMEZONE`   | `APP_TIMEZONE` | Timezone of "today" in relative date conditions |
+| `TABLE_VERSIONS_LEGACY_AUTOPUBLISH` | true | Release A compatibility mode: a table save that changes its content publishes and activates a version ([VERSIONS.md](VERSIONS.md)) |
 
 [1]:	#project-overview
 [2]:	#architecture-diagram

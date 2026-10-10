@@ -16,6 +16,7 @@ namespace App\Services;
 
 use App\Models\Table;
 use App\Models\Field;
+use App\Models\TableVersion;
 use App\Models\Decision;
 use App\Models\Condition;
 use \MongoDB\BSON\ObjectID;
@@ -31,14 +32,18 @@ class Scoring
 
     private $tablesRepository;
 
+    private $versioning;
+
     /**
      * Inject the tables repository and create the conditions engine.
      *
      * @param TablesRepository $tablesRepository
+     * @param TableVersioning  $versioning
      */
-    public function __construct(TablesRepository $tablesRepository)
+    public function __construct(TablesRepository $tablesRepository, TableVersioning $versioning)
     {
         $this->tablesRepository = $tablesRepository;
+        $this->versioning = $versioning;
         $this->conditionsTypes = new ConditionsTypes;
     }
 
@@ -46,7 +51,8 @@ class Scoring
      * Evaluate a decision table against submitted field values and return the result.
      *
      * The evaluation proceeds in these steps:
-     * 1. Load the table and validate the submitted values against the field schema.
+     * 1. Load the table and its active version (VERSIONS.md), and validate the submitted
+     *    values against that version's field schema.
      * 2. Select the variant (explicit variant_id, or auto-selected via probability strategy).
      * 3. For each rule: evaluate all conditions, set condition.matched, determine the rule decision.
      * 4. Accumulate the final decision: for 'scoring' tables sum all matching rule 'than' values;
@@ -69,14 +75,18 @@ class Scoring
         // into the next table's evaluation.
         $this->presets = [];
         $table = $this->tablesRepository->read($id);
+        // The active version holds the content that runs (VERSIONS.md); a table
+        // without one yet (saved before the migration and since) runs as stored.
+        $version = $this->versioning->activeVersion($table);
+        $content = $version ?: $table;
         // Validate that all required fields are present and of the correct type
-        $validator = \Validator::make($values, $this->createValidationRules($table));
+        $validator = \Validator::make($values, $this->createValidationRules($content));
         if ($validator->fails()) {
             throw new ValidationException($validator);
         }
-        $fields = $table->fields();
+        $fields = $content->fields();
         // Select the variant to evaluate (may be random or weighted depending on settings)
-        $variant = $table->getVariantForCheck(isset($values['variant_id']) ? $values['variant_id'] : null);
+        $variant = $content->getVariantForCheck(isset($values['variant_id']) ? $values['variant_id'] : null);
 
         // Initialise the scoring data that will be persisted as a Decision document
         $scoring_data = [
@@ -86,6 +96,10 @@ class Scoring
                 'description' => $table->description,
                 'matching_type' => $table->matching_type,
                 'decision_type' => $table->decision_type,
+                'version' => $version ? [
+                    '_id' => new ObjectID($version->getId()),
+                    'number' => $version->number,
+                ] : null,
                 'variant' => [
                     '_id' => new ObjectID($variant->getId()),
                     'title' => $variant->title,
@@ -254,10 +268,10 @@ class Scoring
      * missing fields are caught before evaluation. The optional 'variant_id' parameter
      * is also validated as a valid MongoDB ObjectID when present.
      *
-     * @param  Table $table  The decision table whose fields define the expected inputs.
+     * @param  Table|TableVersion $table  The content whose fields define the expected inputs.
      * @return array         Associative array of field keys to validation rule strings.
      */
-    private function createValidationRules(Table $table)
+    private function createValidationRules(Table|TableVersion $table)
     {
         // variant_id is optional but must be a valid MongoDB ObjectID if supplied
         $rules = ['variant_id' => 'sometimes|required|MongoId'];

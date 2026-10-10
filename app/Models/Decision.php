@@ -208,6 +208,10 @@ class Decision extends Base implements Applicationable
         $data = $this->getAttribute('table');
         $data['_id'] = strval($data['_id']);
         $data['variant']['_id'] = strval($data['variant']['_id']);
+        // Decisions made before table versioning have no version.
+        if (!empty($data['version']['_id'])) {
+            $data['version']['_id'] = strval($data['version']['_id']);
+        }
 
         return $data;
     }

@@ -116,12 +116,13 @@ Tous les modèles étendent `Base` (qui étend Jenssegers MongoDB Eloquent). Les
 | Classe          | Collection MongoDB           | Rôle                                                                 |
 | --------------- | ---------------------------- | -------------------------------------------------------------------- |
 | `User`          | `users`                      | Utilisateur de la plateforme avec tokens OAuth et vérification email |
-| `Table`         | `tables`                     | Table de décision avec variantes, champs et règles                   |
+| `Table`         | `tables`                     | Table de décision : identité, types, version active, et copie du contenu de sa version active (mise en production A, voir [VERSIONS.fr.md](VERSIONS.fr.md)) |
+| `TableVersion`  | `table_versions`             | Une version du contenu d'une table (champs, variantes, répartition) : brouillon, ou publiée et numérotée |
 | `Decision`      | `decisions`                  | Enregistrement d'audit immuable d'une évaluation                     |
-| `Field`         | embarqué dans Table/Decision | Définition d'un champ d'entrée (clé, type, source, preset)           |
+| `Field`         | embarqué dans Table/TableVersion/Decision | Définition d'un champ d'entrée (clé, type, source, preset) |
 | `Rule`          | embarqué dans Variant        | Règle ordonnée avec conditions et valeur de résultat                 |
 | `Condition`     | embarqué dans Rule           | Comparaison d'un seul champ (field\\\_key, opérateur, valeur)        |
-| `Variant`       | embarqué dans Table          | Variante A/B contenant des règles et une décision par défaut         |
+| `Variant`       | embarqué dans Table/TableVersion | Variante A/B contenant des règles et une décision par défaut |
 | `Preset`        | embarqué dans Field          | Condition de pré-traitement appliquée avant l'évaluation des règles  |
 | `Invitation`    | `invitations`                | Invitation en attente pour rejoindre une application                 |
 | `ConditionType` | `condition_types`            | Espace réservé (types de conditions gérés dans le code)              |
@@ -143,6 +144,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `Scoring`         | Cœur du moteur de décision — évalue les règles, accumule les résultats, persiste les décisions          |
 | `ConditionsTypes` | Définit tous les opérateurs de comparaison sous forme de closures ; évalue les conditions à l'exécution |
 | `DateValue`       | Analyse les valeurs `date` (dates ISO, relatives `today-30d`) en numéros de jour                        |
+| `TableVersioning` | Retrouve la version active d'une table ; pendant la mise en production A, publie et active une version quand un enregistrement change le contenu d'une table |
 | `Mail`            | Intégration email Postmark (vérification, réinitialisation de mot de passe, invitations)                |
 | `Intercom`        | Intégration CRM Intercom (synchronisation des profils, événements de décision, code sécurisé)           |
 | `Mixpanel`        | Intégration analytics Mixpanel (événements utilisateur, compteurs de décisions)                         |
@@ -207,7 +209,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `UserObserver`        | User       | `creating` (username auto, activation),            |
 |                       |            | `created` (envoi email de vérification),           |
 |                       |            | `saving` (hash du mot de passe)                    |
-| `TableObserver`       | Table      | `saved` (écriture d'un snapshot dans le changelog) |
+| `TableObserver`       | Table      | `saved` (synchronisation des versions par `TableVersioning`, puis snapshot dans le changelog), `deleted` (suppression des versions) |
 | `InvitationsObserver` | Invitation | `created` (envoi de l'email d'invitation)          |
 
 ### Commandes console (`app/Console/Commands/`)
@@ -268,6 +270,8 @@ Modèle MongoDB Eloquent abstrait.
 
 ### `App\Models\Table`
 
+Les méthodes de contenu ci-dessous viennent du trait `HasTableContent`, partagé avec `TableVersion`. `active_version_id` désigne la `TableVersion` publiée exécutée par défaut.
+
 | Méthode                                 | Description                                                                         |
 | --------------------------------------- | ----------------------------------------------------------------------------------- |
 | `fields()`                              | Relation embedded-many vers les modèles `Field`                                     |
@@ -280,6 +284,21 @@ Modèle MongoDB Eloquent abstrait.
 
 ---
 
+### `App\Models\TableVersion`
+
+Une version du contenu d'une table (`table_versions`), avec les mêmes méthodes de contenu que `Table` (`HasTableContent`). Voir [VERSIONS.fr.md](VERSIONS.fr.md).
+
+| Attribut / méthode   | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| `table_id`           | Table propriétaire                                                          |
+| `status`             | `draft` ou `published`                                                      |
+| `number`             | Attribué à la publication, unique par table (index `table_versions_number`) |
+| `origin_version_id`  | Version d'où vient celle-ci                                                 |
+| `autopublished`      | Publiée par le mode de compatibilité de la mise en production A ou par la migration |
+| `isPublished()`      | Indique si la version est publiée                                           |
+
+---
+
 ### `App\Models\Decision`
 
 | Méthode             | Description                                                                      |
@@ -288,7 +307,7 @@ Modèle MongoDB Eloquent abstrait.
 | `fields()`          | Relation embedded-many vers les snapshots de `Field`                             |
 | `toConsumerArray()` | Retourne la décision adaptée aux consommateurs avec des timestamps ISO-8601      |
 | `toArray()`         | Surcharge le parent pour convertir les ObjectIDs MongoDB dans `table` en chaînes |
-| `getTableArray()`   | Retourne le sous-document `table` avec les ObjectIDs en chaînes                  |
+| `getTableArray()`   | Retourne le sous-document `table` avec les ObjectIDs en chaînes (table, version, variante) |
 
 ---
 
@@ -315,11 +334,23 @@ Modèle MongoDB Eloquent abstrait.
 
 | Méthode                                                | Description                                                                       |
 | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `check($id, $values, $appId, $showMeta)`               | Pipeline complet d'évaluation ; retourne un tableau adapté aux consommateurs      |
+| `check($id, $values, $appId, $showMeta)`               | Pipeline complet d'évaluation sur la version active de la table ; retourne un tableau adapté aux consommateurs |
 | `checkCondition(Condition, $value, $fieldType = null)` | Définit `condition->matched` via ConditionsTypes                                  |
 | `prepareFieldPreset(Field, $value)`                    | Applique la transformation de preset avec mise en cache par exécution             |
-| `createValidationRules(Table)`                         | Construit les règles de validation Lumen à partir des champs de la table          |
+| `createValidationRules(Table\|TableVersion)`           | Construit les règles de validation Lumen à partir des champs                      |
 | `getValidationRuleByType($type)`                       | Mappe une chaîne de type de champ vers un nom de règle Lumen (`date` → `isoDate`) |
+
+---
+
+### `App\Services\TableVersioning`
+
+| Méthode                        | Description                                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `activeVersion(Table)`         | La `TableVersion` active de la table, ou null tant qu'elle n'en a pas                               |
+| `syncFromTable(Table)`         | Après un enregistrement : les versions suivent les applications de la table ; en mode de compatibilité, un changement de contenu publie et active une version |
+| `deleteForTable(Table)`        | Supprime les versions d'une table supprimée                                                         |
+| `contentHash(array)`           | Empreinte du contenu : champs d'audit ignorés, identifiants en chaînes, clés triées, valeurs par défaut des modèles appliquées |
+| `legacyAutoPublish()`          | Indique si le mode de compatibilité est actif (`TABLE_VERSIONS_LEGACY_AUTOPUBLISH`)                 |
 
 ---
 
@@ -501,7 +532,10 @@ numéro de jour (jours depuis le 1970-01-01).
 	
 	2. Scoring::check($id, $values, $appId, $showMeta)
 	
-	   a. Charger la table depuis MongoDB via TablesRepository::read($id)
+	   a. Charger la table depuis MongoDB via TablesRepository::read($id), puis sa
+	      version active (TableVersioning::activeVersion) : les étapes b à e utilisent
+	      les champs et les variantes de la version. Une table qui n'en a pas encore
+	      s'exécute telle qu'elle est stockée.
 	
 	   b. Valider les valeurs soumises par rapport au schéma de champs de la table
 	      - Chaque champ devient : "field_key" => "present|{type}"
@@ -538,7 +572,7 @@ numéro de jour (jours depuis le 1970-01-01).
 	   e. Si aucune règle n'a correspondu (ou score = 0) : utiliser variant.default_decision
 	
 	   f. Construire le snapshot scoring_data :
-	      { table, application, applications, title, description,
+	      { table (avec version : { _id, number }, null sans version), application, applications, title, description,
 	        default_decision, fields, rules (avec flags matched par condition),
 	        request, final_decision }
 	
@@ -613,6 +647,7 @@ Le Kernel Console planifie trois tâches récurrentes via le planificateur de La
 | `MIXPANEL_ENABLED`    | false          | Active l'intégration Mixpanel                                     |
 | `BUGSNAG_ENABLED`     | —              | Active le suivi d'erreurs Bugsnag                                 |
 | `DECISION_TIMEZONE`   | `APP_TIMEZONE` | Fuseau horaire de "today" dans les conditions de date relatives   |
+| `TABLE_VERSIONS_LEGACY_AUTOPUBLISH` | true | Mode de compatibilité de la mise en production A : un enregistrement qui change le contenu d'une table publie et active une version ([VERSIONS.fr.md](VERSIONS.fr.md)) |
 
 [1]:	#présentation-du-projet
 [2]:	#diagramme-darchitecture

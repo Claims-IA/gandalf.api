@@ -865,6 +865,14 @@ components:
         _id:
           type: string
           example: "507f1f77bcf86cd799439017"
+        active_version_id:
+          type: string
+          nullable: true
+          readOnly: true
+          description: >
+            Published table version run by default (see VERSIONS.md). Null for
+            a table saved before table versioning and not saved since.
+          example: "507f1f77bcf86cd799439030"
         title:
           type: string
           example: "Credit Scoring"
@@ -1184,6 +1192,19 @@ components:
         matching_type:
           type: string
           example: "first"
+        version:
+          type: object
+          nullable: true
+          description: >
+            Table version the decision ran (see VERSIONS.md). Null for
+            decisions made before table versioning.
+          properties:
+            _id:
+              type: string
+              example: "507f1f77bcf86cd799439030"
+            number:
+              type: integer
+              example: 3
         variant:
           type: object
           properties:
@@ -3777,6 +3798,9 @@ paths:
                         _id: "507f1f77bcf86cd799439017"
                         title: "Credit Scoring"
                         matching_type: "first"
+                        version:
+                          _id: "507f1f77bcf86cd799439030"
+                          number: 3
                         variant:
                           _id: "507f1f77bcf86cd799439016"
                           title: "Default"

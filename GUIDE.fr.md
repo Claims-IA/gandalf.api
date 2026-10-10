@@ -204,6 +204,10 @@ Une **Table** est le conteneur principal du moteur de décision. Elle définit :
 
 Chaque table contient au moins une **Variante**. Les règles sont définies au niveau de la variante. Une table peut avoir plusieurs variantes pour faire de l'A/B testing (voir section 2.3).
 
+#### Les versions
+
+Le contenu d'une table (champs, variantes, règles) est versionné : l'API exécute la **version active** de la table, et chaque décision enregistre la version qu'elle a exécutée (`table.version`). Pour l'instant, chaque enregistrement qui change le contenu d'une table publie et active automatiquement une nouvelle version : l'utilisation ne change pas. Le cycle complet (brouillons, publication, activation) est décrit dans [VERSIONS.fr.md](VERSIONS.fr.md).
+
 #### Les Règles
 
 Une **Règle** (`rule`) appartient à une variante et contient :
@@ -287,7 +291,7 @@ Le comportement de sélection est contrôlé par `variants_probability` au nivea
 
 | Valeur | Comportement |
 |--------|--------------|
-| `first` | Toujours utiliser la première variante (ou celle marquée `is_default = true`). |
+| `first` | Toujours utiliser la première variante. |
 | `random` | Sélection aléatoire uniforme entre toutes les variantes. |
 | `percent` | Sélection pondérée. Chaque variante a un champ `probability` (1–100) ; la somme doit faire 100. |
 
@@ -295,7 +299,7 @@ Il est aussi possible de **forcer une variante** en passant son `_id` dans le co
 
 #### Marqueur de variante par défaut
 
-Chaque table doit avoir exactement une variante avec `is_default: true`. Cette variante est utilisée comme référence lors de la sélection `first`.
+Chaque table a exactement une variante avec `is_default: true`. Elle sert de variante par défaut à l'export et à l'import ; elle n'intervient pas dans la sélection de la variante.
 
 ---
 

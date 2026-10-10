@@ -57,7 +57,7 @@ Eventually, the table document only keeps its identity.
 | Field | Type | Notes |
 | ----- | ---- | ----- |
 | `title`, `description`, `category_id`, `applications` | unchanged | |
-| `matching_type`, `decision_type` | string | Stay on the table. **Locked once a version is published**: changing them would immediately change the behaviour of every version. To change them, create a new table |
+| `matching_type`, `decision_type` | string | Stay on the table. **Locked once a version is published**: changing them would immediately change the behaviour of every version. To change them, create a new table. The lock applies with release B: during A, every table has a published version and the current editor can still change these types, as today |
 | `active_version_id` | ObjectId | Published version run by default |
 
 The content fields (`fields`, `variants`, `variants_probability`) live in its
@@ -80,6 +80,7 @@ versions.
 | `name` | string | Draft name ("Threshold 2000") |
 | `comment` | string | Publication comment |
 | `origin_version_id` | ObjectId \| null | Version or draft this draft comes from |
+| `autopublished` | bool | Published by the compatibility mode or the migration, not by a person |
 | `fields` | array | Same shape as today (`Field`) |
 | `variants` | array | Same shape as today (`Variant` > `Rule` > `Condition`). A variant keeps its `_id` from one version to the next |
 | `variants_probability` | string | Split mode (`first`, `random`, `percent`). Editable on a published version |
@@ -215,7 +216,7 @@ which already holds the variant run (`table.variant`), plus the version run
     "final_decision": "PNO",
     "table": {
       "_id": "…",
-      "version": { "number": 4 },
+      "version": { "_id": "…", "number": 4 },
       "variant": { "_id": "…", "title": "Threshold 1600" }
     }
   }
@@ -274,8 +275,14 @@ The equivalent flow routes arrive with batch 4.
 - **Compatibility mode**: the current editor does not know about versions.
   Until release B, a save through `PUT /api/v1/admin/tables/{id}` creates a
   version, publishes it and activates it at once, as today. It is the only
-  exception to the "nothing activates automatically" rule. It is driven by an
-  environment variable and disappears with release B.
+  exception to the "nothing activates automatically" rule. It is driven by the
+  `TABLE_VERSIONS_LEGACY_AUTOPUBLISH` environment variable (on by default) and
+  disappears with release B. In place (batch 1): after each table save,
+  `TableObserver` calls `TableVersioning::syncFromTable()`, which compares the
+  content fingerprint (`contentHash()`) with the active version's. Every write
+  path thus goes through the same check: editor, creation, copy, move, Excel
+  import, changelog rollback. The changelog records the active version:
+  rolling back to a revision reactivates its version.
 - **Flows**: not versioned yet. They run the active version of each table, as
   they run the live table today.
 
@@ -341,6 +348,10 @@ what must change there. Paths start at the repository root.
 - **Table types and validation**: `ruleThanType` and `decisionType` validate
   `than` and `default_decision` against `matching_type` and `decision_type`.
   Changing them would make versions invalid, which confirms the lock.
+- **Old content without defaults** (found in batch 1): a table never saved
+  again may lack keys the editor adds (`probability`, `default_title`…). The
+  content fingerprint applies the model defaults, otherwise the first save
+  after the migration would publish a version with no real change.
 - **Existing gaps, independent of versioning**: deleting a project only
   deletes its tables (not its flows, runs, decisions or history); a project
   export includes neither flows nor runs. To fix separately, or with batches 1
@@ -370,7 +381,7 @@ This document moves each section from "planned" to "in place" as batches ship.
 | Batch | Content | Depends on | Status |
 | ----- | ------- | ---------- | ------ |
 | 0 | Technical framing (this document) | | done, to review |
-| 1 | API: table version foundations, migration, compatibility mode | 0 | to do |
+| 1 | API: table version foundations, migration, compatibility mode | 0 | done, to review |
 | 2 | API: drafts, publication, activation, split, scopes, Excel per version | 1 | to do |
 | 3 | API: v2 route, test runs, calls per key, v1 deprecation | 2 | to do |
 | 4 | API: flow versions, pinned nodes, bulk update of compatible flows | 1 | to do |

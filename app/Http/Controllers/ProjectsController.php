@@ -13,6 +13,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Table;
+use App\Models\TableVersion;
 use App\Models\User;
 use App\Models\Invitation;
 use App\Services\DbTransfer;
@@ -54,8 +55,10 @@ class ProjectsController extends AbstractController
      */
     public function deleteProject(Application $application)
     {
-        // Remove all decision tables that belong to this application first
+        // Remove all decision tables that belong to this application first, with
+        // their versions (a query delete fires no TableObserver::deleted)
         Table::where(['applications' => ['$in' => [$application->_id]]])->delete();
+        TableVersion::where(['applications' => ['$in' => [$application->_id]]])->delete();
         // Then delete the application document itself
         $application->delete();
 

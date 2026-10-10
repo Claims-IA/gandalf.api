@@ -432,7 +432,7 @@ Query params: `title`, `description`, `matching_type`, `size`.
 
 #### `GET /api/v1/admin/tables/{id}` — Get table
 
-Returns full table with all fields, variants, and rules.
+Returns full table with all fields, variants, and rules. `active_version_id` is the published version run by default (see [VERSIONS.md](VERSIONS.md)).
 
 ---
 
@@ -518,6 +518,7 @@ The optional `variant_id` forces a specific variant.
       "_id": "507f1f77bcf86cd799439017",
       "title": "Credit Scoring",
       "matching_type": "first",
+      "version": { "_id": "...", "number": 3 },
       "variant": { "_id": "...", "title": "Standard" }
     },
     "title": "Good credit",
@@ -531,6 +532,8 @@ The optional `variant_id` forces a specific variant.
 ```
 
 The `rules` array is included only when the application's `show_meta` setting is enabled.
+
+`table.version` is the table version the decision ran (see [VERSIONS.md](VERSIONS.md)); it is `null` for decisions made before table versioning.
 
 ---
 
