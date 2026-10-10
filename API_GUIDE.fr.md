@@ -20,6 +20,7 @@
    - [Utilisateurs](#utilisateurs)
    - [Projets](#projets)
    - [Tables de décision](#tables-de-décision)
+   - [Versions de table](#versions-de-table)
    - [Décisions (Admin)](#décisions-admin)
    - [Décisions (Consommateur)](#décisions-consommateur)
    - [Journal des modifications](#journal-des-modifications)
@@ -193,6 +194,7 @@ GET /api/v1/admin/tables?size=50&page=2
 | `403` | Accès refusé (ex. : aucun admin actif) |
 | `404` | Ressource introuvable |
 | `410` | Token expiré |
+| `409` | Conflit (ex. : modification d'une version de table publiée) |
 | `422` | Erreur de validation |
 
 ---
@@ -498,6 +500,135 @@ la règle ou la condition s'est déclenchée.
     }]
   }
 }
+```
+
+---
+
+### Versions de table
+
+Une table exécute sa **version active**. Les changements se préparent dans des
+**brouillons**, sont figés par la **publication** et mis en production par
+l'**activation**. Conception et cycle de vie : [VERSIONS.fr.md](VERSIONS.fr.md).
+Toutes les routes exigent un token Bearer + `X-Application`.
+
+| Droit | Nécessaire pour |
+| ----- | --------------- |
+| `tables_view` | Lister et lire les versions |
+| `tables_update` | Créer, modifier et supprimer des brouillons ; changer la répartition d'une version inactive |
+| `tables_publish` | Publier un brouillon ; supprimer une version publiée |
+| `tables_activate` | Activer une version ; changer la répartition de la version active |
+
+Le propriétaire d'un nouveau projet a tous les droits. Les autres membres
+reçoivent `tables_publish` et `tables_activate` d'un admin du projet. Un droit
+manquant répond `403 access_denied`, avec le droit dans `meta.scopes`.
+
+Tant que gandalf.web ne gère pas les versions (mode de compatibilité),
+`PUT /api/v1/admin/tables/{id}` publie et active encore une nouvelle version
+dès que le contenu change.
+
+#### `GET /api/v1/admin/tables/{id}/versions`
+
+Les brouillons (dernier modifié en premier), puis les versions publiées (la
+plus récente en premier), sans leur contenu.
+
+```json
+{
+  "data": [
+    { "_id": "...", "status": "draft", "number": null, "name": "Seuil 750", "origin_version_id": "...", "is_active": false },
+    { "_id": "...", "status": "published", "number": 2, "comment": "Relever le seuil", "published_at": "2026-10-10T16:59:42+00:00", "autopublished": false, "is_active": true }
+  ]
+}
+```
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/versions` : créer un brouillon
+
+```json
+{ "name": "Seuil 750", "from_version_id": "..." }
+```
+
+Les deux sont facultatifs : `from_version_id` vaut par défaut la version
+active. Répond `201` avec le brouillon complet. Les identifiants des variantes
+sont repris de la version source.
+
+---
+
+#### `GET /api/v1/admin/tables/{id}/versions/{version_id}`
+
+La version complète : champs, variantes, règles, `variants_probability`,
+`is_active`. `404 version_not_found` si la version n'appartient pas à la table.
+
+---
+
+#### `PUT /api/v1/admin/tables/{id}/versions/{version_id}` : modifier un brouillon
+
+Même corps et même validation que `PUT /api/v1/admin/tables/{id}` pour le
+contenu (`fields`, `variants`, `variants_probability`), plus un `name`
+facultatif. Le titre, la description, `matching_type` et `decision_type`
+restent sur la table. `409 version_published` sur une version publiée.
+
+---
+
+#### `DELETE /api/v1/admin/tables/{id}/versions/{version_id}`
+
+Supprime un brouillon (`tables_update`) ou une version publiée
+(`tables_publish`). `409 version_in_use` pour la version active : activez-en
+d'abord une autre.
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/versions/{version_id}/publish`
+
+```json
+{ "comment": "Relever le seuil" }
+```
+
+Fige le brouillon et lui attribue le numéro suivant. La version active ne
+change pas. `409 version_published` si la version est déjà publiée.
+
+---
+
+#### `PUT /api/v1/admin/tables/{id}/versions/{version_id}/split` : répartition des variantes
+
+```json
+{
+  "variants_probability": "percent",
+  "variants": [
+    { "_id": "<variante A>", "probability": 70 },
+    { "_id": "<variante B>", "probability": 30 }
+  ]
+}
+```
+
+Permis sur les brouillons et les versions publiées : la répartition est un
+réglage d'exploitation et ne crée pas de version. Les variantes omises gardent
+leur pourcentage. En mode `percent`, la somme doit faire 100 (`422`). Une
+variante inconnue répond `422 variant_not_found`. Sur la version active, il
+faut `tables_activate`, et la table suit immédiatement.
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/activate`
+
+```json
+{ "version_id": "..." }
+```
+
+La version publiée devient celle qu'exécutent les appels directs. Renvoie la
+table. `409 version_not_published` pour un brouillon. Réactiver une version
+précédente permet de revenir en arrière. Si des champs ont été renommés entre
+l'ancienne version active et celle-ci, `meta` contient `field_renames`,
+`flows_updated`, `flows_failed` et `flows_invalid`, comme pour une mise à jour
+de table.
+
+**Avertissement de divergence.** Publier ou activer une version qui ne descend
+pas de la version active réussit, avec un avertissement : la version ne
+contient pas les changements publiés depuis qu'elle en est partie, ou c'est un
+retour en arrière.
+
+```json
+{ "meta": { "code": 200, "warning": "version_diverges", "active_version": { "_id": "...", "number": 3 } } }
 ```
 
 ---

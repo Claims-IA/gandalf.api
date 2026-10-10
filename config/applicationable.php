@@ -28,10 +28,16 @@ return [
             'project_update',
             'project_delete',
             'decisions_view',
+            // Table versions (VERSIONS.md): publishing and going to production
+            // are separate rights.
+            'tables_publish',
+            'tables_activate',
         ],
         'consumers' => [
             'decisions_view',
             'decisions_make',
+            // "Make API call for inactive versions" (VERSIONS.md, batch 3)
+            'decisions_make_inactive',
         ],
     ],
     'acl' => [
@@ -77,6 +83,10 @@ return [
             '~^\/api\/v1\/admin\/tables\/(.+)\/moveto\/(.+)$~' => ['tables_create', 'tables_delete'],
             '~^\/api\/v1\/admin\/flows\/(.+)\/copyto\/(.+)$~' => ['tables_create'],
             '~^\/api\/v1\/admin\/flows\/(.+)\/moveto\/(.+)$~' => ['tables_create', 'tables_delete'],
+            // Table versions (VERSIONS.md)
+            '~^\/api\/v1\/admin\/tables\/(.+)\/versions\/(.+)\/publish$~' => ['tables_publish'],
+            '~^\/api\/v1\/admin\/tables\/(.+)\/versions$~' => ['tables_update'],
+            '~^\/api\/v1\/admin\/tables\/(.+)\/activate$~' => ['tables_activate'],
             '~^\/api\/v1\/admin\/changelog\/(.+)\/(.+)\/rollback\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/tables\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v1\/flows\/(.+)\/decisions$~' => ['decisions_make'],
@@ -91,6 +101,9 @@ return [
             // Editing the category list mutates project-level settings, so it
             // requires project_update (project admin), not just tables_update.
             '~^\/api\/v1\/admin\/categories$~' => ['project_update'],
+            // Changing the split of the active version also needs tables_activate,
+            // checked in TableVersionsController::split. Before the generic rule.
+            '~^\/api\/v1\/admin\/tables\/(.+)\/versions\/(.+)\/split$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/tables\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/flows\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/decisions\/(.+)\/meta$~' => ['decisions_make'],
@@ -106,6 +119,10 @@ return [
             '~^\/api\/v1\/projects\/users$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_manage'],
             '~^\/api\/v1\/projects$~' => ['project_delete'],
+            // Deleting a draft is editing; deleting a published version also needs
+            // tables_publish, checked in TableVersionsController::delete. Before the
+            // generic rule.
+            '~^\/api\/v1\/admin\/tables\/(.+)\/versions\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/tables\/(.+)$~' => ['tables_delete'],
         ],
     ],

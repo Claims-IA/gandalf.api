@@ -101,6 +101,7 @@ Controllers handle HTTP request parsing, input validation, and response formatti
 | `Controller`          | Base class; thin wrapper over Lumen's routing controller                             |
 | `UsersController`     | User registration, verification, password reset, profile update, invitation dispatch |
 | `TablesController`    | CRUD for decision tables plus analytics endpoint                                     |
+| `TableVersionsController` | Table versions: drafts, publication, activation, variant split ([VERSIONS.md](VERSIONS.md)) |
 | `DecisionsController` | Admin read-only access to decision records and metadata updates                      |
 | `ConsumerController`  | Consumer-facing decision evaluation and result retrieval                             |
 | `ChangelogController` | Table audit history list, diff, and rollback                                         |
@@ -132,6 +133,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | --------------------- | -------------- | --------------------------------------------------------------------------- |
 | `UsersRepository`     | User           | `createOrUpdate()` — handles email verification token flow and fires events |
 | `TablesRepository`    | Table          | `createOrUpdate()`, `readListWithFilters()`, `analyzeTableDecisions()`      |
+| `TableVersionsRepository` | TableVersion | `createDraft()`, `updateDraft()`, `publish()`, `activate()`, `updateSplit()`, `delete()`, `divergence()` |
 | `DecisionsRepository` | Decision       | `getDecisions()`, `getConsumerDecision()`, `updateMeta()`                   |
 
 ### Services (`app/Services/`)
@@ -141,7 +143,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | `Scoring`         | Core decision engine — evaluates rules, accumulates results, persists decisions |
 | `ConditionsTypes` | Defines all comparison operators as closures; evaluates conditions at runtime   |
 | `DateValue`       | Parses `date` values (ISO dates, relative `today-30d`) into day numbers         |
-| `TableVersioning` | Resolves a table's active version; in release A, publishes and activates a version when a table save changes its content |
+| `TableVersioning` | Resolves a table's active version, publishes versions and copies the active one onto the table; in release A, publishes and activates a version when a table save changes its content |
 | `Mail`            | Postmark email integration (verification, password reset, invitations)          |
 | `Intercom`        | Intercom CRM integration (user profile sync, decision events, secure code)      |
 | `Mixpanel`        | Mixpanel analytics integration (user track events, decision counters)           |
@@ -291,6 +293,7 @@ One version of a table's content (`table_versions`), with the same content metho
 | `origin_version_id`  | Version this one comes from                                                 |
 | `autopublished`      | Published by the release A compatibility mode or the migration              |
 | `isPublished()`      | Whether the version is published                                            |
+| `toSummaryArray()`   | The version without its content (`fields`, `variants`), for lists           |
 
 ---
 
@@ -346,6 +349,9 @@ One version of a table's content (`table_versions`), with the same content metho
 | `deleteForTable(Table)`        | Deletes a deleted table's versions                                                                  |
 | `contentHash(array)`           | Content fingerprint: audit keys ignored, ids as strings, object keys sorted, model defaults applied |
 | `legacyAutoPublish()`          | Whether the release A compatibility mode is on (`TABLE_VERSIONS_LEGACY_AUTOPUBLISH`)                |
+| `publish(TableVersion, $comment, $autopublished)` | Freezes a version with the table's next number; retries when a concurrent publication took it |
+| `copyIntoTable(Table, TableVersion)` | Makes the version active and copies its content onto the table (release A)                  |
+| `copyContent($from, $to)`      | Copies fields, variants and split between a table and a version                                     |
 
 ---
 
@@ -420,7 +426,29 @@ to a day number (days since 1970-01-01).
 | ----------------------------------------------- | ----------------------------------------------------------------------- |
 | `readListWithFilters(array $filters)`           | Paginates tables with optional title/description/matching\_type filters |
 | `createOrUpdate($values, $id = null)`           | Creates or updates a table with full field and variant replacement      |
+| `writeContent($model, $values, $detectRenames)` | Writes fields and variants on a table or a draft, with rename detection; returns the renames |
+| `withRenamedConditionsOn($model, $values)`      | Points the payload's conditions at renamed fields, before validation    |
 | `analyzeTableDecisions($table_id, $variant_id)` | Aggregates decision history to calculate rule/condition hit rates       |
+
+---
+
+### `App\Repositories\TableVersionsRepository`
+
+Lifecycle of a table's versions (see [VERSIONS.md](VERSIONS.md)). Scope checks
+that depend on the version (deleting a published version, changing the active
+version's split) are in `TableVersionsController`.
+
+| Method                                          | Description                                                             |
+| ----------------------------------------------- | ----------------------------------------------------------------------- |
+| `listFor(Table)`                                | Versions without content: drafts (last edited first), then published (newest first) |
+| `find(Table, $versionId)`                       | A version of the table, or `404 version_not_found`                      |
+| `createDraft(Table, $fromVersionId, $name)`     | Draft holding a version's content, by default the active version's     |
+| `updateDraft(TableVersion, array $values)`      | Replaces a draft's content; `409 version_published` on a published one  |
+| `publish(TableVersion, $comment)`               | Publishes a draft                                                       |
+| `activate(Table, TableVersion)`                 | Activates a published version; flows follow field renames; returns the response meta |
+| `updateSplit(Table, TableVersion, $mode, array $variants)` | Changes a version's split without a new version; the table follows for the active one |
+| `delete(Table, TableVersion)`                   | Deletes a version; `409 version_in_use` for the active one              |
+| `divergence(Table, TableVersion)`               | `version_diverges` warning meta when the version does not descend from the active one |
 
 ---
 

@@ -178,6 +178,13 @@ Un utilisateur peut appartenir à plusieurs applications avec des rôles différ
 
 Les rôles sont attribués lors de l'invitation d'un utilisateur à une application.
 
+Deux droits encadrent la mise en production des versions de table :
+`tables_publish` (publier une version, supprimer une version publiée) et
+`tables_activate` (activer une version, changer la répartition des variantes
+de la version active). Le propriétaire d'un projet les a ; un admin les accorde
+aux autres membres. Ceux qui préparent et publient une version ne sont pas
+forcément ceux qui la mettent en production.
+
 ---
 
 ### 2.2 Tables, règles et conditions
@@ -206,7 +213,7 @@ Chaque table contient au moins une **Variante**. Les règles sont définies au n
 
 #### Les versions
 
-Le contenu d'une table (champs, variantes, règles) est versionné : l'API exécute la **version active** de la table, et chaque décision enregistre la version qu'elle a exécutée (`table.version`). Pour l'instant, chaque enregistrement qui change le contenu d'une table publie et active automatiquement une nouvelle version : l'utilisation ne change pas. Le cycle complet (brouillons, publication, activation) est décrit dans [VERSIONS.fr.md](VERSIONS.fr.md).
+Le contenu d'une table (champs, variantes, règles) est versionné : l'API exécute la **version active** de la table, et chaque décision enregistre la version qu'elle a exécutée (`table.version`). Pour l'instant, chaque enregistrement qui change le contenu d'une table publie et active automatiquement une nouvelle version : l'utilisation ne change pas. L'API permet aussi de gérer les versions explicitement : préparer des brouillons, les publier, activer une version publiée ou revenir à une version précédente (voir [API_GUIDE.fr.md](API_GUIDE.fr.md#versions-de-table)). Le cycle complet est décrit dans [VERSIONS.fr.md](VERSIONS.fr.md).
 
 #### Les Règles
 
@@ -296,6 +303,8 @@ Le comportement de sélection est contrôlé par `variants_probability` au nivea
 | `percent` | Sélection pondérée. Chaque variante a un champ `probability` (1–100) ; la somme doit faire 100. |
 
 Il est aussi possible de **forcer une variante** en passant son `_id` dans le corps de la requête d'évaluation (champ `variant_id`).
+
+Chaque version de la table a sa propre répartition. Elle se change sur une version déjà publiée sans en créer de nouvelle (route `split`, voir [API_GUIDE.fr.md](API_GUIDE.fr.md#versions-de-table)) : c'est un réglage d'exploitation, pas un changement de règles.
 
 #### Marqueur de variante par défaut
 

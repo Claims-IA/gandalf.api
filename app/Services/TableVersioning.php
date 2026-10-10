@@ -167,36 +167,47 @@ class TableVersioning
     }
 
     /**
-     * Publish a version holding the table's current content, numbered after the
-     * table's last published version.
+     * Publish a version holding the table's current content (compatibility
+     * mode), numbered after the table's last published version.
      *
      * @param  Table             $table
      * @param  TableVersion|null $origin  The version active before this save.
      * @return TableVersion
-     * @throws BulkWriteException  When the number is still taken after retries.
      */
     private function publishFromTable(Table $table, $origin)
     {
-        $attributes = $table->getAttributes();
-        $user = \Auth::guard()->user();
-        $userId = $user ? (string) $user->getId() : null;
+        $version = new TableVersion;
+        $version->setAttribute('table_id', (string) $table->getId());
+        $version->setAttribute('applications', array_values((array) $table->getApplications()));
+        $version->setAttribute('origin_version_id', $origin ? (string) $origin->getId() : null);
+        $version->setAttribute('created_by', self::currentUserId());
+        // Copied as stored, ids and audit stamps included: the version holds
+        // exactly what the table holds.
+        self::copyContent($table, $version);
+
+        return $this->publish($version, '', true);
+    }
+
+    /**
+     * Publish a version: freeze it and number it after the table's last
+     * published version. The active version does not change.
+     *
+     * @param  TableVersion $version        A draft, or a new version.
+     * @param  string       $comment
+     * @param  bool         $autopublished  Published by the compatibility mode.
+     * @return TableVersion
+     * @throws BulkWriteException  When the number is still taken after retries.
+     */
+    public function publish(TableVersion $version, $comment = '', $autopublished = false)
+    {
+        $version->setAttribute('status', TableVersion::STATUS_PUBLISHED);
+        $version->setAttribute('comment', (string) $comment);
+        $version->setAttribute('autopublished', (bool) $autopublished);
+        $version->setAttribute('published_by', self::currentUserId());
+        $version->setAttribute('published_at', \Carbon\Carbon::now());
 
         for ($attempt = 1;; $attempt++) {
-            $version = new TableVersion;
-            $version->setAttribute('table_id', (string) $table->getId());
-            $version->setAttribute('applications', array_values((array) $table->getApplications()));
-            $version->setAttribute('status', TableVersion::STATUS_PUBLISHED);
-            $version->setAttribute('number', $this->nextNumber($table));
-            $version->setAttribute('origin_version_id', $origin ? (string) $origin->getId() : null);
-            $version->setAttribute('autopublished', true);
-            // Copied as stored, ids and audit stamps included: the version holds
-            // exactly what the table holds.
-            $version->setAttribute('fields', $attributes['fields'] ?? []);
-            $version->setAttribute('variants', $attributes['variants'] ?? []);
-            $version->setAttribute('variants_probability', $attributes['variants_probability'] ?? '');
-            $version->setAttribute('created_by', $userId);
-            $version->setAttribute('published_by', $userId);
-            $version->setAttribute('published_at', \Carbon\Carbon::now());
+            $version->setAttribute('number', $this->nextNumber($version->table_id));
             try {
                 $version->save();
 
@@ -209,9 +220,50 @@ class TableVersioning
         }
     }
 
-    private function nextNumber(Table $table)
+    /**
+     * Release A: make a published version the one its table runs, and copy its
+     * content onto the table (the table holds its active version's content).
+     * The table save (TableObserver) then finds both contents equal and
+     * publishes nothing.
+     *
+     * @param  Table        $table
+     * @param  TableVersion $version
+     * @return Table
+     */
+    public function copyIntoTable(Table $table, TableVersion $version)
     {
-        $last = TableVersion::where('table_id', (string) $table->getId())
+        self::copyContent($version, $table);
+        $table->setAttribute('active_version_id', (string) $version->getId());
+        $table->save();
+
+        return $table;
+    }
+
+    /**
+     * Copy the content (fields, variants, split) of a table or a version to
+     * another, as stored: ids and audit stamps included.
+     *
+     * @param  Table|TableVersion $from
+     * @param  Table|TableVersion $to
+     */
+    public static function copyContent($from, $to)
+    {
+        $attributes = $from->getAttributes();
+        $to->setAttribute('fields', $attributes['fields'] ?? []);
+        $to->setAttribute('variants', $attributes['variants'] ?? []);
+        $to->setAttribute('variants_probability', $attributes['variants_probability'] ?? '');
+    }
+
+    public static function currentUserId()
+    {
+        $user = \Auth::guard()->user();
+
+        return $user ? (string) $user->getId() : null;
+    }
+
+    private function nextNumber($tableId)
+    {
+        $last = TableVersion::where('table_id', (string) $tableId)
             ->where('status', TableVersion::STATUS_PUBLISHED)
             ->orderBy('number', 'desc')
             ->first(['number']);

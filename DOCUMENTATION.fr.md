@@ -104,6 +104,7 @@ Les contrôleurs gèrent l'analyse des requêtes HTTP, la validation des entrée
 | `Controller`          | Classe de base ; simple wrapper du contrôleur de routage Lumen                                  |
 | `UsersController`     | Inscription, vérification, réinitialisation de mot de passe, mise à jour du profil, invitations |
 | `TablesController`    | CRUD des tables de décision et endpoint d'analyse                                               |
+| `TableVersionsController` | Versions de table : brouillons, publication, activation, répartition des variantes ([VERSIONS.fr.md](VERSIONS.fr.md)) |
 | `DecisionsController` | Accès administrateur en lecture seule aux décisions et mise à jour des métadonnées              |
 | `ConsumerController`  | Évaluation des décisions et récupération des résultats côté consommateur                        |
 | `ChangelogController` | Liste de l'historique d'audit, diff et rollback                                                 |
@@ -135,6 +136,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | --------------------- | ------------- | ----------------------------------------------------------------------------------- |
 | `UsersRepository`     | User          | `createOrUpdate()` — gère le flux de vérification email et déclenche des événements |
 | `TablesRepository`    | Table         | `createOrUpdate()`, `readListWithFilters()`, `analyzeTableDecisions()`              |
+| `TableVersionsRepository` | TableVersion | `createDraft()`, `updateDraft()`, `publish()`, `activate()`, `updateSplit()`, `delete()`, `divergence()` |
 | `DecisionsRepository` | Decision      | `getDecisions()`, `getConsumerDecision()`, `updateMeta()`                           |
 
 ### Services (`app/Services/`)
@@ -144,7 +146,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `Scoring`         | Cœur du moteur de décision — évalue les règles, accumule les résultats, persiste les décisions          |
 | `ConditionsTypes` | Définit tous les opérateurs de comparaison sous forme de closures ; évalue les conditions à l'exécution |
 | `DateValue`       | Analyse les valeurs `date` (dates ISO, relatives `today-30d`) en numéros de jour                        |
-| `TableVersioning` | Retrouve la version active d'une table ; pendant la mise en production A, publie et active une version quand un enregistrement change le contenu d'une table |
+| `TableVersioning` | Retrouve la version active d'une table, publie les versions et recopie la version active sur la table ; pendant la mise en production A, publie et active une version quand un enregistrement change le contenu d'une table |
 | `Mail`            | Intégration email Postmark (vérification, réinitialisation de mot de passe, invitations)                |
 | `Intercom`        | Intégration CRM Intercom (synchronisation des profils, événements de décision, code sécurisé)           |
 | `Mixpanel`        | Intégration analytics Mixpanel (événements utilisateur, compteurs de décisions)                         |
@@ -296,6 +298,7 @@ Une version du contenu d'une table (`table_versions`), avec les mêmes méthodes
 | `origin_version_id`  | Version d'où vient celle-ci                                                 |
 | `autopublished`      | Publiée par le mode de compatibilité de la mise en production A ou par la migration |
 | `isPublished()`      | Indique si la version est publiée                                           |
+| `toSummaryArray()`   | La version sans son contenu (`fields`, `variants`), pour les listes         |
 
 ---
 
@@ -351,6 +354,9 @@ Une version du contenu d'une table (`table_versions`), avec les mêmes méthodes
 | `deleteForTable(Table)`        | Supprime les versions d'une table supprimée                                                         |
 | `contentHash(array)`           | Empreinte du contenu : champs d'audit ignorés, identifiants en chaînes, clés triées, valeurs par défaut des modèles appliquées |
 | `legacyAutoPublish()`          | Indique si le mode de compatibilité est actif (`TABLE_VERSIONS_LEGACY_AUTOPUBLISH`)                 |
+| `publish(TableVersion, $comment, $autopublished)` | Fige une version avec le numéro suivant de la table ; réessaie si une publication concurrente l'a pris |
+| `copyIntoTable(Table, TableVersion)` | Rend la version active et recopie son contenu sur la table (mise en production A)           |
+| `copyContent($from, $to)`      | Copie champs, variantes et répartition entre une table et une version                               |
 
 ---
 
@@ -431,7 +437,30 @@ numéro de jour (jours depuis le 1970-01-01).
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `readListWithFilters(array $filters)`           | Pagine les tables avec des filtres optionnels (titre/description/matching\\\_type)              |
 | `createOrUpdate($values, $id = null)`           | Crée ou met à jour une table avec remplacement complet des champs et variantes                  |
+| `writeContent($model, $values, $detectRenames)` | Écrit champs et variantes sur une table ou un brouillon, avec détection des renommages ; renvoie les renommages |
+| `withRenamedConditionsOn($model, $values)`      | Fait pointer les conditions du corps de requête vers les champs renommés, avant validation       |
 | `analyzeTableDecisions($table_id, $variant_id)` | Agrège l'historique des décisions pour calculer les taux de déclenchement des règles/conditions |
+
+---
+
+### `App\Repositories\TableVersionsRepository`
+
+Cycle de vie des versions d'une table (voir [VERSIONS.fr.md](VERSIONS.fr.md)).
+Les vérifications de droits qui dépendent de la version (suppression d'une
+version publiée, répartition de la version active) sont dans
+`TableVersionsController`.
+
+| Méthode                                         | Description                                                             |
+| ----------------------------------------------- | ----------------------------------------------------------------------- |
+| `listFor(Table)`                                | Versions sans contenu : brouillons (dernier modifié en premier), puis publiées (la plus récente en premier) |
+| `find(Table, $versionId)`                       | Une version de la table, ou `404 version_not_found`                     |
+| `createDraft(Table, $fromVersionId, $name)`     | Brouillon reprenant le contenu d'une version, par défaut la version active |
+| `updateDraft(TableVersion, array $values)`      | Remplace le contenu d'un brouillon ; `409 version_published` sur une version publiée |
+| `publish(TableVersion, $comment)`               | Publie un brouillon                                                     |
+| `activate(Table, TableVersion)`                 | Active une version publiée ; les flows suivent les renommages de champs ; renvoie la meta de la réponse |
+| `updateSplit(Table, TableVersion, $mode, array $variants)` | Change la répartition d'une version sans nouvelle version ; la table suit pour la version active |
+| `delete(Table, TableVersion)`                   | Supprime une version ; `409 version_in_use` pour la version active      |
+| `divergence(Table, TableVersion)`               | Meta d'avertissement `version_diverges` quand la version ne descend pas de la version active |
 
 ---
 

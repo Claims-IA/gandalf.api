@@ -139,13 +139,13 @@ suppression d'une version.
 | ------ | ----- | ----- |
 | Créer un brouillon | À partir d'une version publiée ou d'un autre brouillon. Plusieurs brouillons peuvent coexister | `tables_update` |
 | Modifier un brouillon | Champs, variantes, règles, répartition | `tables_update` |
-| Exécuter un brouillon | Depuis gandalf.web uniquement ; décisions marquées `test` | `tables_update` |
+| Exécuter un brouillon (lot 3) | Depuis gandalf.web uniquement ; décisions marquées `test` | `tables_update` |
 | Publier | Fige le brouillon et lui attribue le numéro suivant. La version active ne change pas. Avertit si le brouillon ne part pas de la version active | `tables_publish` |
 | Activer | La version publiée choisie devient la version active, de façon atomique. Ne concerne que les appels directs : les flows restent figés sur leurs versions | `tables_activate` |
 | Revenir en arrière | Réactiver une version précédente | `tables_activate` |
-| Changer la répartition | Mode et pourcentages des variantes d'une version publiée, sans republier | voir [Points ouverts](#points-ouverts) |
+| Changer la répartition | Mode et pourcentages des variantes d'une version, publiée ou non, sans republier | `tables_update` ; `tables_activate` pour la version active (voir [Points ouverts](#points-ouverts)) |
 | Supprimer un brouillon | À tout moment | `tables_update` |
-| Supprimer une version publiée | Seulement si elle n'est pas active, qu'aucune version de flow n'est figée dessus et qu'aucune clé ne l'appelle encore | `tables_publish` |
+| Supprimer une version publiée | Seulement si elle n'est pas active (lot 2), qu'aucune version de flow n'est figée dessus (lot 4) et qu'aucune clé ne l'appelle encore (lot 3) | `tables_publish` |
 
 Il n'y a pas de fusion entre brouillons. Chaque brouillon, puis chaque version,
 enregistre sa version d'origine. La publication et l'activation signalent un
@@ -154,6 +154,12 @@ changements des versions suivantes.
 
 Publier et activer sont deux actions distinctes, liées à deux droits. Rien
 n'active une version automatiquement, hors [mode de compatibilité](#migration-et-mode-de-compatibilité).
+
+En place depuis le lot 2, sauf l'exécution d'un brouillon (lot 3) et les
+garde-fous de suppression liés aux flows (lot 4) et aux clés (lot 3). Pendant
+la mise en production A, activer une version recopie son contenu sur la table,
+et les flows de l'application suivent les renommages de champs entre
+l'ancienne version active et la nouvelle, comme pour une mise à jour de table.
 
 ---
 
@@ -166,12 +172,18 @@ vérifie qu'aucune route n'y échappe.
 | Droit | Porté par | Rôle |
 | ----- | --------- | ---- |
 | `tables_publish` | utilisateurs | Publier une version ; supprimer une version publiée |
-| `tables_activate` | utilisateurs | Activer une version (mise en production) |
+| `tables_activate` | utilisateurs | Activer une version (mise en production) ; changer la répartition de la version active |
 | `decisions_make_inactive` | clés d'API | « Make API call for inactive versions » : appeler une version publiée inactive avec le champ `version` |
 
 Les droits existants gardent leur sens. Une clé qui n'a que `decisions_make`
 n'exécute que la version active. Ceux qui testent et publient (par exemple les
 QA) ne sont pas forcément ceux qui mettent en production.
+
+En place depuis le lot 2. Le propriétaire d'une nouvelle application reçoit
+tous les droits. La migration `2026_10_10_130000_TableVersionScopes` donne
+`tables_publish` et `tables_activate` aux admins des applications existantes ;
+les autres membres les reçoivent d'un admin. `decisions_make_inactive` est
+déclaré dès maintenant et vérifié à partir du lot 3.
 
 L'administration à deux niveaux (admin d'application, superadmin réservé à
 Claims IA) est un chantier indépendant : lot 7.
@@ -245,11 +257,33 @@ déclarée obsolète avec une date de fin, par les en-têtes `Deprecation` et
 | PUT | `/api/v1/admin/tables/{id}/versions/{version_id}` | Modifier un brouillon (refusé sur une version publiée) |
 | DELETE | `/api/v1/admin/tables/{id}/versions/{version_id}` | Supprimer, avec les garde-fous du [cycle de vie](#cycle-de-vie) |
 | POST | `/api/v1/admin/tables/{id}/versions/{version_id}/publish` | Publier (`comment`) |
-| PUT | `/api/v1/admin/tables/{id}/versions/{version_id}/split` | Changer la répartition d'une version publiée |
-| POST | `/api/v1/admin/tables/{id}/activate` | Activer (`version_id`) ; la réponse liste les clés qui appellent sans préciser de version |
-| POST | `/api/v1/admin/tables/{id}/versions/{version_id}/decisions` | Exécution de test depuis gandalf.web (décision marquée `test`) |
+| PUT | `/api/v1/admin/tables/{id}/versions/{version_id}/split` | Changer la répartition d'une version (`variants_probability`, `variants[]._id` et `probability`) |
+| POST | `/api/v1/admin/tables/{id}/activate` | Activer (`version_id`) ; à partir du lot 3, la réponse liste les clés qui appellent sans préciser de version |
+| POST | `/api/v1/admin/tables/{id}/versions/{version_id}/decisions` | Exécution de test depuis gandalf.web (décision marquée `test`) : lot 3 |
 
 Les routes équivalentes pour les flows arrivent au lot 4.
+
+En place depuis le lot 2, sauf l'exécution de test. Détails :
+
+- **Liste** : les versions sans leur contenu (`fields`, `variants`), les
+  brouillons d'abord (dernier modifié en premier), puis les versions publiées
+  (la plus récente en premier). Chaque version, ici et dans les autres
+  réponses, porte `is_active`.
+- **Créer un brouillon** : à partir de `from_version_id`, par défaut la
+  version active. Les identifiants des variantes sont conservés : un client qui
+  force une variante continue de fonctionner.
+- **Modifier un brouillon** : même corps et même validation qu'une mise à jour
+  de table (`fields`, `variants`, `variants_probability`), plus `name`.
+  `matching_type` et `decision_type` sont ceux de la table. Les conditions
+  suivent les champs renommés.
+- **Divergence** : publier ou activer une version qui ne descend pas de la
+  version active répond `200` avec `meta.warning = "version_diverges"` et
+  `meta.active_version = { _id, number }`.
+- **Activer** : renvoie la table. Si des champs ont été renommés entre les
+  deux versions, `meta` contient aussi `field_renames`, `flows_updated`,
+  `flows_failed` et `flows_invalid`, comme une mise à jour de table.
+- **Répartition** : les variantes omises gardent leur pourcentage. En mode
+  `percent`, la somme des pourcentages doit faire 100.
 
 ---
 
@@ -261,10 +295,18 @@ Les routes équivalentes pour les flows arrivent au lot 4.
 | Version publiée inactive, clé sans `decisions_make_inactive` | 403 | `version_not_allowed` |
 | Brouillon demandé par une clé d'API | 404 | `version_not_found` (un brouillon n'a pas de numéro) |
 | `variant_id` absent de la version exécutée | 422 | `variant_not_found` |
-| Modification d'une version publiée (hors répartition) | 409 | `version_published` |
+| Modification d'une version publiée (hors répartition), ou nouvelle publication | 409 | `version_published` |
+| Activation d'un brouillon | 409 | `version_not_published` |
 | Suppression de la version active, d'une version figée par un flow ou encore appelée | 409 | `version_in_use` |
 | Changement de `matching_type` ou `decision_type` après publication | 409 | `table_type_locked` |
 | Données d'entrée invalides | 422 | inchangé, erreurs sous `data.*` en v2 |
+
+En place depuis le lot 2 : `version_not_found` sur les routes
+d'administration, `version_published`, `version_not_published`,
+`version_in_use` pour la version active, `variant_not_found` sur un changement
+de répartition. Une requête sans le droit qu'exige la version
+(`tables_publish`, `tables_activate`) reçoit le `403 access_denied` habituel,
+avec le droit manquant dans `meta.scopes`.
 
 ---
 
@@ -329,7 +371,7 @@ du dépôt.
 | Flows | `app/Repositories/FlowRepository.php` : `validateGraph()`, `findProjectTable()`, `tableHasField()`, `fieldType()`, `findReusableTable()`, `canStandIn()` | Lire les champs de la version de table figée ; les types restent lus sur la table | 4 |
 | | même fichier : `followFieldRenames()`, `copyReferencedTables()`, `copyTo()`, `moveTo()` | Viser les brouillons de flows ; copier les versions figées | 4 |
 | Validation | `app/Validators/TableRulesProvider.php`, `app/Validators/TableValidator.php` | Séparer les règles d'identité et de contenu ; fournir `matching_type` et `decision_type` de la table à la validation d'une version | 1 |
-| Import et export | `app/Services/TableImportService.php`, `app/Services/TableExportService.php`, `app/Services/Excel/` (`ExcelTableWriter`, `ExcelLayout`, `ExcelTableReader`, `ExcelImportResult`, `TableMergeService`) | Lire et écrire une version ; identifiant de version dans la feuille de métadonnées ; verrou optimiste sur la version ; suppression de `is_default` | 1, 2 |
+| Import et export | `app/Services/TableImportService.php`, `app/Services/TableExportService.php`, `app/Services/Excel/` (`ExcelTableWriter`, `ExcelLayout`, `ExcelTableReader`, `ExcelImportResult`, `TableMergeService`) | Lire et écrire une version ; identifiant de version dans la feuille de métadonnées ; verrou optimiste sur la version ; suppression de `is_default` | 1, 2b |
 | Historique | `app/Observers/TableObserver.php`, `app/Observers/FlowObserver.php`, `app/Providers/ObserverServiceProvider.php`, `app/Http/Controllers/ChangelogController.php` (`rollback()`, `tableFields()`) | Historique du contenu sur les versions ; un retour arrière de contenu vise une version | 1, 2 |
 | Export de projet | `app/Services/DbTransfer.php` | Exporter `table_versions`, puis `flow_versions` | 1, 4 |
 | Routes et droits | `app/Http/routes.php`, `config/applicationable.php`, `tests/unit/AclCoverageTest.php` | Nouvelles routes et nouveaux droits (voir les constats ci-dessous) | 2, 3 |
@@ -384,7 +426,7 @@ en anglais et en français.
 | Lot | Documents |
 | --- | --------- |
 | 1 | [DOCUMENTATION.md](DOCUMENTATION.md) / [.fr](DOCUMENTATION.fr.md) (modèles `Table`, `TableVersion`, `Decision`, moteur), [GUIDE.fr.md](GUIDE.fr.md) (2.2 et 2.3) |
-| 2 | [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) (routes d'administration, droits), [openapi.yaml](openapi.yaml) |
+| 2 | [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) (routes d'administration, droits), [openapi.yaml](openapi.yaml), [DOCUMENTATION.md](DOCUMENTATION.md) / [.fr](DOCUMENTATION.fr.md) (contrôleur, dépôt), [GUIDE.fr.md](GUIDE.fr.md) (droits) |
 | 3 | [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) (route v2, obsolescence de la v1), [openapi.yaml](openapi.yaml), [GUIDE.fr.md](GUIDE.fr.md) (scénario d'utilisation) |
 | 4 | [DRG.md](DRG.md) / [.fr](DRG.fr.md) (versions de flows, nœuds figés, migration) |
 | 7 | [GUIDE.fr.md](GUIDE.fr.md) (rôles), [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) |
@@ -400,8 +442,9 @@ livraison.
 | --- | ------- | --------- | ------ |
 | 0 | Cadrage technique (ce document) | | fait, à relire |
 | 1 | API : fondations des versions de tables, migration, mode de compatibilité | 0 | fait, à relire |
-| 2 | API : brouillons, publication, activation, répartition, droits, Excel par version | 1 | à faire |
-| 3 | API : route v2, exécution de test, suivi des appels par clé, obsolescence v1 | 2 | à faire |
+| 2 | API : brouillons, publication, activation, répartition, droits | 1 | fait, à relire |
+| 2b | API : import et export Excel par version, suppression de `is_default` | 2 | à faire |
+| 3 | API : route v2, exécution de test, suivi des appels par clé et garde-fou de suppression associé, obsolescence v1 | 2 | à faire |
 | 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | à faire |
 | 5 | gandalf.web : versions de tables | 2, 3 | à faire |
 | 6 | gandalf.web : versions de flows | 4, 5 | à faire |
@@ -414,7 +457,8 @@ Mise en production A : lots 1 à 3. Mise en production B : lots 4 à 6.
 ## Points ouverts
 
 - **Droit pour changer la répartition d'une version active** : c'est un
-  changement de production. Proposition : `tables_activate`.
+  changement de production. Mis en place tel que proposé au lot 2
+  (`tables_activate`), à confirmer.
 - **« Aucune clé ne l'appelle encore »** : fenêtre à fixer (proposition :
   dernier appel il y a moins de 30 jours, réglable).
 - **Date de fin de la route v1**.

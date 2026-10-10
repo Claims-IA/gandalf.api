@@ -56,6 +56,10 @@ tags:
     description: Project (application) lifecycle — delete and export
   - name: Tables
     description: Decision table CRUD, analytics, export, and import
+  - name: Table versions
+    description: >
+      Drafts, publication, activation and variant split of a table's versions
+      (see VERSIONS.md).
   - name: Categories
     description: >
       Per-application labels (name + colour) used to group and classify tables
@@ -111,6 +115,16 @@ components:
         type: string
         pattern: '^[0-9a-f]{24}$'
         example: "507f1f77bcf86cd799439011"
+
+    PathVersionId:
+      name: version_id
+      in: path
+      required: true
+      description: MongoDB ObjectID of a version of the table.
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{24}$'
+        example: "507f1f77bcf86cd799439030"
 
     QuerySize:
       name: size
@@ -1175,6 +1189,160 @@ components:
         - decision_type
         - fields
         - variants
+
+    # ── Table version ───────────────────────────────────────────────────────
+    TableVersionSummary:
+      type: object
+      description: >
+        A table version without its content, as listed by
+        `GET /api/v1/admin/tables/{id}/versions` (see VERSIONS.md).
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439030"
+        table_id:
+          type: string
+          example: "507f1f77bcf86cd799439017"
+        status:
+          type: string
+          enum: [draft, published]
+          example: "published"
+        number:
+          type: integer
+          nullable: true
+          description: Assigned at publication, unique per table, with no gaps. Null for a draft.
+          example: 2
+        name:
+          type: string
+          example: "Threshold 750"
+        comment:
+          type: string
+          description: Publication comment.
+          example: "Raise the threshold"
+        origin_version_id:
+          type: string
+          nullable: true
+          description: Version or draft this one was created from.
+          example: "507f1f77bcf86cd799439029"
+        autopublished:
+          type: boolean
+          description: Published by the compatibility mode or the migration, not by a person.
+          example: false
+        variants_probability:
+          type: string
+          enum: [first, random, percent]
+          example: "first"
+        created_by:
+          type: string
+          nullable: true
+        published_by:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-10-10T16:59:42+00:00"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+          description: Whether this is the table's active version.
+          example: true
+
+    TableVersion:
+      description: A table version with its content.
+      allOf:
+        - $ref: '#/components/schemas/TableVersionSummary'
+        - type: object
+          properties:
+            fields:
+              type: array
+              items:
+                $ref: '#/components/schemas/Field'
+            variants:
+              type: array
+              items:
+                $ref: '#/components/schemas/Variant'
+
+    TableVersionInput:
+      type: object
+      description: >
+        Content of a draft. Same rules as a table update (`TableCreateUpdate`),
+        validated against the table's `matching_type` and `decision_type`.
+        Conditions follow renamed fields.
+      properties:
+        name:
+          type: string
+          maxLength: 128
+          example: "Threshold 750"
+        variants_probability:
+          type: string
+          enum: [first, random, percent]
+          example: "first"
+        fields:
+          $ref: '#/components/schemas/TableCreateUpdate/properties/fields'
+        variants:
+          $ref: '#/components/schemas/TableCreateUpdate/properties/variants'
+      required:
+        - fields
+        - variants
+
+    VariantSplit:
+      type: object
+      description: >
+        New split of a version's variants. Variants left out keep their
+        percentage; in `percent` mode the percentages must add up to 100.
+      properties:
+        variants_probability:
+          type: string
+          enum: [first, random, percent]
+          example: "percent"
+        variants:
+          type: array
+          items:
+            type: object
+            properties:
+              _id:
+                type: string
+                example: "507f1f77bcf86cd799439018"
+              probability:
+                type: integer
+                minimum: 0
+                maximum: 100
+                example: 70
+            required:
+              - _id
+              - probability
+      required:
+        - variants_probability
+        - variants
+
+    VersionDivergenceMeta:
+      type: object
+      description: >
+        Response meta. `warning` and `active_version` are present when the
+        version does not descend from the table's active version: it lacks the
+        changes published since it was branched off, or it is a rollback.
+      properties:
+        code:
+          type: integer
+          example: 200
+        warning:
+          type: string
+          enum: [version_diverges]
+        active_version:
+          type: object
+          properties:
+            _id:
+              type: string
+            number:
+              type: integer
+              example: 3
 
     # ── Decision ─────────────────────────────────────────────────────────────
     DecisionTable:
@@ -3580,6 +3748,298 @@ paths:
           description: Source flow or target project not found.
         "422":
           description: Source and target projects are the same.
+
+  # ── Table versions ──────────────────────────────────────────────────────────
+  /api/v1/admin/tables/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+
+    get:
+      tags: [Table versions]
+      summary: List a table's versions
+      description: >
+        Drafts (last edited first), then published versions (newest first),
+        without their content. Requires `tables_view`.
+      operationId: listTableVersions
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: The table's versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableVersionSummary'
+        "404":
+          description: Table not found.
+
+    post:
+      tags: [Table versions]
+      summary: Create a draft
+      description: >
+        Creates a draft holding the content of `from_version_id` (a version or
+        another draft of the table), by default the active version. Variant ids
+        are kept. Several drafts can coexist. Requires `tables_update`.
+      operationId: createTableVersion
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from_version_id:
+                  type: string
+                  pattern: '^[0-9a-f]{24}$'
+                name:
+                  type: string
+                  maxLength: 128
+                  example: "Threshold 750"
+      responses:
+        "201":
+          description: The new draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "404":
+          description: Table not found, or `version_not_found` for `from_version_id`.
+        "422":
+          description: Validation error.
+
+  /api/v1/admin/tables/{id}/versions/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+      - $ref: '#/components/parameters/PathVersionId'
+
+    get:
+      tags: [Table versions]
+      summary: Get a table version
+      description: The version with its content. Requires `tables_view`.
+      operationId: getTableVersion
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: The version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "404":
+          description: Table not found, or `version_not_found`.
+
+    put:
+      tags: [Table versions]
+      summary: Edit a draft
+      description: >
+        Replaces a draft's content and, optionally, its name. A published
+        version is frozen, except its split (see the `split` route). Requires
+        `tables_update`.
+      operationId: updateTableVersion
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TableVersionInput'
+      responses:
+        "200":
+          description: The edited draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "404":
+          description: Table not found, or `version_not_found`.
+        "409":
+          description: "`version_published`: the version is published."
+        "422":
+          description: Validation error.
+
+    delete:
+      tags: [Table versions]
+      summary: Delete a table version
+      description: >
+        Deletes a draft (`tables_update`) or a published version
+        (`tables_publish`). The active version cannot be deleted: activate
+        another one first.
+      operationId: deleteTableVersion
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Version deleted.
+        "403":
+          description: A published version, without the `tables_publish` scope.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "409":
+          description: "`version_in_use`: the version is the active one."
+
+  /api/v1/admin/tables/{id}/versions/{version_id}/publish:
+    post:
+      tags: [Table versions]
+      summary: Publish a draft
+      description: >
+        Freezes the draft and gives it the next number. The active version
+        does not change. Requires `tables_publish`.
+      operationId: publishTableVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+                  maxLength: 512
+                  example: "Raise the threshold"
+      responses:
+        "200":
+          description: The published version, with a divergence warning when it does not descend from the active version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    $ref: '#/components/schemas/VersionDivergenceMeta'
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "403":
+          description: Missing `tables_publish` scope.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "409":
+          description: "`version_published`: already published."
+
+  /api/v1/admin/tables/{id}/versions/{version_id}/split:
+    put:
+      tags: [Table versions]
+      summary: Change a version's variant split
+      description: >
+        Changes the split mode and percentages of a draft or a published
+        version, without creating a version. Requires `tables_update`, and
+        `tables_activate` for the active version, whose change the table
+        follows at once.
+      operationId: updateTableVersionSplit
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VariantSplit'
+      responses:
+        "200":
+          description: The version with its new split.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "403":
+          description: The active version, without the `tables_activate` scope.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "422":
+          description: Validation error (percentages not adding up to 100), or `variant_not_found`.
+
+  /api/v1/admin/tables/{id}/activate:
+    post:
+      tags: [Table versions]
+      summary: Activate a table version
+      description: >
+        The published version becomes the one direct calls run; reactivating
+        an earlier version rolls back. Until release B the table document holds
+        a copy of the active version's content. When fields were renamed
+        between the previous active version and this one, the project's flows
+        follow, and `meta` reports `field_renames`, `flows_updated`,
+        `flows_failed` and `flows_invalid`, as for a table update. Requires
+        `tables_activate`.
+      operationId: activateTableVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version_id:
+                  type: string
+                  pattern: '^[0-9a-f]{24}$'
+              required:
+                - version_id
+      responses:
+        "200":
+          description: The table, now running the version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    $ref: '#/components/schemas/VersionDivergenceMeta'
+                  data:
+                    $ref: '#/components/schemas/Table'
+        "403":
+          description: Missing `tables_activate` scope.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "409":
+          description: "`version_not_published`: the version is a draft."
+        "422":
+          description: Validation error.
 
   # ── Decisions (Admin) ────────────────────────────────────────────────────────
   /api/v1/admin/decisions:

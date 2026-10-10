@@ -20,9 +20,10 @@
    12. [Users][13]
    13. [Projects][14]
    14. [Decision Tables][15]
-   15. [Decisions (Admin)][16]
-   16. [Decisions (Consumer)][17]
-   17. [Changelog][18]
+   15. [Table versions][28]
+   16. [Decisions (Admin)][16]
+   17. [Decisions (Consumer)][17]
+   18. [Changelog][18]
 10. [Decision engine deep dive][19]
 	- [Matching types][20]
 	- [Condition operators][21]
@@ -192,6 +193,7 @@ GET /api/v1/admin/tables?size=50&page=2
 | `403`     | Forbidden (e.g. inactive admin) |
 | `404`     | Resource not found              |
 | `410`     | Token expired                   |
+| `409`     | Conflict (e.g. editing a published table version) |
 | `422`     | Validation error                |
 
 ---
@@ -451,6 +453,131 @@ Full replacement. Provide `_id` for existing sub-resources to preserve identifie
 Returns hit-rate statistics per rule and condition (computed from historical decisions).
 
 `probability` is a float `0.0–1.0` representing the fraction of decisions where each rule/condition fired.
+
+---
+
+### Table versions
+
+A table runs its **active version**. Changes are prepared in **drafts**, frozen
+by **publication** and put in production by **activation**. Design and
+lifecycle: [VERSIONS.md](VERSIONS.md). All routes require Bearer token +
+`X-Application`.
+
+| Scope | Needed for |
+| ----- | ---------- |
+| `tables_view` | Listing and reading versions |
+| `tables_update` | Creating, editing and deleting drafts; changing the split of an inactive version |
+| `tables_publish` | Publishing a draft; deleting a published version |
+| `tables_activate` | Activating a version; changing the split of the active version |
+
+The owner of a new project holds every scope. Other members get
+`tables_publish` and `tables_activate` from a project admin. A missing scope
+answers `403 access_denied` with the scope in `meta.scopes`.
+
+Until gandalf.web manages versions (compatibility mode),
+`PUT /api/v1/admin/tables/{id}` still publishes and activates a new version
+whenever the content changes.
+
+#### `GET /api/v1/admin/tables/{id}/versions`
+
+Drafts (last edited first), then published versions (newest first), without
+their content.
+
+```json
+{
+  "data": [
+    { "_id": "...", "status": "draft", "number": null, "name": "Threshold 750", "origin_version_id": "...", "is_active": false },
+    { "_id": "...", "status": "published", "number": 2, "comment": "Raise the threshold", "published_at": "2026-10-10T16:59:42+00:00", "autopublished": false, "is_active": true }
+  ]
+}
+```
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/versions`: Create a draft
+
+```json
+{ "name": "Threshold 750", "from_version_id": "..." }
+```
+
+Both optional: `from_version_id` defaults to the active version. Answers `201`
+with the full draft. Variant ids are kept from the source version.
+
+---
+
+#### `GET /api/v1/admin/tables/{id}/versions/{version_id}`
+
+The full version: fields, variants, rules, `variants_probability`, `is_active`.
+`404 version_not_found` when the version does not belong to the table.
+
+---
+
+#### `PUT /api/v1/admin/tables/{id}/versions/{version_id}`: Edit a draft
+
+Same body and validation as `PUT /api/v1/admin/tables/{id}` for the content
+(`fields`, `variants`, `variants_probability`), plus an optional `name`. The
+title, description, `matching_type` and `decision_type` stay on the table.
+`409 version_published` on a published version.
+
+---
+
+#### `DELETE /api/v1/admin/tables/{id}/versions/{version_id}`
+
+Deletes a draft (`tables_update`) or a published version (`tables_publish`).
+`409 version_in_use` for the active version: activate another one first.
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/versions/{version_id}/publish`
+
+```json
+{ "comment": "Raise the threshold" }
+```
+
+Freezes the draft and gives it the next number. The active version does not
+change. `409 version_published` when the version is already published.
+
+---
+
+#### `PUT /api/v1/admin/tables/{id}/versions/{version_id}/split`: Variant split
+
+```json
+{
+  "variants_probability": "percent",
+  "variants": [
+    { "_id": "<variant A>", "probability": 70 },
+    { "_id": "<variant B>", "probability": 30 }
+  ]
+}
+```
+
+Allowed on drafts and published versions: the split is an operating setting
+and creates no version. Variants left out keep their percentage. In `percent`
+mode the percentages must add up to 100 (`422`). An unknown variant answers
+`422 variant_not_found`. On the active version it needs `tables_activate`, and
+the table follows at once.
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/activate`
+
+```json
+{ "version_id": "..." }
+```
+
+The published version becomes the one direct calls run. Returns the table.
+`409 version_not_published` for a draft. Reactivating an earlier version is
+how you roll back. When fields were renamed between the previous active
+version and this one, `meta` holds `field_renames`, `flows_updated`,
+`flows_failed` and `flows_invalid`, as for a table update.
+
+**Divergence warning.** Publishing or activating a version that does not
+descend from the active one still succeeds, with a warning: the version lacks
+the changes published since it was branched off, or it is a rollback.
+
+```json
+{ "meta": { "code": 200, "warning": "version_diverges", "active_version": { "_id": "...", "number": 3 } } }
+```
 
 ---
 
@@ -800,3 +927,4 @@ curl -X PUT https://api.example.com/api/v1/admin/decisions/<decision_id>/meta \
 [25]:	#decision-types
 [26]:	#quick-start-guide
 [27]:	#date-conditions
+[28]:	#table-versions

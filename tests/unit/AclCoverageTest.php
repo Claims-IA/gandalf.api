@@ -45,6 +45,14 @@ class AclCoverageTest extends \Codeception\TestCase\Test
         'POST /api/v1/admin/flows/{id:[0-9a-z]{24}}/moveto/{project_id:[0-9a-z]{24}}' => ['tables_create', 'tables_delete'],
         'POST /api/v1/admin/changelog/{table}/{model_id}/rollback/{changelog_id}' => ['tables_update'],
         'PUT /api/v1/admin/decisions/{id:[0-9a-z]{24}}/meta' => ['decisions_make'],
+        // Table versions: + tables_publish (published version) and tables_activate
+        // (active version) checked by TableVersionsController for delete and split.
+        'POST /api/v1/admin/tables/{id:[0-9a-z]{24}}/versions' => ['tables_update'],
+        'PUT /api/v1/admin/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}' => ['tables_update'],
+        'DELETE /api/v1/admin/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}' => ['tables_update'],
+        'POST /api/v1/admin/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/publish' => ['tables_publish'],
+        'PUT /api/v1/admin/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/split' => ['tables_update'],
+        'POST /api/v1/admin/tables/{id:[0-9a-z]{24}}/activate' => ['tables_activate'],
         'POST /api/v1/invite' => ['users_manage'],
         'POST /api/v1/projects/users/admin' => ['users_manage'],
         'PUT /api/v1/projects' => ['project_update'],

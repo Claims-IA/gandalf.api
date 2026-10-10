@@ -108,4 +108,23 @@ class TableVersion extends Base implements Applicationable
     {
         return $this->status === self::STATUS_PUBLISHED;
     }
+
+    /**
+     * The version without its content, for version lists.
+     * @return array
+     */
+    public function toSummaryArray()
+    {
+        return array_diff_key($this->toArray(), array_flip(['fields', 'variants']));
+    }
+
+    /**
+     * Dates as ISO-8601, like decisions (Decision::toConsumerArray).
+     * @param  \DateTime $date
+     * @return string
+     */
+    protected function serializeDate(\DateTime $date)
+    {
+        return $date->format(\DateTime::ATOM);
+    }
 }

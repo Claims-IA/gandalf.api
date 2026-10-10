@@ -161,6 +161,15 @@ $app->group(
         $app->get('/flows/{id:[0-9a-z]{24}}/runs', ['uses' => 'FlowsController@runs']);
         // Return rule/condition hit-rate analytics for a specific table variant
         $app->get('/tables/{id:[0-9a-z]{24}}/{variant_id:[0-9a-z]{24}}/analytics', ['uses' => 'TablesController@analytics']);
+        // Table versions (VERSIONS.md): drafts, publication, variant split, activation
+        $app->get('/tables/{id:[0-9a-z]{24}}/versions', ['uses' => 'TableVersionsController@index']);
+        $app->post('/tables/{id:[0-9a-z]{24}}/versions', ['uses' => 'TableVersionsController@create']);
+        $app->get('/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}', ['uses' => 'TableVersionsController@read']);
+        $app->put('/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}', ['uses' => 'TableVersionsController@update']);
+        $app->delete('/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}', ['uses' => 'TableVersionsController@delete']);
+        $app->post('/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/publish', ['uses' => 'TableVersionsController@publish']);
+        $app->put('/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/split', ['uses' => 'TableVersionsController@split']);
+        $app->post('/tables/{id:[0-9a-z]{24}}/activate', ['uses' => 'TableVersionsController@activate']);
         // Copy a decision table into a different project (admin only)
         $app->post('/tables/{id:[0-9a-z]{24}}/copyto/{project_id:[0-9a-z]{24}}', ['uses' => 'TablesController@copyTo']);
         // Move a decision table to a different project (admin only)
