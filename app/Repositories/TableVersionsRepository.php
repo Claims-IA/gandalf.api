@@ -7,7 +7,8 @@
  * - publication: a draft is frozen and numbered;
  * - activation: the published version the API runs;
  * - variant split changes, allowed on published versions;
- * - deletion, refused for the active version.
+ * - deletion, refused for the active version and for a version an API key
+ *   still calls.
  *
  * During release A the table document holds a copy of its active version's
  * content: activating a version, or changing the split of the active one,
@@ -20,8 +21,10 @@ namespace App\Repositories;
 
 use App\Models\Table;
 use App\Models\TableVersion;
+use App\Services\VersionCalls;
 use App\Services\TableVersioning;
 use Illuminate\Contracts\Validation\ValidationException;
+use Nebo15\LumenApplicationable\Models\Application;
 
 class TableVersionsRepository
 {
@@ -32,10 +35,13 @@ class TableVersionsRepository
 
     private $versioning;
 
-    public function __construct(TablesRepository $tables, TableVersioning $versioning)
+    private $calls;
+
+    public function __construct(TablesRepository $tables, TableVersioning $versioning, VersionCalls $calls)
     {
         $this->tables = $tables;
         $this->versioning = $versioning;
+        $this->calls = $calls;
     }
 
     /**
@@ -217,15 +223,20 @@ class TableVersionsRepository
 
     /**
      * Delete a version. The active version stays: activate another one first.
-     * Flows pin versions from batch 4 and API keys call them from batch 3;
-     * their guards arrive with them.
+     * A published version an API key of the application called by its number
+     * within the window stays too (VersionCalls). Flows pin versions from batch
+     * 4; their guard arrives with them.
      *
      * @param  Table        $table
      * @param  TableVersion $version
+     * @param  Application  $application  The table's application, whose keys count.
      */
-    public function delete(Table $table, TableVersion $version)
+    public function delete(Table $table, TableVersion $version, Application $application)
     {
         if ($this->isActive($table, $version)) {
+            abort(409, 'version_in_use');
+        }
+        if ($version->isPublished() && $this->calls->isCalled($table, $version->number, $application)) {
             abort(409, 'version_in_use');
         }
         $version->delete();

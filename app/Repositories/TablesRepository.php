@@ -589,6 +589,8 @@ class TablesRepository extends AbstractRepository
             'table._id' => new ObjectID($table_id),
             'table.variant._id' => new ObjectId($variant_id),
             'applications' => ApplicationableHelper::getApplicationId(),
+            // Test runs from gandalf.web are not production traffic (VERSIONS.md)
+            'test' => ['$ne' => true],
             // Only include decisions made after the table was last updated (older decisions
             // may reference rules that no longer exist in the current table definition)
             'created_at' => ['$gte' => new UTCDatetime($table->updated_at->timestamp * 1000)]

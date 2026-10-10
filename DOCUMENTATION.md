@@ -101,9 +101,9 @@ Controllers handle HTTP request parsing, input validation, and response formatti
 | `Controller`          | Base class; thin wrapper over Lumen's routing controller                             |
 | `UsersController`     | User registration, verification, password reset, profile update, invitation dispatch |
 | `TablesController`    | CRUD for decision tables plus analytics endpoint                                     |
-| `TableVersionsController` | Table versions: drafts, publication, activation, variant split ([VERSIONS.md](VERSIONS.md)) |
+| `TableVersionsController` | Table versions: drafts, publication, activation, variant split, test runs, calls per key ([VERSIONS.md](VERSIONS.md)) |
 | `DecisionsController` | Admin read-only access to decision records and metadata updates                      |
-| `ConsumerController`  | Consumer-facing decision evaluation and result retrieval                             |
+| `ConsumerController`  | Consumer-facing decision evaluation (routes v1 and v2) and result retrieval          |
 | `ChangelogController` | Table audit history list, diff, and rollback                                         |
 | `ProjectsController`  | Application deletion and data export                                                 |
 
@@ -144,6 +144,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | `ConditionsTypes` | Defines all comparison operators as closures; evaluates conditions at runtime   |
 | `DateValue`       | Parses `date` values (ISO dates, relative `today-30d`) into day numbers         |
 | `TableVersioning` | Resolves a table's active version, publishes versions and copies the active one onto the table; in release A, publishes and activates a version when a table save changes its content |
+| `VersionCalls`    | Counts the calls of API keys per table and requested version (`version_calls`), for the activation screen and the deletion guard |
 | `Mail`            | Postmark email integration (verification, password reset, invitations)          |
 | `Intercom`        | Intercom CRM integration (user profile sync, decision events, secure code)      |
 | `Mixpanel`        | Mixpanel analytics integration (user track events, decision counters)           |
@@ -307,6 +308,9 @@ One version of a table's content (`table_versions`), with the same content metho
 | `toArray()`         | Overrides parent to cast MongoDB ObjectIDs in `table` to strings |
 | `getTableArray()`   | Returns the `table` sub-document with ObjectIDs as strings (table, version, variant) |
 
+Since batch 3 a decision also stores `consumer` (`client_id` of the calling API
+key, null for a user) and `test` (test run from gandalf.web).
+
 ---
 
 ### `App\Models\Variant`
@@ -332,7 +336,10 @@ One version of a table's content (`table_versions`), with the same content metho
 
 | Method                                                 | Description                                                    |
 | ------------------------------------------------------ | -------------------------------------------------------------- |
-| `check($id, $values, $appId, $showMeta)`               | Full decision evaluation pipeline on the table's active version; returns consumer-safe array |
+| `check($id, $values, $appId, $showMeta)`               | Route v1 and flow nodes: evaluates the table's active version, `variant_id` among the values |
+| `evaluateRequest(Table, $version, $body, $appId, $showMeta, $test)` | Route v2 and test runs: body `{ variant_id, data }`, errors under `data.*`, `422 variant_not_found` |
+| `evaluate(Table, $version, $values, $appId, $showMeta, $options)` | Full decision evaluation pipeline on a version (or the table as stored); records the calling key and the test flag; returns consumer-safe array |
+| `prefixRules($rules, $key)`                            | Nests validation rules under a key (`data.age`)                |
 | `checkCondition(Condition, $value, $fieldType = null)` | Sets `condition->matched` via ConditionsTypes                  |
 | `prepareFieldPreset(Field, $value)`                    | Applies preset transform with per-run caching                  |
 | `createValidationRules(Table\|TableVersion)`           | Builds Lumen validation rules from the field definitions       |
@@ -540,6 +547,11 @@ version's split) are in `TableVersionsController`.
 
 ## Decision Engine Flow
 
+The route v2 (`POST /api/v2/tables/{id}/decisions`, body
+`{ version, variant_id, data }`) and test runs follow the same steps through
+`Scoring::evaluateRequest()`, on the version they name (see
+[VERSIONS.md](VERSIONS.md)). Below, the route v1.
+
 	POST /api/v1/tables/{id}/decisions
 	  Body: { field_key_1: value, field_key_2: value, ..., variant_id?: id }
 	
@@ -664,6 +676,9 @@ The Console Kernel schedules three recurring tasks via Laravel's task scheduler.
 | `BUGSNAG_ENABLED`     | —              | Enable Bugsnag error reporting                  |
 | `DECISION_TIMEZONE`   | `APP_TIMEZONE` | Timezone of "today" in relative date conditions |
 | `TABLE_VERSIONS_LEGACY_AUTOPUBLISH` | true | Release A compatibility mode: a table save that changes its content publishes and activates a version ([VERSIONS.md](VERSIONS.md)) |
+| `TABLE_VERSIONS_CALL_WINDOW_DAYS` | 30 | Days an API key's last call keeps it counted as calling a version (deletion guard, keys listed at activation) |
+| `DECISIONS_V1_DEPRECATED_AT` | (empty) | Date sent in the `Deprecation` header of the route v1; empty: no header |
+| `DECISIONS_V1_SUNSET` | (empty) | Date sent in the `Sunset` header of the route v1; empty: no header |
 
 [1]:	#project-overview
 [2]:	#architecture-diagram

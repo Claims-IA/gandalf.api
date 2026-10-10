@@ -94,13 +94,14 @@ class TableVersioning
     }
 
     /**
-     * Delete all versions of a deleted table.
+     * Delete all versions of a deleted table, and the calls counted on it.
      *
      * @param  Table $table
      */
     public function deleteForTable(Table $table)
     {
         TableVersion::where('table_id', (string) $table->getId())->delete();
+        (new VersionCalls)->deleteForTable($table->getId());
     }
 
     /**

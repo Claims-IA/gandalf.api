@@ -517,6 +517,7 @@ Toutes les routes exigent un token Bearer + `X-Application`.
 | `tables_update` | Créer, modifier et supprimer des brouillons ; changer la répartition d'une version inactive |
 | `tables_publish` | Publier un brouillon ; supprimer une version publiée |
 | `tables_activate` | Activer une version ; changer la répartition de la version active |
+| `decisions_make_inactive` | Exécuter une version publiée autre que la version active avec la route v2 ; donner ce droit à une clé d'API |
 
 Le propriétaire d'un nouveau projet a tous les droits. Les autres membres
 reçoivent `tables_publish` et `tables_activate` d'un admin du projet. Un droit
@@ -573,8 +574,10 @@ restent sur la table. `409 version_published` sur une version publiée.
 #### `DELETE /api/v1/admin/tables/{id}/versions/{version_id}`
 
 Supprime un brouillon (`tables_update`) ou une version publiée
-(`tables_publish`). `409 version_in_use` pour la version active : activez-en
-d'abord une autre.
+(`tables_publish`). `409 version_in_use` pour la version active (activez-en
+d'abord une autre) et pour une version publiée qu'une clé d'API du projet a
+appelée par son numéro dans les 30 derniers jours
+(`TABLE_VERSIONS_CALL_WINDOW_DAYS` ; une clé supprimée ne compte plus).
 
 ---
 
@@ -622,6 +625,10 @@ l'ancienne version active et celle-ci, `meta` contient `field_renames`,
 `flows_updated`, `flows_failed` et `flows_invalid`, comme pour une mise à jour
 de table.
 
+`meta.callers_without_version` liste les clés d'API qui ont appelé la table
+sans préciser de version récemment (lignes de la route `calls` ci-dessous) :
+l'activation change ce qu'elles exécutent.
+
 **Avertissement de divergence.** Publier ou activer une version qui ne descend
 pas de la version active réussit, avec un avertissement : la version ne
 contient pas les changements publiés depuis qu'elle en est partie, ou c'est un
@@ -633,13 +640,51 @@ retour en arrière.
 
 ---
 
+#### `POST /api/v1/admin/tables/{id}/versions/{version_id}/decisions` : exécution de test
+
+```json
+{ "variant_id": "...", "data": { "credit_score": 750, "revenu_annuel": 60000 } }
+```
+
+Exécute un brouillon ou une version depuis gandalf.web, avec le corps de la
+route v2 sans `version`. Exige `tables_update`. La décision est marquée
+`"test": true`, contient toujours les `rules`, et reste en dehors des analytics
+et de l'historique des décisions par défaut.
+
+---
+
+#### `GET /api/v1/admin/tables/{id}/calls`
+
+Appels récents des clés d'API du projet à la table, du plus récent au plus
+ancien, une ligne par clé et version demandée (`requested_version: null` :
+sans version, donc la version active). Seules les clés d'API sont comptées ;
+`meta.window_days` donne la fenêtre.
+
+```json
+{
+  "meta": { "code": 200, "window_days": 30 },
+  "data": [
+    { "consumer": "<client_id>", "description": "Site web", "requested_version": null, "last_call_at": "2026-10-10T16:59:42+00:00", "count": 1520 },
+    { "consumer": "<client_id>", "description": "Partenaire", "requested_version": 3, "last_call_at": "2026-10-09T08:12:03+00:00", "count": 87 }
+  ]
+}
+```
+
+---
+
 ### Décisions (Admin)
 
 Tous les endpoints admin de décision nécessitent un token Bearer + `X-Application`.
 
 #### `GET /api/v1/admin/decisions` — Lister les décisions
 
-Paramètres de requête : `size`, `table_id`, `variant_id`.
+Paramètres de requête : `size`, `table_id`, `variant_id`, `test`. Les
+exécutions de test depuis gandalf.web sont exclues ; `test=true` les liste à la
+place.
+
+Chaque décision porte `consumer` (le `client_id` de la clé d'API qui a fait
+l'appel, `null` pour un utilisateur) et `test`. Les deux sont absents des
+décisions antérieures aux versions de table.
 
 ---
 
@@ -674,6 +719,11 @@ Les endpoints consommateur acceptent des credentials consommateur (`Authorizatio
 ou un token Bearer.
 
 #### `POST /api/v1/tables/{id}/decisions` — Évaluer une décision
+
+Obsolète : utilisez [la route v2](#post-apiv2tablesiddecisions--évaluer-une-version),
+qui sépare les paramètres d'exécution des données d'entrée. Cette route
+exécute la version active. Une fois ses dates fixées, ses réponses portent
+`Deprecation`, `Sunset` et `Link: </api/v2/tables/{id}/decisions>; rel="successor-version"`.
 
 Soumettez les valeurs de tous les champs définis dans la table. Tous les champs doivent être
 présents (utilisez `null` pour les valeurs absentes).
@@ -717,6 +767,33 @@ Le paramètre optionnel `variant_id` force l'évaluation d'une variante spécifi
 Le tableau `rules` n'est inclus que lorsque le paramètre `show_meta` de l'application est activé.
 
 `table.version` est la version de la table exécutée par la décision (voir [VERSIONS.fr.md](VERSIONS.fr.md)) ; elle vaut `null` pour les décisions antérieures au versionnement des tables.
+
+---
+
+#### `POST /api/v2/tables/{id}/decisions` : évaluer une version
+
+```json
+{
+  "version": 3,
+  "variant_id": "507f1f77bcf86cd799439016",
+  "data": { "credit_score": 750, "revenu_annuel": 60000 }
+}
+```
+
+`version` et `variant_id` sont facultatifs ; `data` contient la valeur de
+chaque champ. La réponse est celle de la v1 : `table.version` et
+`table.variant` indiquent ce qui a été exécuté.
+
+| Requête | Version exécutée |
+| ------- | ---------------- |
+| Sans `version` | La version active |
+| `"version": 3`, la version active | La version 3 |
+| `"version": 3`, inactive | La version 3, seulement avec le droit `decisions_make_inactive` (clé d'API ou utilisateur) ; sinon `403 version_not_allowed` |
+
+Erreurs : `404 version_not_found` (aucune version publiée de ce numéro ; un
+brouillon n'en a pas), `422 variant_not_found` (variante absente de la version
+exécutée), `422` avec les erreurs sous `data.*` pour des données d'entrée
+invalides (et pour un corps sans `data`).
 
 ---
 

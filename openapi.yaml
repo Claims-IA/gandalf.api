@@ -1344,6 +1344,82 @@ components:
               type: integer
               example: 3
 
+    DecisionRequestV2:
+      type: object
+      description: Body of the decision route v2 and of a test run (without `version`).
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: Published version number to run; the active version when absent.
+          example: 3
+        variant_id:
+          type: string
+          pattern: '^[0-9a-f]{24}$'
+          description: Force a variant of the version run.
+        data:
+          type: object
+          description: >
+            Input values: one key per table field, all present (`null` for
+            absent values).
+          additionalProperties: true
+      required:
+        - data
+
+    VersionCall:
+      type: object
+      description: Recent calls of one API key to a table, for one requested version.
+      properties:
+        consumer:
+          type: string
+          description: client_id of the API key.
+        description:
+          type: string
+          description: The key's description.
+          example: "Website"
+        requested_version:
+          type: integer
+          nullable: true
+          description: Version number the calls named; null for calls without a version (the active version).
+          example: 3
+        last_call_at:
+          type: string
+          format: date-time
+          example: "2026-10-10T16:59:42+00:00"
+        count:
+          type: integer
+          example: 87
+
+    ActivationMeta:
+      allOf:
+        - $ref: '#/components/schemas/VersionDivergenceMeta'
+        - type: object
+          properties:
+            callers_without_version:
+              type: array
+              description: >
+                API keys that called the table without a version within the
+                window: the activation changes what they run.
+              items:
+                $ref: '#/components/schemas/VersionCall'
+            field_renames:
+              type: object
+              description: Old key to new key, when fields were renamed between the two versions.
+              additionalProperties:
+                type: string
+            flows_updated:
+              type: array
+              items:
+                type: string
+            flows_failed:
+              type: array
+              items:
+                type: string
+            flows_invalid:
+              type: array
+              items:
+                type: string
+
     # ── Decision ─────────────────────────────────────────────────────────────
     DecisionTable:
       type: object
@@ -1443,6 +1519,18 @@ components:
             - type: string
             - type: number
           example: "approved"
+        consumer:
+          type: string
+          nullable: true
+          description: >
+            client_id of the API key that made the call; null for a user (OAuth
+            token). Absent on decisions made before table versions.
+        test:
+          type: boolean
+          description: >
+            A test run from gandalf.web (VERSIONS.md). Absent on decisions made
+            before table versions.
+          example: false
         meta:
           type: object
           description: >
@@ -3903,7 +3991,10 @@ paths:
         "404":
           description: Table not found, or `version_not_found`.
         "409":
-          description: "`version_in_use`: the version is the active one."
+          description: >
+            `version_in_use`: the version is the active one, or an API key of
+            the project called it by its number within the window
+            (`TABLE_VERSIONS_CALL_WINDOW_DAYS`).
 
   /api/v1/admin/tables/{id}/versions/{version_id}/publish:
     post:
@@ -4029,7 +4120,7 @@ paths:
                 type: object
                 properties:
                   meta:
-                    $ref: '#/components/schemas/VersionDivergenceMeta'
+                    $ref: '#/components/schemas/ActivationMeta'
                   data:
                     $ref: '#/components/schemas/Table'
         "403":
@@ -4041,6 +4132,83 @@ paths:
         "422":
           description: Validation error.
 
+  /api/v1/admin/tables/{id}/versions/{version_id}/decisions:
+    post:
+      tags: [Table versions]
+      summary: Test run of a draft or a version
+      description: >
+        Runs a draft or a version from gandalf.web, with the body of the route
+        v2 without `version`. The decision is flagged `test`, always carries
+        the rules, and is left out of analytics and of the default decision
+        history. Requires `tables_update`.
+      operationId: runTableVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequestV2'
+      responses:
+        "200":
+          description: Test decision evaluated and persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/DecisionConsumer'
+        "404":
+          description: Table not found, or `version_not_found`.
+        "422":
+          description: Invalid input values (errors under `data.*`), or `variant_not_found`.
+
+  /api/v1/admin/tables/{id}/calls:
+    get:
+      tags: [Table versions]
+      summary: Recent calls of the project's API keys
+      description: >
+        One row per API key and requested version, latest first, for the keys
+        of the project that called the table within the window
+        (`TABLE_VERSIONS_CALL_WINDOW_DAYS`, 30 days by default). Calls with an
+        OAuth token are not counted. Requires `tables_view`.
+      operationId: listTableCalls
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: Recent calls.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                    properties:
+                      code:
+                        type: integer
+                      window_days:
+                        type: integer
+                        example: 30
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VersionCall'
+        "404":
+          description: Table not found.
+
   # ── Decisions (Admin) ────────────────────────────────────────────────────────
   /api/v1/admin/decisions:
     get:
@@ -4050,7 +4218,8 @@ paths:
         Returns a paginated list of all decision records for the current application,
         ordered by creation date (newest first).
 
-        Supports optional filtering by `table_id` and `variant_id`.
+        Supports optional filtering by `table_id` and `variant_id`. Test runs from
+        gandalf.web are left out; `test=true` lists them instead.
       operationId: listDecisions
       security:
         - BearerAuth: []
@@ -4071,6 +4240,13 @@ paths:
           schema:
             type: string
             pattern: '^[0-9a-f]{24}$'
+        - name: test
+          in: query
+          required: false
+          description: true lists the test runs from gandalf.web instead of production decisions.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Paginated decision list.
@@ -4169,8 +4345,15 @@ paths:
     post:
       tags: [Decisions (Consumer)]
       summary: Evaluate a decision table
+      deprecated: true
       description: |
         Submits field values to a decision table and returns the computed result.
+
+        **Deprecated** in favour of `POST /api/v2/tables/{id}/decisions`. This
+        route runs the table's active version. Once the dates are set
+        (`DECISIONS_V1_DEPRECATED_AT`, `DECISIONS_V1_SUNSET`), responses carry
+        the `Deprecation`, `Sunset` and `Link` (`rel="successor-version"`)
+        headers.
 
         The engine:
         1. Validates submitted values against the table's field schema.
@@ -4281,6 +4464,70 @@ paths:
             Submitted field values are invalid or missing (e.g. a `date` value
             that is not an ISO 8601 date: "The :attribute must be an ISO 8601 date
             (YYYY-MM-DD).").
+
+  /api/v2/tables/{id}/decisions:
+    post:
+      tags: [Decisions (Consumer)]
+      summary: Evaluate a version of a decision table
+      description: |
+        Route v2 (VERSIONS.md): the execution parameters (`version`,
+        `variant_id`) are apart from the input values (`data`), so no table
+        field can collide with them. Same callers, evaluation and response as
+        `POST /api/v1/tables/{id}/decisions`.
+
+        - Without `version`, the active version runs.
+        - With `version`, that published version runs. A version other than the
+          active one needs the `decisions_make_inactive` scope (API key or
+          user), otherwise `403 version_not_allowed`. A draft has no number and
+          cannot be called.
+        - A `variant_id` the version lacks is `422 variant_not_found`.
+
+        Calls of API keys are counted per requested version (see
+        `GET /api/v1/admin/tables/{id}/calls`).
+      operationId: tableCheckV2
+      security:
+        - ConsumerAuth: []
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequestV2'
+            examples:
+              pinned:
+                summary: Run published version 3
+                value:
+                  version: 3
+                  data:
+                    credit_score: 750
+                    annual_income: 60000
+      responses:
+        "200":
+          description: Decision evaluated and persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/DecisionConsumer'
+        "403":
+          description: >
+            Application without an active admin, caller without
+            `decisions_make`, or `version_not_allowed`: an inactive version
+            without `decisions_make_inactive`.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "422":
+          description: >
+            Invalid input values (errors under `data.*`), a body without
+            `data`, an invalid `version`, or `variant_not_found`.
 
   /api/v1/decisions/{id}:
     get:

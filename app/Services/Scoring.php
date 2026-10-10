@@ -50,16 +50,9 @@ class Scoring
     /**
      * Evaluate a decision table against submitted field values and return the result.
      *
-     * The evaluation proceeds in these steps:
-     * 1. Load the table and its active version (VERSIONS.md), and validate the submitted
-     *    values against that version's field schema.
-     * 2. Select the variant (explicit variant_id, or auto-selected via probability strategy).
-     * 3. For each rule: evaluate all conditions, set condition.matched, determine the rule decision.
-     * 4. Accumulate the final decision: for 'scoring' tables sum all matching rule 'than' values;
-     *    for 'decision' tables stop at the first fully matching rule.
-     * 5. Fall back to the variant's default_decision if no rule matched.
-     * 6. Persist the Decision document and fire the Make event for analytics.
-     * 7. Return the consumer-safe decision array (with or without rule details per $showMeta).
+     * The route v1 and flow nodes run the table's active version (VERSIONS.md),
+     * with the input values and the optional `variant_id` mixed in one body.
+     * See evaluate() for the evaluation itself.
      *
      * @param  string $id        MongoDB ObjectID of the table to evaluate.
      * @param  array  $values    Submitted field values from the API request.
@@ -70,23 +63,97 @@ class Scoring
      */
     public function check($id, $values, $appId, $showMeta = false)
     {
+        $table = $this->tablesRepository->read($id);
+
+        return $this->evaluate(
+            $table,
+            $this->versioning->activeVersion($table),
+            $values,
+            $appId,
+            $showMeta,
+            ['variant_id' => isset($values['variant_id']) ? $values['variant_id'] : null]
+        );
+    }
+
+    /**
+     * Evaluate a request of the v2 shape, `{ "variant_id": …, "data": { … } }`,
+     * against a version of a table: the route v2 and test runs (VERSIONS.md,
+     * batch 3). Input errors are reported under `data.*`; a `variant_id` the
+     * version lacks is a 422 `variant_not_found`, so a client never believes it
+     * runs one variant while running another.
+     *
+     * @param  Table             $table
+     * @param  TableVersion|null $version  Null: the table's own content (a table without versions yet).
+     * @param  array             $body     Request body, without `version`.
+     * @param  mixed             $appId
+     * @param  bool              $showMeta
+     * @param  bool              $test     A test run from gandalf.web: the decision is flagged `test`.
+     * @return array  Consumer-safe decision array.
+     * @throws ValidationException
+     */
+    public function evaluateRequest(Table $table, $version, array $body, $appId, $showMeta = false, $test = false)
+    {
+        $validator = \Validator::make($body, ['variant_id' => 'sometimes|required|mongoId', 'data' => 'present|array']);
+        if ($validator->fails()) {
+            throw new ValidationException($validator);
+        }
+        $variantId = isset($body['variant_id']) ? (string) $body['variant_id'] : null;
+        $content = $version ?: $table;
+        if ($variantId !== null && !$content->variants()->get()->find($variantId)) {
+            abort(422, 'variant_not_found');
+        }
+
+        return $this->evaluate($table, $version, $body['data'], $appId, $showMeta, [
+            'variant_id' => $variantId,
+            'input_key' => 'data',
+            'test' => $test,
+        ]);
+    }
+
+    /**
+     * Evaluate a version of a table against input values and persist the decision.
+     *
+     * The evaluation proceeds in these steps:
+     * 1. Validate the submitted values against the version's field schema.
+     * 2. Select the variant (explicit variant_id, or auto-selected via the version's split).
+     * 3. For each rule: evaluate all conditions, set condition.matched, determine the rule decision.
+     * 4. Accumulate the final decision: for 'scoring' tables sum all matching rule 'than' values;
+     *    for 'decision' tables stop at the first fully matching rule.
+     * 5. Fall back to the variant's default_decision if no rule matched.
+     * 6. Persist the Decision document (with the calling API key and the test
+     *    flag) and fire the Make event for analytics.
+     * 7. Return the consumer-safe decision array (with or without rule details per $showMeta).
+     *
+     * @param  Table             $table
+     * @param  TableVersion|null $version  Version to run; null runs the table as stored
+     *                                     (saved before the migration and since).
+     * @param  array             $values   Input values.
+     * @param  mixed             $appId
+     * @param  bool              $showMeta
+     * @param  array             $options  'variant_id' (string|null), 'test' (bool),
+     *                                     'input_key' (validation errors under "<key>.*").
+     * @return array  Consumer-safe decision array.
+     * @throws ValidationException
+     */
+    public function evaluate(Table $table, $version, array $values, $appId, $showMeta = false, array $options = [])
+    {
         // Preset results are cached per field key for ONE decision. FlowEngine
         // reuses this instance for every node, so a cached value must not leak
         // into the next table's evaluation.
         $this->presets = [];
-        $table = $this->tablesRepository->read($id);
-        // The active version holds the content that runs (VERSIONS.md); a table
-        // without one yet (saved before the migration and since) runs as stored.
-        $version = $this->versioning->activeVersion($table);
         $content = $version ?: $table;
+        $inputKey = isset($options['input_key']) ? $options['input_key'] : null;
         // Validate that all required fields are present and of the correct type
-        $validator = \Validator::make($values, $this->createValidationRules($content));
+        $rules = $this->createValidationRules($content, $inputKey === null);
+        $validator = $inputKey === null
+            ? \Validator::make($values, $rules)
+            : \Validator::make([$inputKey => $values], self::prefixRules($rules, $inputKey));
         if ($validator->fails()) {
             throw new ValidationException($validator);
         }
         $fields = $content->fields();
         // Select the variant to evaluate (may be random or weighted depending on settings)
-        $variant = $content->getVariantForCheck(isset($values['variant_id']) ? $values['variant_id'] : null);
+        $variant = $content->getVariantForCheck(isset($options['variant_id']) ? $options['variant_id'] : null);
 
         // Initialise the scoring data that will be persisted as a Decision document
         $scoring_data = [
@@ -115,6 +182,10 @@ class Scoring
             'fields' => $fields->toArray(),
             'rules' => [],
             'request' => $values, // Snapshot the raw request for auditing
+            // API key that made the call (null for a user), and test runs from
+            // gandalf.web, left out of analytics (VERSIONS.md, batch 3)
+            'consumer' => VersionCalls::currentKey(),
+            'test' => !empty($options['test']),
         ];
         $final_decision = null;
         $fieldsCollection = $fields->get();
@@ -268,13 +339,14 @@ class Scoring
      * missing fields are caught before evaluation. The optional 'variant_id' parameter
      * is also validated as a valid MongoDB ObjectID when present.
      *
-     * @param  Table|TableVersion $table  The content whose fields define the expected inputs.
+     * @param  Table|TableVersion $table           The content whose fields define the expected inputs.
+     * @param  bool               $withVariantId   Whether the values may carry `variant_id` (route v1).
      * @return array         Associative array of field keys to validation rule strings.
      */
-    private function createValidationRules(Table|TableVersion $table)
+    private function createValidationRules(Table|TableVersion $table, $withVariantId = true)
     {
         // variant_id is optional but must be a valid MongoDB ObjectID if supplied
-        $rules = ['variant_id' => 'sometimes|required|MongoId'];
+        $rules = $withVariantId ? ['variant_id' => 'sometimes|required|MongoId'] : [];
         if ($fields = $table->fields) {
             foreach ($fields as $item) {
                 // 'present' (not 'required') allows null values; the condition evaluator
@@ -284,6 +356,24 @@ class Scoring
         }
 
         return $rules;
+    }
+
+    /**
+     * Validation rules for values nested under a key: errors then read
+     * "<key>.<field>", as in the v2 body (`data.age`).
+     *
+     * @param  array  $rules  field key => rules
+     * @param  string $key
+     * @return array
+     */
+    public static function prefixRules(array $rules, $key)
+    {
+        $prefixed = [];
+        foreach ($rules as $field => $rule) {
+            $prefixed[$key . '.' . $field] = $rule;
+        }
+
+        return $prefixed;
     }
 
     /**

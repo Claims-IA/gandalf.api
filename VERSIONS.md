@@ -104,16 +104,26 @@ Same split as for tables. The `flows` document keeps the identity and
 | Added field | Batch | Notes |
 | ----------- | ----- | ----- |
 | `table.version` | 1 | `{ _id, number }` of the version run. `null` for decisions made before versioning |
-| `consumer` | 3 | Id of the calling API key, when there is one |
-| `test` | 3 | `true` for a decision run from gandalf.web (draft or version) |
+| `consumer` | 3 | `client_id` of the calling API key; `null` for a user (OAuth token) |
+| `test` | 3 | `true` for a test run from gandalf.web (draft or version), `false` otherwise; absent on older decisions. Test runs are left out of analytics and of the default decision history (`GET /api/v1/admin/decisions?test=true` lists them) |
 | `flow.version` | 4 | `{ _id, number }` of the flow version, for a decision made inside a flow |
 
 ### Calls per key (`version_calls` collection): batch 3
 
-One row per key, table (or flow) and requested version: `consumer`, `table_id`
-or `flow_id`, `requested_version` (`null` when the call names no version),
-`last_call_at`, `count`. It feeds the activation screen ("keys calling without
-a version") and the guard against deleting a version still in use.
+One row per key, table (or flow) and requested version: `consumer` (the key's
+`client_id`), `table_id` or `flow_id`, `requested_version` (`null` when the
+call names no version), `last_call_at`, `count`, `applications`. It feeds the
+activation screen ("keys calling without a version") and the guard against
+deleting a version still in use.
+
+In place since batch 3 for tables (flows: batch 4), service
+`App\Services\VersionCalls`. Only successful calls of API keys count: a user
+has no code pinned to a version. A key counts as calling while its last call
+is within the window (`TABLE_VERSIONS_CALL_WINDOW_DAYS`, 30 days by default)
+and it is still a key of the application: a deleted key calls nothing. A
+unique index (`version_calls_key`, migration
+`2026_10_10_140000_VersionCalls`) keeps one row per key, table and requested
+version.
 
 ---
 
@@ -133,13 +143,13 @@ a version") and the guard against deleting a version still in use.
 | ------ | ------ | ----- |
 | Create a draft | From a published version or another draft. Several drafts can coexist | `tables_update` |
 | Edit a draft | Fields, variants, rules, split | `tables_update` |
-| Run a draft (batch 3) | From gandalf.web only; decisions flagged `test` | `tables_update` |
+| Run a draft | From gandalf.web only; decisions flagged `test` | `tables_update` |
 | Publish | Freezes the draft and gives it the next number. The active version does not change. Warns when the draft does not start from the active version | `tables_publish` |
 | Activate | The chosen published version becomes the active one, atomically. Only affects direct calls: flows stay pinned to their versions | `tables_activate` |
 | Roll back | Reactivate an earlier version | `tables_activate` |
 | Change the split | Mode and percentages of a version's variants, published or not, without republishing | `tables_update`; `tables_activate` for the active version (see [Open points](#open-points)) |
 | Delete a draft | At any time | `tables_update` |
-| Delete a published version | Only if it is not active (batch 2), no flow version is pinned to it (batch 4) and no key still calls it (batch 3) | `tables_publish` |
+| Delete a published version | Only if it is not active, no flow version is pinned to it (batch 4) and no key still calls it | `tables_publish` |
 
 There is no merge between drafts. Each draft, then each version, records its
 origin version. Publishing and activating flag a draft that does not start from
@@ -149,8 +159,8 @@ Publishing and activating are two separate actions, tied to two scopes. Nothing
 activates a version automatically, outside the
 [compatibility mode](#migration-and-compatibility-mode).
 
-In place since batch 2, except running a draft (batch 3) and the deletion
-guards tied to flows (batch 4) and keys (batch 3). During release A,
+In place since batches 2 and 3, except the deletion guard tied to flows
+(batch 4). During release A,
 activating a version copies its content onto the table, and the application's
 flows follow the field renames between the previous active version and the
 activated one, as they follow a table update.
@@ -167,17 +177,16 @@ no route escapes them.
 | ----- | ------- | ---- |
 | `tables_publish` | users | Publish a version; delete a published version |
 | `tables_activate` | users | Activate a version (go to production); change the split of the active version |
-| `decisions_make_inactive` | API keys | "Make API call for inactive versions": call an inactive published version with the `version` field |
+| `decisions_make_inactive` | API keys and users | "Make API call for inactive versions": call an inactive published version with the `version` field. A user holds it to give it to a key (a user only gives a key the scopes they hold) and to call the route v2 with their own token |
 
 Existing scopes keep their meaning. A key holding only `decisions_make` runs
 the active version only. Those who test and publish (QA, for example) are not
 necessarily those who go to production.
 
-In place since batch 2. A new application's owner gets every scope. The
-`2026_10_10_130000_TableVersionScopes` migration grants `tables_publish` and
-`tables_activate` to the admins of existing applications; other members get
-them from an admin. `decisions_make_inactive` is declared now and checked from
-batch 3.
+In place since batches 2 and 3. A new application's owner gets every scope.
+The `2026_10_10_130000_TableVersionScopes` migration grants `tables_publish`,
+`tables_activate` and `decisions_make_inactive` to the admins of existing
+applications; other members get them from an admin.
 
 Two-level administration (application admin, superadmin reserved to Claims IA)
 is a separate track: batch 7.
@@ -198,6 +207,11 @@ Within the selected version, the variant is chosen as today: by `variant_id`
 when given, otherwise according to `variants_probability`. A `variant_id`
 missing from the version run returns an explicit error, so that a client never
 believes it tests one variant while running another.
+
+In place since batch 3, except flow nodes (batch 4: until then they run the
+active version of each table). `App\Services\Scoring::evaluate()` runs any
+version; `check()` (v1, flows) runs the active one and `evaluateRequest()`
+(v2, test runs) takes the v2 body.
 
 ---
 
@@ -240,6 +254,20 @@ The same shape applies to `POST /api/v2/flows/{id}/decisions` (batch 4).
 The v1 route keeps its flat body and runs the active version. It is declared
 deprecated with an end date, through the `Deprecation` and `Sunset` headers.
 
+In place since batch 3 for tables. Details:
+
+- Callers: the same as v1, API keys and users (OAuth token). A published
+  version other than the active one needs `decisions_make_inactive`, from the
+  key or the user.
+- Input errors come under `data.*` (`"data.age": [...]`); a body without
+  `data` (the v1 shape) answers `422`. The decision's `request` holds `data`
+  only: `version` and `variant_id` show in `table.version` and `table.variant`.
+- The v1 headers come from two dates set in the environment,
+  `DECISIONS_V1_DEPRECATED_AT` (`Deprecation: @<timestamp>`, plus
+  `Link: </api/v2/tables/{id}/decisions>; rel="successor-version"`) and
+  `DECISIONS_V1_SUNSET` (`Sunset: <HTTP date>`). Without a date, no header:
+  the dates are still to decide (see [Open points](#open-points)).
+
 ### Admin routes: batch 2
 
 | Method | Route | Role |
@@ -251,12 +279,13 @@ deprecated with an end date, through the `Deprecation` and `Sunset` headers.
 | DELETE | `/api/v1/admin/tables/{id}/versions/{version_id}` | Delete, with the [lifecycle](#lifecycle) guards |
 | POST | `/api/v1/admin/tables/{id}/versions/{version_id}/publish` | Publish (`comment`) |
 | PUT | `/api/v1/admin/tables/{id}/versions/{version_id}/split` | Change a version's split (`variants_probability`, `variants[]._id` and `probability`) |
-| POST | `/api/v1/admin/tables/{id}/activate` | Activate (`version_id`); from batch 3, the response lists the keys calling without a version |
-| POST | `/api/v1/admin/tables/{id}/versions/{version_id}/decisions` | Test run from gandalf.web (decision flagged `test`): batch 3 |
+| POST | `/api/v1/admin/tables/{id}/activate` | Activate (`version_id`); the response lists the keys calling without a version |
+| POST | `/api/v1/admin/tables/{id}/versions/{version_id}/decisions` | Test run from gandalf.web (decision flagged `test`) |
+| GET | `/api/v1/admin/tables/{id}/calls` | Recent calls of the project's API keys, per requested version |
 
 The equivalent flow routes arrive with batch 4.
 
-In place since batch 2, except the test run. Details:
+In place since batches 2 and 3. Details:
 
 - **List**: versions without their content (`fields`, `variants`), drafts
   first (last edited first), then published versions (newest first). Each
@@ -274,6 +303,14 @@ In place since batch 2, except the test run. Details:
   `flows_failed` and `flows_invalid`, as a table update does.
 - **Split**: variants left out keep their percentage. In `percent` mode, the
   percentages must add up to 100.
+- **Test run**: body of the route v2 without `version` (`variant_id`, `data`),
+  scope `tables_update`. Runs any draft or version and always returns the
+  rules, whatever the `show_meta` setting.
+- **Calls**: rows `consumer`, `description` (the key's), `requested_version`,
+  `last_call_at`, `count`, latest first; `meta.window_days` gives the window.
+  The activation response carries the rows without a version in
+  `meta.callers_without_version`: the keys whose behaviour the activation
+  changes.
 
 ---
 
@@ -282,7 +319,7 @@ In place since batch 2, except the test run. Details:
 | Situation | HTTP | Code |
 | --------- | ---- | ---- |
 | Unknown requested version | 404 | `version_not_found` |
-| Inactive published version, key without `decisions_make_inactive` | 403 | `version_not_allowed` |
+| Inactive published version, caller without `decisions_make_inactive` | 403 | `version_not_allowed` |
 | Draft requested by an API key | 404 | `version_not_found` (a draft has no number) |
 | `variant_id` missing from the version run | 422 | `variant_not_found` |
 | Editing a published version (other than its split), or publishing it again | 409 | `version_published` |
@@ -291,11 +328,12 @@ In place since batch 2, except the test run. Details:
 | Changing `matching_type` or `decision_type` after publication | 409 | `table_type_locked` |
 | Invalid input values | 422 | unchanged, errors under `data.*` in v2 |
 
-In place since batch 2: `version_not_found` on the admin routes,
-`version_published`, `version_not_published`, `version_in_use` for the active
-version, `variant_not_found` on a split change. A request without the scope a
-version needs (`tables_publish`, `tables_activate`) gets the usual `403
-access_denied`, with the missing scope in `meta.scopes`.
+In place since batches 2 and 3, except `table_type_locked` (release B) and
+`version_in_use` for a version pinned by a flow (batch 4). A request without
+the scope a version needs (`tables_publish`, `tables_activate`) gets the usual
+`403 access_denied`, with the missing scope in `meta.scopes`. The route v1
+keeps its own error: a `variant_id` the active version lacks is a `404
+variant_not_found`.
 
 ---
 
@@ -406,7 +444,7 @@ English and in French.
 | ----- | --------- |
 | 1 | [DOCUMENTATION.md](DOCUMENTATION.md) / [.fr](DOCUMENTATION.fr.md) (`Table`, `TableVersion`, `Decision` models, engine), [GUIDE.fr.md](GUIDE.fr.md) (2.2 and 2.3) |
 | 2 | [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) (admin routes, scopes), [openapi.yaml](openapi.yaml), [DOCUMENTATION.md](DOCUMENTATION.md) / [.fr](DOCUMENTATION.fr.md) (controller, repository), [GUIDE.fr.md](GUIDE.fr.md) (scopes) |
-| 3 | [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) (v2 route, v1 deprecation), [openapi.yaml](openapi.yaml), [GUIDE.fr.md](GUIDE.fr.md) (usage scenario) |
+| 3 | [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) (v2 route, v1 deprecation), [openapi.yaml](openapi.yaml), [DOCUMENTATION.md](DOCUMENTATION.md) / [.fr](DOCUMENTATION.fr.md) (engine, calls per key), [GUIDE.fr.md](GUIDE.fr.md) (usage scenario) |
 | 4 | [DRG.md](DRG.md) / [.fr](DRG.fr.md) (flow versions, pinned nodes, migration) |
 | 7 | [GUIDE.fr.md](GUIDE.fr.md) (roles), [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) |
 
@@ -422,7 +460,7 @@ This document moves each section from "planned" to "in place" as batches ship.
 | 1 | API: table version foundations, migration, compatibility mode | 0 | done, to review |
 | 2 | API: drafts, publication, activation, split, scopes | 1 | done, to review |
 | 2b | API: Excel import and export per version, removal of `is_default` | 2 | to do |
-| 3 | API: v2 route, test runs, calls per key and the matching deletion guard, v1 deprecation | 2 | to do |
+| 3 | API: v2 route, test runs, calls per key and the matching deletion guard, v1 deprecation | 2 | done, to review |
 | 4 | API: flow versions, pinned nodes, bulk update of compatible flows | 1 | to do |
 | 5 | gandalf.web: table versions | 2, 3 | to do |
 | 6 | gandalf.web: flow versions | 4, 5 | to do |
@@ -437,8 +475,11 @@ Release A: batches 1 to 3. Release B: batches 4 to 6.
 - **Scope required to change the split of the active version**: it is a
   production change. Implemented as proposed in batch 2 (`tables_activate`),
   to confirm.
-- **"No key still calls it"**: window to define (proposal: last call less than
-  30 days ago, configurable).
-- **End date of the v1 route**.
+- **"No key still calls it"**: window to define. Implemented as proposed in
+  batch 3 (last call less than 30 days ago, `TABLE_VERSIONS_CALL_WINDOW_DAYS`),
+  to confirm.
+- **End date of the v1 route**: the headers are ready in batch 3
+  (`DECISIONS_V1_DEPRECATED_AT`, `DECISIONS_V1_SUNSET`); the dates are to
+  decide.
 - **Production migration procedure**: none is documented today (who runs
   `php artisan migrate`, when, with which backup).

@@ -37,7 +37,8 @@ class DecisionsController extends AbstractController
      * Return a paginated list of decisions for the current application.
      *
      * Accepts optional query parameters: size (page size), table_id (filter by
-     * table), and variant_id (filter by variant). Delegates ordering and pagination
+     * table), variant_id (filter by variant) and test (true: test runs from
+     * gandalf.web instead of production decisions). Delegates ordering and pagination
      * to the DecisionsRepository which always scopes results to the current application.
      *
      * @return \Illuminate\Http\JsonResponse
@@ -48,7 +49,8 @@ class DecisionsController extends AbstractController
             $this->getRepository()->getDecisions(
                 $this->request->input('size'),
                 $this->request->input('table_id'),
-                $this->request->input('variant_id')
+                $this->request->input('variant_id'),
+                filter_var($this->request->input('test', false), FILTER_VALIDATE_BOOLEAN)
             )
         );
     }

@@ -104,9 +104,9 @@ Les contrôleurs gèrent l'analyse des requêtes HTTP, la validation des entrée
 | `Controller`          | Classe de base ; simple wrapper du contrôleur de routage Lumen                                  |
 | `UsersController`     | Inscription, vérification, réinitialisation de mot de passe, mise à jour du profil, invitations |
 | `TablesController`    | CRUD des tables de décision et endpoint d'analyse                                               |
-| `TableVersionsController` | Versions de table : brouillons, publication, activation, répartition des variantes ([VERSIONS.fr.md](VERSIONS.fr.md)) |
+| `TableVersionsController` | Versions de table : brouillons, publication, activation, répartition des variantes, exécutions de test, appels par clé ([VERSIONS.fr.md](VERSIONS.fr.md)) |
 | `DecisionsController` | Accès administrateur en lecture seule aux décisions et mise à jour des métadonnées              |
-| `ConsumerController`  | Évaluation des décisions et récupération des résultats côté consommateur                        |
+| `ConsumerController`  | Évaluation des décisions (routes v1 et v2) et récupération des résultats côté consommateur      |
 | `ChangelogController` | Liste de l'historique d'audit, diff et rollback                                                 |
 | `ProjectsController`  | Suppression d'application et export des données                                                 |
 
@@ -147,6 +147,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `ConditionsTypes` | Définit tous les opérateurs de comparaison sous forme de closures ; évalue les conditions à l'exécution |
 | `DateValue`       | Analyse les valeurs `date` (dates ISO, relatives `today-30d`) en numéros de jour                        |
 | `TableVersioning` | Retrouve la version active d'une table, publie les versions et recopie la version active sur la table ; pendant la mise en production A, publie et active une version quand un enregistrement change le contenu d'une table |
+| `VersionCalls`    | Compte les appels des clés d'API par table et version demandée (`version_calls`), pour l'écran d'activation et le garde-fou de suppression |
 | `Mail`            | Intégration email Postmark (vérification, réinitialisation de mot de passe, invitations)                |
 | `Intercom`        | Intégration CRM Intercom (synchronisation des profils, événements de décision, code sécurisé)           |
 | `Mixpanel`        | Intégration analytics Mixpanel (événements utilisateur, compteurs de décisions)                         |
@@ -312,6 +313,10 @@ Une version du contenu d'une table (`table_versions`), avec les mêmes méthodes
 | `toArray()`         | Surcharge le parent pour convertir les ObjectIDs MongoDB dans `table` en chaînes |
 | `getTableArray()`   | Retourne le sous-document `table` avec les ObjectIDs en chaînes (table, version, variante) |
 
+Depuis le lot 3, une décision enregistre aussi `consumer` (`client_id` de la clé
+d'API appelante, null pour un utilisateur) et `test` (exécution de test depuis
+gandalf.web).
+
 ---
 
 ### `App\Models\Variant`
@@ -337,7 +342,10 @@ Une version du contenu d'une table (`table_versions`), avec les mêmes méthodes
 
 | Méthode                                                | Description                                                                       |
 | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `check($id, $values, $appId, $showMeta)`               | Pipeline complet d'évaluation sur la version active de la table ; retourne un tableau adapté aux consommateurs |
+| `check($id, $values, $appId, $showMeta)`               | Route v1 et nœuds de flow : évalue la version active de la table, `variant_id` parmi les valeurs |
+| `evaluateRequest(Table, $version, $body, $appId, $showMeta, $test)` | Route v2 et exécutions de test : corps `{ variant_id, data }`, erreurs sous `data.*`, `422 variant_not_found` |
+| `evaluate(Table, $version, $values, $appId, $showMeta, $options)` | Pipeline complet d'évaluation d'une version (ou de la table telle qu'enregistrée) ; enregistre la clé appelante et le marqueur de test ; retourne un tableau adapté aux consommateurs |
+| `prefixRules($rules, $key)`                            | Place les règles de validation sous une clé (`data.age`)                          |
 | `checkCondition(Condition, $value, $fieldType = null)` | Définit `condition->matched` via ConditionsTypes                                  |
 | `prepareFieldPreset(Field, $value)`                    | Applique la transformation de preset avec mise en cache par exécution             |
 | `createValidationRules(Table\|TableVersion)`           | Construit les règles de validation Lumen à partir des champs                      |
@@ -552,6 +560,11 @@ version publiée, répartition de la version active) sont dans
 
 ## Flux du moteur de décision
 
+La route v2 (`POST /api/v2/tables/{id}/decisions`, corps
+`{ version, variant_id, data }`) et les exécutions de test suivent les mêmes
+étapes via `Scoring::evaluateRequest()`, sur la version qu'elles désignent
+(voir [VERSIONS.fr.md](VERSIONS.fr.md)). Ci-dessous, la route v1.
+
 	POST /api/v1/tables/{id}/decisions
 	  Corps : { field_key_1: valeur, field_key_2: valeur, ..., variant_id?: id }
 	
@@ -677,6 +690,9 @@ Le Kernel Console planifie trois tâches récurrentes via le planificateur de La
 | `BUGSNAG_ENABLED`     | —              | Active le suivi d'erreurs Bugsnag                                 |
 | `DECISION_TIMEZONE`   | `APP_TIMEZONE` | Fuseau horaire de "today" dans les conditions de date relatives   |
 | `TABLE_VERSIONS_LEGACY_AUTOPUBLISH` | true | Mode de compatibilité de la mise en production A : un enregistrement qui change le contenu d'une table publie et active une version ([VERSIONS.fr.md](VERSIONS.fr.md)) |
+| `TABLE_VERSIONS_CALL_WINDOW_DAYS` | 30 | Nombre de jours pendant lesquels le dernier appel d'une clé d'API la fait compter comme appelante d'une version (garde-fou de suppression, clés listées à l'activation) |
+| `DECISIONS_V1_DEPRECATED_AT` | (vide) | Date envoyée dans l'en-tête `Deprecation` de la route v1 ; vide : pas d'en-tête |
+| `DECISIONS_V1_SUNSET` | (vide) | Date envoyée dans l'en-tête `Sunset` de la route v1 ; vide : pas d'en-tête |
 
 [1]:	#présentation-du-projet
 [2]:	#diagramme-darchitecture

@@ -109,17 +109,26 @@ laquelle il est figé.
 | Champ ajouté | Lot | Notes |
 | ------------ | --- | ----- |
 | `table.version` | 1 | `{ _id, number }` de la version exécutée. `null` pour les décisions antérieures au versionnement |
-| `consumer` | 3 | Identifiant de la clé d'API appelante, quand il y en a une |
-| `test` | 3 | `true` pour une décision exécutée depuis gandalf.web (brouillon ou version) |
+| `consumer` | 3 | `client_id` de la clé d'API appelante ; `null` pour un utilisateur (token OAuth) |
+| `test` | 3 | `true` pour une exécution de test depuis gandalf.web (brouillon ou version), `false` sinon ; absent des décisions plus anciennes. Les exécutions de test sont exclues des analytics et de l'historique des décisions par défaut (`GET /api/v1/admin/decisions?test=true` les liste) |
 | `flow.version` | 4 | `{ _id, number }` de la version de flow, pour une décision prise dans un flow |
 
 ### Suivi des appels par clé (collection `version_calls`) : lot 3
 
-Une ligne par clé, table (ou flow) et version demandée : `consumer`,
-`table_id` ou `flow_id`, `requested_version` (`null` quand l'appel ne précise
-pas de version), `last_call_at`, `count`. Elle alimente l'écran d'activation
-(« clés qui appellent sans préciser de version ») et le garde-fou de
-suppression d'une version.
+Une ligne par clé, table (ou flow) et version demandée : `consumer` (le
+`client_id` de la clé), `table_id` ou `flow_id`, `requested_version` (`null`
+quand l'appel ne précise pas de version), `last_call_at`, `count`,
+`applications`. Elle alimente l'écran d'activation (« clés qui appellent sans
+préciser de version ») et le garde-fou de suppression d'une version.
+
+En place depuis le lot 3 pour les tables (flows : lot 4), service
+`App\Services\VersionCalls`. Seuls les appels réussis des clés d'API comptent :
+un utilisateur n'a pas de code figé sur une version. Une clé compte comme
+appelante tant que son dernier appel est dans la fenêtre
+(`TABLE_VERSIONS_CALL_WINDOW_DAYS`, 30 jours par défaut) et qu'elle est encore
+une clé de l'application : une clé supprimée n'appelle plus rien. Un index
+unique (`version_calls_key`, migration `2026_10_10_140000_VersionCalls`) garde
+une seule ligne par clé, table et version demandée.
 
 ---
 
@@ -139,13 +148,13 @@ suppression d'une version.
 | ------ | ----- | ----- |
 | Créer un brouillon | À partir d'une version publiée ou d'un autre brouillon. Plusieurs brouillons peuvent coexister | `tables_update` |
 | Modifier un brouillon | Champs, variantes, règles, répartition | `tables_update` |
-| Exécuter un brouillon (lot 3) | Depuis gandalf.web uniquement ; décisions marquées `test` | `tables_update` |
+| Exécuter un brouillon | Depuis gandalf.web uniquement ; décisions marquées `test` | `tables_update` |
 | Publier | Fige le brouillon et lui attribue le numéro suivant. La version active ne change pas. Avertit si le brouillon ne part pas de la version active | `tables_publish` |
 | Activer | La version publiée choisie devient la version active, de façon atomique. Ne concerne que les appels directs : les flows restent figés sur leurs versions | `tables_activate` |
 | Revenir en arrière | Réactiver une version précédente | `tables_activate` |
 | Changer la répartition | Mode et pourcentages des variantes d'une version, publiée ou non, sans republier | `tables_update` ; `tables_activate` pour la version active (voir [Points ouverts](#points-ouverts)) |
 | Supprimer un brouillon | À tout moment | `tables_update` |
-| Supprimer une version publiée | Seulement si elle n'est pas active (lot 2), qu'aucune version de flow n'est figée dessus (lot 4) et qu'aucune clé ne l'appelle encore (lot 3) | `tables_publish` |
+| Supprimer une version publiée | Seulement si elle n'est pas active, qu'aucune version de flow n'est figée dessus (lot 4) et qu'aucune clé ne l'appelle encore | `tables_publish` |
 
 Il n'y a pas de fusion entre brouillons. Chaque brouillon, puis chaque version,
 enregistre sa version d'origine. La publication et l'activation signalent un
@@ -155,8 +164,8 @@ changements des versions suivantes.
 Publier et activer sont deux actions distinctes, liées à deux droits. Rien
 n'active une version automatiquement, hors [mode de compatibilité](#migration-et-mode-de-compatibilité).
 
-En place depuis le lot 2, sauf l'exécution d'un brouillon (lot 3) et les
-garde-fous de suppression liés aux flows (lot 4) et aux clés (lot 3). Pendant
+En place depuis les lots 2 et 3, sauf le garde-fou de suppression lié aux
+flows (lot 4). Pendant
 la mise en production A, activer une version recopie son contenu sur la table,
 et les flows de l'application suivent les renommages de champs entre
 l'ancienne version active et la nouvelle, comme pour une mise à jour de table.
@@ -173,17 +182,17 @@ vérifie qu'aucune route n'y échappe.
 | ----- | --------- | ---- |
 | `tables_publish` | utilisateurs | Publier une version ; supprimer une version publiée |
 | `tables_activate` | utilisateurs | Activer une version (mise en production) ; changer la répartition de la version active |
-| `decisions_make_inactive` | clés d'API | « Make API call for inactive versions » : appeler une version publiée inactive avec le champ `version` |
+| `decisions_make_inactive` | clés d'API et utilisateurs | « Make API call for inactive versions » : appeler une version publiée inactive avec le champ `version`. Un utilisateur le détient pour le donner à une clé (un utilisateur ne donne à une clé que les droits qu'il a) et pour appeler la route v2 avec son propre token |
 
 Les droits existants gardent leur sens. Une clé qui n'a que `decisions_make`
 n'exécute que la version active. Ceux qui testent et publient (par exemple les
 QA) ne sont pas forcément ceux qui mettent en production.
 
-En place depuis le lot 2. Le propriétaire d'une nouvelle application reçoit
-tous les droits. La migration `2026_10_10_130000_TableVersionScopes` donne
-`tables_publish` et `tables_activate` aux admins des applications existantes ;
-les autres membres les reçoivent d'un admin. `decisions_make_inactive` est
-déclaré dès maintenant et vérifié à partir du lot 3.
+En place depuis les lots 2 et 3. Le propriétaire d'une nouvelle application
+reçoit tous les droits. La migration `2026_10_10_130000_TableVersionScopes`
+donne `tables_publish`, `tables_activate` et `decisions_make_inactive` aux
+admins des applications existantes ; les autres membres les reçoivent d'un
+admin.
 
 L'administration à deux niveaux (admin d'application, superadmin réservé à
 Claims IA) est un chantier indépendant : lot 7.
@@ -204,6 +213,11 @@ Dans la version retenue, la variante est choisie comme aujourd'hui : par
 `variant_id` s'il est fourni, sinon selon `variants_probability`. Un
 `variant_id` absent de la version exécutée renvoie une erreur explicite, pour
 qu'un client ne croie pas tester une variante en en exécutant une autre.
+
+En place depuis le lot 3, sauf les nœuds de flow (lot 4 : d'ici là, ils
+exécutent la version active de chaque table). `App\Services\Scoring::evaluate()`
+exécute n'importe quelle version ; `check()` (v1, flows) exécute la version
+active et `evaluateRequest()` (v2, exécutions de test) prend le corps v2.
 
 ---
 
@@ -247,6 +261,21 @@ La route v1 garde son corps à plat et exécute la version active. Elle est
 déclarée obsolète avec une date de fin, par les en-têtes `Deprecation` et
 `Sunset`.
 
+En place depuis le lot 3 pour les tables. Détails :
+
+- Appelants : les mêmes qu'en v1, clés d'API et utilisateurs (token OAuth).
+  Une version publiée autre que la version active exige
+  `decisions_make_inactive`, pour la clé ou l'utilisateur.
+- Les erreurs de saisie arrivent sous `data.*` (`"data.age": [...]`) ; un
+  corps sans `data` (la forme v1) répond `422`. Le `request` de la décision ne
+  contient que `data` : `version` et `variant_id` se lisent dans
+  `table.version` et `table.variant`.
+- Les en-têtes de la v1 viennent de deux dates réglées dans l'environnement,
+  `DECISIONS_V1_DEPRECATED_AT` (`Deprecation: @<timestamp>`, plus
+  `Link: </api/v2/tables/{id}/decisions>; rel="successor-version"`) et
+  `DECISIONS_V1_SUNSET` (`Sunset: <date HTTP>`). Sans date, pas d'en-tête :
+  les dates restent à fixer (voir [Points ouverts](#points-ouverts)).
+
 ### Routes d'administration : lot 2
 
 | Méthode | Route | Rôle |
@@ -258,12 +287,13 @@ déclarée obsolète avec une date de fin, par les en-têtes `Deprecation` et
 | DELETE | `/api/v1/admin/tables/{id}/versions/{version_id}` | Supprimer, avec les garde-fous du [cycle de vie](#cycle-de-vie) |
 | POST | `/api/v1/admin/tables/{id}/versions/{version_id}/publish` | Publier (`comment`) |
 | PUT | `/api/v1/admin/tables/{id}/versions/{version_id}/split` | Changer la répartition d'une version (`variants_probability`, `variants[]._id` et `probability`) |
-| POST | `/api/v1/admin/tables/{id}/activate` | Activer (`version_id`) ; à partir du lot 3, la réponse liste les clés qui appellent sans préciser de version |
-| POST | `/api/v1/admin/tables/{id}/versions/{version_id}/decisions` | Exécution de test depuis gandalf.web (décision marquée `test`) : lot 3 |
+| POST | `/api/v1/admin/tables/{id}/activate` | Activer (`version_id`) ; la réponse liste les clés qui appellent sans préciser de version |
+| POST | `/api/v1/admin/tables/{id}/versions/{version_id}/decisions` | Exécution de test depuis gandalf.web (décision marquée `test`) |
+| GET | `/api/v1/admin/tables/{id}/calls` | Appels récents des clés d'API du projet, par version demandée |
 
 Les routes équivalentes pour les flows arrivent au lot 4.
 
-En place depuis le lot 2, sauf l'exécution de test. Détails :
+En place depuis les lots 2 et 3. Détails :
 
 - **Liste** : les versions sans leur contenu (`fields`, `variants`), les
   brouillons d'abord (dernier modifié en premier), puis les versions publiées
@@ -284,6 +314,14 @@ En place depuis le lot 2, sauf l'exécution de test. Détails :
   `flows_failed` et `flows_invalid`, comme une mise à jour de table.
 - **Répartition** : les variantes omises gardent leur pourcentage. En mode
   `percent`, la somme des pourcentages doit faire 100.
+- **Exécution de test** : corps de la route v2 sans `version` (`variant_id`,
+  `data`), droit `tables_update`. Exécute n'importe quel brouillon ou version
+  et renvoie toujours les règles, quel que soit le réglage `show_meta`.
+- **Appels** : lignes `consumer`, `description` (celle de la clé),
+  `requested_version`, `last_call_at`, `count`, la plus récente en premier ;
+  `meta.window_days` donne la fenêtre. La réponse d'activation reprend les
+  lignes sans version dans `meta.callers_without_version` : les clés dont
+  l'activation change le comportement.
 
 ---
 
@@ -292,7 +330,7 @@ En place depuis le lot 2, sauf l'exécution de test. Détails :
 | Situation | HTTP | Code |
 | --------- | ---- | ---- |
 | Version demandée inconnue | 404 | `version_not_found` |
-| Version publiée inactive, clé sans `decisions_make_inactive` | 403 | `version_not_allowed` |
+| Version publiée inactive, appelant sans `decisions_make_inactive` | 403 | `version_not_allowed` |
 | Brouillon demandé par une clé d'API | 404 | `version_not_found` (un brouillon n'a pas de numéro) |
 | `variant_id` absent de la version exécutée | 422 | `variant_not_found` |
 | Modification d'une version publiée (hors répartition), ou nouvelle publication | 409 | `version_published` |
@@ -301,12 +339,12 @@ En place depuis le lot 2, sauf l'exécution de test. Détails :
 | Changement de `matching_type` ou `decision_type` après publication | 409 | `table_type_locked` |
 | Données d'entrée invalides | 422 | inchangé, erreurs sous `data.*` en v2 |
 
-En place depuis le lot 2 : `version_not_found` sur les routes
-d'administration, `version_published`, `version_not_published`,
-`version_in_use` pour la version active, `variant_not_found` sur un changement
-de répartition. Une requête sans le droit qu'exige la version
-(`tables_publish`, `tables_activate`) reçoit le `403 access_denied` habituel,
-avec le droit manquant dans `meta.scopes`.
+En place depuis les lots 2 et 3, sauf `table_type_locked` (mise en production
+B) et `version_in_use` pour une version figée par un flow (lot 4). Une requête
+sans le droit qu'exige la version (`tables_publish`, `tables_activate`) reçoit
+le `403 access_denied` habituel, avec le droit manquant dans `meta.scopes`. La
+route v1 garde sa propre erreur : un `variant_id` absent de la version active
+répond `404 variant_not_found`.
 
 ---
 
@@ -427,7 +465,7 @@ en anglais et en français.
 | --- | --------- |
 | 1 | [DOCUMENTATION.md](DOCUMENTATION.md) / [.fr](DOCUMENTATION.fr.md) (modèles `Table`, `TableVersion`, `Decision`, moteur), [GUIDE.fr.md](GUIDE.fr.md) (2.2 et 2.3) |
 | 2 | [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) (routes d'administration, droits), [openapi.yaml](openapi.yaml), [DOCUMENTATION.md](DOCUMENTATION.md) / [.fr](DOCUMENTATION.fr.md) (contrôleur, dépôt), [GUIDE.fr.md](GUIDE.fr.md) (droits) |
-| 3 | [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) (route v2, obsolescence de la v1), [openapi.yaml](openapi.yaml), [GUIDE.fr.md](GUIDE.fr.md) (scénario d'utilisation) |
+| 3 | [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) (route v2, obsolescence de la v1), [openapi.yaml](openapi.yaml), [DOCUMENTATION.md](DOCUMENTATION.md) / [.fr](DOCUMENTATION.fr.md) (moteur, suivi des appels), [GUIDE.fr.md](GUIDE.fr.md) (scénario d'utilisation) |
 | 4 | [DRG.md](DRG.md) / [.fr](DRG.fr.md) (versions de flows, nœuds figés, migration) |
 | 7 | [GUIDE.fr.md](GUIDE.fr.md) (rôles), [API_GUIDE.md](API_GUIDE.md) / [.fr](API_GUIDE.fr.md) |
 
@@ -444,7 +482,7 @@ livraison.
 | 1 | API : fondations des versions de tables, migration, mode de compatibilité | 0 | fait, à relire |
 | 2 | API : brouillons, publication, activation, répartition, droits | 1 | fait, à relire |
 | 2b | API : import et export Excel par version, suppression de `is_default` | 2 | à faire |
-| 3 | API : route v2, exécution de test, suivi des appels par clé et garde-fou de suppression associé, obsolescence v1 | 2 | à faire |
+| 3 | API : route v2, exécution de test, suivi des appels par clé et garde-fou de suppression associé, obsolescence v1 | 2 | fait, à relire |
 | 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | à faire |
 | 5 | gandalf.web : versions de tables | 2, 3 | à faire |
 | 6 | gandalf.web : versions de flows | 4, 5 | à faire |
@@ -459,8 +497,11 @@ Mise en production A : lots 1 à 3. Mise en production B : lots 4 à 6.
 - **Droit pour changer la répartition d'une version active** : c'est un
   changement de production. Mis en place tel que proposé au lot 2
   (`tables_activate`), à confirmer.
-- **« Aucune clé ne l'appelle encore »** : fenêtre à fixer (proposition :
-  dernier appel il y a moins de 30 jours, réglable).
-- **Date de fin de la route v1**.
+- **« Aucune clé ne l'appelle encore »** : fenêtre à fixer. Mis en place tel
+  que proposé au lot 3 (dernier appel il y a moins de 30 jours,
+  `TABLE_VERSIONS_CALL_WINDOW_DAYS`), à confirmer.
+- **Date de fin de la route v1** : les en-têtes sont prêts au lot 3
+  (`DECISIONS_V1_DEPRECATED_AT`, `DECISIONS_V1_SUNSET`) ; les dates restent à
+  fixer.
 - **Procédure de migration en production** : aucune n'est documentée aujourd'hui
   (qui lance `php artisan migrate`, quand, avec quelle sauvegarde).

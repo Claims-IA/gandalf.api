@@ -35,19 +35,26 @@ class DecisionsRepository extends AbstractRepository
      * exists for that table (throws ModelNotFoundException if none found) and orders
      * results newest-first. When $variant_id is provided it filters by variant
      * instead. Without either filter all decisions for the application are returned.
+     * Test runs from gandalf.web (VERSIONS.md, batch 3) are listed apart: only
+     * them with $test, never otherwise.
      *
      * @param  int|null    $size        Page size (defaults to model's $perPage).
      * @param  string|null $table_id    Optional MongoDB ObjectID string for a specific table.
      * @param  string|null $variant_id  Optional MongoDB ObjectID string for a specific variant.
+     * @param  bool        $test        List test runs instead of production decisions.
      * @return \Illuminate\Pagination\LengthAwarePaginator
      * @throws \Illuminate\Database\Eloquent\ModelNotFoundException
      */
-    public function getDecisions($size = null, $table_id = null, $variant_id = null)
+    public function getDecisions($size = null, $table_id = null, $variant_id = null, $test = false)
     {
+        $runs = function ($query) use ($test) {
+            // Decisions made before batch 3 have no test flag: production ones.
+            return $test ? $query->where('test', true) : $query->where('test', '!=', true);
+        };
         /** @var \Jenssegers\Mongodb\Eloquent\Builder $query */
         if ($table_id) {
             // Filter by the embedded table._id field
-            $query = $this->getModel()->query()->where('table._id', $table_id);
+            $query = $runs($this->getModel()->query()->where('table._id', $table_id));
             // Return 404 if the table has never produced any decisions
             if ($query->count() <= 0) {
                 $e = new ModelNotFoundException;
@@ -58,10 +65,10 @@ class DecisionsRepository extends AbstractRepository
             $query = $query->orderBy(Decision::CREATED_AT, 'DESC');
         } elseif ($variant_id) {
             // Filter by the embedded table.variant._id field for variant-level analytics
-            $query = $this->getModel()->query()->where('table.variant._id', $variant_id);
+            $query = $runs($this->getModel()->query()->where('table.variant._id', $variant_id));
         } else {
             // Default: all decisions for the application, newest first
-            $query = Decision::orderBy(Decision::CREATED_AT, 'DESC');
+            $query = $runs(Decision::orderBy(Decision::CREATED_AT, 'DESC'));
         }
         // Always scope to the current application for multi-tenant isolation
         $query = $query->where('applications', ApplicationableHelper::getApplicationId());

@@ -170,6 +170,10 @@ $app->group(
         $app->post('/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/publish', ['uses' => 'TableVersionsController@publish']);
         $app->put('/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/split', ['uses' => 'TableVersionsController@split']);
         $app->post('/tables/{id:[0-9a-z]{24}}/activate', ['uses' => 'TableVersionsController@activate']);
+        // Batch 3: test run of a draft or a version (decision flagged "test"), and
+        // the recent calls of the project's API keys
+        $app->post('/tables/{id:[0-9a-z]{24}}/versions/{version_id:[0-9a-z]{24}}/decisions', ['uses' => 'TableVersionsController@run']);
+        $app->get('/tables/{id:[0-9a-z]{24}}/calls', ['uses' => 'TableVersionsController@calls']);
         // Copy a decision table into a different project (admin only)
         $app->post('/tables/{id:[0-9a-z]{24}}/copyto/{project_id:[0-9a-z]{24}}', ['uses' => 'TablesController@copyTo']);
         // Move a decision table to a different project (admin only)
@@ -204,5 +208,19 @@ $app->group(
         $app->post('/flows/{id:[0-9a-z]{24}}/decisions', ['uses' => 'ConsumerController@flowCheck']);
         // Invite another user to join the current application/project
         $app->post('/invite', ['uses' => 'UsersController@invite']);
+    }
+);
+
+// Decision route v2 (VERSIONS.md, batch 3): `{ version, variant_id, data }`, the
+// execution parameters apart from the input values. Same callers as v1.
+$app->group(
+    [
+        'prefix' => 'api/v2',
+        'namespace' => 'App\Http\Controllers',
+        'middleware' => ['applicationable', 'applicationable.user_or_client', 'applicationable.acl'],
+    ],
+    function ($app) {
+        /** @var Laravel\Lumen\Application $app */
+        $app->post('/tables/{id:[0-9a-z]{24}}/decisions', ['uses' => 'ConsumerController@tableCheckV2']);
     }
 );

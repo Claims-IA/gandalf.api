@@ -664,6 +664,43 @@ POST /api/v1/tables/65f1a2b3c4d5e6f7a8b9c0d1/decisions
 }
 ```
 
+#### Route v2 : choisir la version exécutée
+
+La route `POST /api/v1/tables/{id}/decisions` exécute toujours la **version
+active** de la table ; elle est déclarée obsolète. La route v2 sépare les
+paramètres d'exécution des données d'entrée et permet de fixer la version
+publiée à exécuter :
+
+```http
+POST /api/v2/tables/65f1a2b3c4d5e6f7a8b9c0d1/decisions
+Authorization: Basic <base64(consumer_id:consumer_secret)>
+X-Application: {APP_ID}
+Content-Type: application/json
+
+{
+  "version": 3,
+  "data": {
+    "credit_score": 780,
+    "revenu_annuel": 52000,
+    "pays": "FR"
+  }
+}
+```
+
+- Sans `version`, la version active est exécutée, comme en v1.
+- Avec `version`, la version publiée de ce numéro est exécutée. Si ce n'est pas
+  la version active, la clé d'API doit avoir le droit
+  `decisions_make_inactive` (« Make API call for inactive versions ») :
+  un client peut ainsi rester sur sa version et évoluer à son rythme.
+- La réponse est la même qu'en v1 ; `table.version` indique la version
+  exécutée.
+- Une erreur de saisie est signalée sous `data.*` (par exemple `data.pays`).
+
+Depuis gandalf.web, un brouillon ou une version se teste avec
+`POST /api/v1/admin/tables/{id}/versions/{version_id}/decisions` (même corps,
+sans `version`) : la décision est marquée `test` et n'entre pas dans les
+analytics. Les détails sont dans [API_GUIDE.fr.md](API_GUIDE.fr.md#post-apiv2tablesiddecisions--évaluer-une-version).
+
 ---
 
 ### 3.5 Exécution d'une variante spécifique
@@ -733,6 +770,10 @@ Content-Type: application/json
 ```
 
 Le champ `variant_id` force l'utilisation de la variante désignée, indépendamment de la stratégie de sélection configurée.
+
+Avec la route v2, `variant_id` se place à côté de `version`, hors de `data` :
+`{ "variant_id": "65f1a2b3c4d5e6f7a8b9c0f1", "data": { … } }`. Une variante
+absente de la version exécutée répond `422 variant_not_found`.
 
 ---
 

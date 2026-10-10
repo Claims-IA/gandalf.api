@@ -11,6 +11,7 @@ return [
     'version_published' => 'A published version cannot be edited: create a draft from it',
     'version_not_published' => 'Only a published version can be activated',
     'version_in_use' => 'This version is in use and cannot be deleted',
+    'version_not_allowed' => 'Running an inactive version requires the decisions_make_inactive scope',
     'decision_not_found' => 'Decision not found',
     'changelog_not_found' => 'Changelog not found',
     'token_not_found' => 'Token not found',

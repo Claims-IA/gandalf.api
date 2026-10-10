@@ -469,6 +469,7 @@ lifecycle: [VERSIONS.md](VERSIONS.md). All routes require Bearer token +
 | `tables_update` | Creating, editing and deleting drafts; changing the split of an inactive version |
 | `tables_publish` | Publishing a draft; deleting a published version |
 | `tables_activate` | Activating a version; changing the split of the active version |
+| `decisions_make_inactive` | Running a published version other than the active one with the route v2; giving that scope to an API key |
 
 The owner of a new project holds every scope. Other members get
 `tables_publish` and `tables_activate` from a project admin. A missing scope
@@ -524,7 +525,10 @@ title, description, `matching_type` and `decision_type` stay on the table.
 #### `DELETE /api/v1/admin/tables/{id}/versions/{version_id}`
 
 Deletes a draft (`tables_update`) or a published version (`tables_publish`).
-`409 version_in_use` for the active version: activate another one first.
+`409 version_in_use` for the active version (activate another one first) and
+for a published version an API key of the project called by its number within
+the last 30 days (`TABLE_VERSIONS_CALL_WINDOW_DAYS`; a deleted key no longer
+counts).
 
 ---
 
@@ -571,6 +575,10 @@ how you roll back. When fields were renamed between the previous active
 version and this one, `meta` holds `field_renames`, `flows_updated`,
 `flows_failed` and `flows_invalid`, as for a table update.
 
+`meta.callers_without_version` lists the API keys that called the table
+without a version recently (rows of the `calls` route below): the activation
+changes what they run.
+
 **Divergence warning.** Publishing or activating a version that does not
 descend from the active one still succeeds, with a warning: the version lacks
 the changes published since it was branched off, or it is a rollback.
@@ -581,13 +589,49 @@ the changes published since it was branched off, or it is a rollback.
 
 ---
 
+#### `POST /api/v1/admin/tables/{id}/versions/{version_id}/decisions`: Test run
+
+```json
+{ "variant_id": "...", "data": { "credit_score": 750, "annual_income": 60000 } }
+```
+
+Runs a draft or a version from gandalf.web, with the body of the route v2
+without `version`. Requires `tables_update`. The decision is flagged
+`"test": true`, always carries the `rules`, and is left out of analytics and
+of the default decision history.
+
+---
+
+#### `GET /api/v1/admin/tables/{id}/calls`
+
+Recent calls of the project's API keys to the table, latest first, one row per
+key and requested version (`requested_version: null`: no version, so the
+active one). Only API keys are counted; `meta.window_days` is the window.
+
+```json
+{
+  "meta": { "code": 200, "window_days": 30 },
+  "data": [
+    { "consumer": "<client_id>", "description": "Website", "requested_version": null, "last_call_at": "2026-10-10T16:59:42+00:00", "count": 1520 },
+    { "consumer": "<client_id>", "description": "Partner", "requested_version": 3, "last_call_at": "2026-10-09T08:12:03+00:00", "count": 87 }
+  ]
+}
+```
+
+---
+
 ### Decisions (Admin)
 
 All admin decision endpoints require Bearer token + `X-Application`.
 
 #### `GET /api/v1/admin/decisions`
 
-Query params: `size`, `table_id`, `variant_id`.
+Query params: `size`, `table_id`, `variant_id`, `test`. Test runs from
+gandalf.web are left out; `test=true` lists them instead.
+
+Each decision carries `consumer` (the `client_id` of the API key that made
+the call, `null` for a user) and `test`. Both are absent on decisions made
+before table versions.
 
 ---
 
@@ -620,6 +664,11 @@ Limits: max 24 keys, keys max 100 chars (alphanumeric + dashes), values max 500 
 Consumer endpoints use consumer credentials (`Authorization: Basic ...`) or Bearer token.
 
 #### `POST /api/v1/tables/{id}/decisions` — Evaluate
+
+Deprecated: use [the route v2](#post-apiv2tablesiddecisions-evaluate-a-version),
+which separates the execution parameters from the input values. This route
+runs the active version. Once its dates are set, its responses carry
+`Deprecation`, `Sunset` and `Link: </api/v2/tables/{id}/decisions>; rel="successor-version"`.
 
 Submit all field values. All table fields must be present (use `null` for absent values).
 
@@ -661,6 +710,32 @@ The optional `variant_id` forces a specific variant.
 The `rules` array is included only when the application's `show_meta` setting is enabled.
 
 `table.version` is the table version the decision ran (see [VERSIONS.md](VERSIONS.md)); it is `null` for decisions made before table versioning.
+
+---
+
+#### `POST /api/v2/tables/{id}/decisions`: Evaluate a version
+
+```json
+{
+  "version": 3,
+  "variant_id": "507f1f77bcf86cd799439016",
+  "data": { "credit_score": 750, "annual_income": 60000 }
+}
+```
+
+`version` and `variant_id` are optional; `data` holds every field value. The
+response is the v1 response: `table.version` and `table.variant` say what ran.
+
+| Request | Version run |
+| ------- | ----------- |
+| No `version` | The active version |
+| `"version": 3`, the active one | Version 3 |
+| `"version": 3`, not active | Version 3, with the `decisions_make_inactive` scope only (API key or user); otherwise `403 version_not_allowed` |
+
+Errors: `404 version_not_found` (no published version with that number; a
+draft has none), `422 variant_not_found` (variant missing from the version
+run), `422` with the errors under `data.*` for invalid input values (and for a
+body without `data`).
 
 ---
 

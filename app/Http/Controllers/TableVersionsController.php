@@ -11,7 +11,9 @@
  *   DELETE /versions/{version_id}            delete a version
  *   POST   /versions/{version_id}/publish    publish a draft
  *   PUT    /versions/{version_id}/split      change a version's variant split
+ *   POST   /versions/{version_id}/decisions  test run of a draft or a version
  *   POST   /activate                         activate a published version
+ *   GET    /calls                            recent calls of the project's API keys
  *
  * The ACL (config/applicationable.php) requires the base scope of each route.
  * Two depend on the version and are checked here: deleting a published
@@ -27,11 +29,14 @@ use App\Models\Table;
 use App\Models\TableVersion;
 use Nebo15\REST\Response;
 use Illuminate\Http\Request;
+use App\Services\Scoring;
+use App\Services\VersionCalls;
 use App\Services\ConditionsTypes;
 use App\Repositories\TablesRepository;
 use App\Validators\TableRulesProvider;
 use App\Repositories\TableVersionsRepository;
 use Illuminate\Contracts\Validation\ValidationException;
+use Nebo15\LumenApplicationable\Models\Application;
 use Nebo15\LumenApplicationable\Exceptions\AccessDeniedException;
 
 class TableVersionsController extends Controller
@@ -46,18 +51,22 @@ class TableVersionsController extends Controller
 
     private $conditionsTypes;
 
+    private $calls;
+
     public function __construct(
         Request $request,
         Response $response,
         TablesRepository $tables,
         TableVersionsRepository $versions,
-        ConditionsTypes $conditionsTypes
+        ConditionsTypes $conditionsTypes,
+        VersionCalls $calls
     ) {
         $this->request = $request;
         $this->response = $response;
         $this->tables = $tables;
         $this->versions = $versions;
         $this->conditionsTypes = $conditionsTypes;
+        $this->calls = $calls;
     }
 
     public function index($id)
@@ -118,14 +127,14 @@ class TableVersionsController extends Controller
         return $this->response->json($this->present($table, $this->versions->updateDraft($draft, $values)));
     }
 
-    public function delete($id, $version_id)
+    public function delete(Application $application, $id, $version_id)
     {
         $table = $this->tables->read($id);
         $version = $this->versions->find($table, $version_id);
         if ($version->isPublished()) {
             $this->requireScope('tables_publish');
         }
-        $this->versions->delete($table, $version);
+        $this->versions->delete($table, $version, $application);
 
         return $this->response->json();
     }
@@ -169,7 +178,12 @@ class TableVersionsController extends Controller
         return $this->response->json($this->present($table, $version));
     }
 
-    public function activate($id)
+    /**
+     * Activate a published version. The response meta lists the API keys that
+     * recently called the table without a version (`callers_without_version`):
+     * the activation changes what they run.
+     */
+    public function activate(Application $application, $id)
     {
         $this->validateInput($this->request->all(), ['version_id' => 'required|mongoId']);
         $table = $this->tables->read($id);
@@ -177,8 +191,40 @@ class TableVersionsController extends Controller
         // Measured before the activation: afterwards the version is the active one.
         $divergence = $this->versions->divergence($table, $version);
         $meta = $this->versions->activate($table, $version);
+        $meta['callers_without_version'] = $this->calls->withoutVersion($table, $application);
 
         return $this->response->json($table->toArray(), Response::HTTP_OK, ($divergence ?: []) + $meta);
+    }
+
+    /**
+     * Test run of a draft or a version from gandalf.web, with the body of the
+     * route v2 (`{ variant_id, data }`). The decision is flagged `test`, left
+     * out of analytics and of the default decision history, and always carries
+     * the rule details.
+     */
+    public function run(Scoring $scoring, Application $application, $id, $version_id)
+    {
+        $table = $this->tables->read($id);
+        $version = $this->versions->find($table, $version_id);
+
+        return $this->response->json(
+            $scoring->evaluateRequest($table, $version, $this->request->all(), $application->_id, true, true)
+        );
+    }
+
+    /**
+     * Recent calls of the project's API keys to the table, per requested
+     * version (`requested_version` null: the active version, whichever it is).
+     */
+    public function calls(Application $application, $id)
+    {
+        $table = $this->tables->read($id);
+
+        return $this->response->json(
+            $this->calls->recentFor($table, $application),
+            Response::HTTP_OK,
+            ['window_days' => VersionCalls::windowDays()]
+        );
     }
 
     private function present(Table $table, TableVersion $version)

@@ -2,10 +2,10 @@
 /**
  * TableVersionsCest
  *
- * Table versions, batch 2 (VERSIONS.md): drafts, publication, activation,
+ * Table versions (VERSIONS.md). Batch 2: drafts, publication, activation,
  * variant split, deletion guards and the tables_publish / tables_activate
- * scopes. Run only against a disposable HTTP and MongoDB environment (the
- * suite drops its database).
+ * scopes. Batch 3: route v2, test runs, calls per API key. Run only against a
+ * disposable HTTP and MongoDB environment (the suite drops its database).
  */
 
 class TableVersionsCest
@@ -51,6 +51,36 @@ class TableVersionsCest
         $I->seeResponseCodeIs(200);
 
         return $I->getResponseFields();
+    }
+
+    /**
+     * Input values of the default test table (ApiTester::getTableData()).
+     */
+    private function inputs()
+    {
+        return [
+            'borrowers_phone_verification' => 'Positive',
+            'contact_person_phone_verification' => 'Positive',
+            'internal_credit_history' => 'Positive',
+            'employment' => true,
+            'property' => true,
+        ];
+    }
+
+    /**
+     * An API key of the current project with $scope.
+     */
+    private function createKey(ApiTester $I, array $scope)
+    {
+        $description = implode(' ', $scope);
+        $I->sendPOST('api/v1/projects/consumers', ['description' => $description, 'scope' => $scope]);
+        $I->seeResponseCodeIs(201);
+        foreach ($I->getResponseFields()->data as $key) {
+            if ($key->description === $description) {
+                return $key;
+            }
+        }
+        $I->fail("Key $description not found");
     }
 
     public function aDraftRunsOnlyOncePublishedAndActivated(ApiTester $I)
@@ -205,5 +235,89 @@ class TableVersionsCest
         $I->seeResponseContains('tables_publish');
         $I->sendDELETE($this->versionsUrl($table, $draft->_id));
         $I->seeResponseCodeIs(200);
+    }
+
+    public function routeV2RunsTheRequestedPublishedVersion(ApiTester $I)
+    {
+        $owner = $I->createAndLoginUser();
+        $I->createProjectAndSetHeader();
+        $table = $I->createTable();
+        $this->publishChange($I, $table, 'Version 2');
+        $activeOnly = $this->createKey($I, ['decisions_make']);
+        $inactive = $this->createKey($I, ['decisions_make', 'decisions_make_inactive']);
+        $url = 'api/v2/tables/' . $table->_id . '/decisions';
+
+        $I->loginConsumer($activeOnly);
+        $I->sendPOST($url, ['data' => $this->inputs()]);
+        $I->seeResponseCodeIs(200);
+        $I->assertEquals(1, $I->getResponseFields()->data->table->version->number);
+        $I->sendPOST($url, ['version' => 2, 'data' => $this->inputs()]);
+        $I->seeResponseCodeIs(403);
+        $I->seeResponseContains('version_not_allowed');
+
+        $I->loginConsumer($inactive);
+        $I->sendPOST($url, ['version' => 2, 'data' => $this->inputs()]);
+        $I->seeResponseCodeIs(200);
+        $I->assertEquals(2, $I->getResponseFields()->data->table->version->number);
+
+        $I->sendPOST($url, ['version' => 9, 'data' => $this->inputs()]);
+        $I->seeResponseCodeIs(404);
+        $I->seeResponseContains('version_not_found');
+        $I->sendPOST($url, ['variant_id' => $I->getMongoId(), 'data' => $this->inputs()]);
+        $I->seeResponseCodeIs(422);
+        $I->seeResponseContains('variant_not_found');
+        $I->sendPOST($url, $this->inputs());
+        $I->seeResponseCodeIs(422);
+
+        $I->loginUser($owner);
+        $I->sendGET('api/v1/admin/tables/' . $table->_id . '/calls');
+        $I->seeResponseCodeIs(200);
+        $I->assertCount(2, $I->getResponseFields()->data, 'One row per key and requested version');
+    }
+
+    public function aVersionAKeyStillCallsIsKept(ApiTester $I)
+    {
+        $owner = $I->createAndLoginUser();
+        $I->createProjectAndSetHeader();
+        $table = $I->createTable();
+        $version2 = $this->publishChange($I, $table, 'Version 2')->data;
+        $pinned = $this->createKey($I, ['decisions_make', 'decisions_make_inactive']);
+        $unversioned = $this->createKey($I, ['decisions_make']);
+
+        $I->loginConsumer($pinned);
+        $I->sendPOST('api/v2/tables/' . $table->_id . '/decisions', ['version' => 2, 'data' => $this->inputs()]);
+        $I->seeResponseCodeIs(200);
+        $I->loginConsumer($unversioned);
+        $I->sendPOST('api/v1/tables/' . $table->_id . '/decisions', $this->inputs());
+        $I->seeResponseCodeIs(200);
+
+        $I->loginUser($owner);
+        $I->sendDELETE($this->versionsUrl($table, $version2->_id));
+        $I->seeResponseCodeIs(409);
+        $I->seeResponseContains('version_in_use');
+
+        $activated = $this->activate($I, $table, $version2->_id);
+        $I->assertCount(1, $activated->meta->callers_without_version);
+        $I->assertEquals($unversioned->client_id, $activated->meta->callers_without_version[0]->consumer);
+    }
+
+    public function aTestRunIsFlaggedAndKeptApart(ApiTester $I)
+    {
+        $I->createAndLoginUser();
+        $I->createProjectAndSetHeader();
+        $table = $I->createTable();
+        $draft = $this->createDraft($I, $table);
+
+        $I->sendPOST($this->versionsUrl($table, $draft->_id, 'decisions'), ['data' => $this->inputs()]);
+        $I->seeResponseCodeIs(200);
+        $decision = $I->getResponseFields()->data;
+        $I->assertEquals($draft->_id, $decision->table->version->_id);
+
+        $I->sendGET('api/v1/admin/decisions/' . $decision->_id);
+        $I->assertTrue($I->getResponseFields()->data->test);
+        $I->sendGET('api/v1/admin/decisions');
+        $I->dontSeeResponseContains($decision->_id);
+        $I->sendGET('api/v1/admin/decisions?test=true');
+        $I->seeResponseContains($decision->_id);
     }
 }

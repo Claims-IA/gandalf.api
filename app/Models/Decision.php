@@ -51,6 +51,10 @@ class Decision extends Base implements Applicationable
         'rules',
         'default_decision',
         'final_decision',
+        // VERSIONS.md, batch 3: client_id of the calling API key (null for a
+        // user), and test runs from gandalf.web (absent on older decisions)
+        'consumer',
+        'test',
         self::CREATED_AT,
         self::UPDATED_AT,
     ];
@@ -66,6 +70,8 @@ class Decision extends Base implements Applicationable
         'rules',
         'default_decision',
         'final_decision',
+        'consumer',
+        'test',
         'applications',
     ];
 

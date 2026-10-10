@@ -32,6 +32,9 @@ return [
             // are separate rights.
             'tables_publish',
             'tables_activate',
+            // Run an inactive published version (route v2). Also a user scope: a
+            // user only gives an API key the scopes they hold.
+            'decisions_make_inactive',
         ],
         'consumers' => [
             'decisions_view',
@@ -85,11 +88,15 @@ return [
             '~^\/api\/v1\/admin\/flows\/(.+)\/moveto\/(.+)$~' => ['tables_create', 'tables_delete'],
             // Table versions (VERSIONS.md)
             '~^\/api\/v1\/admin\/tables\/(.+)\/versions\/(.+)\/publish$~' => ['tables_publish'],
+            '~^\/api\/v1\/admin\/tables\/(.+)\/versions\/(.+)\/decisions$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/tables\/(.+)\/versions$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/tables\/(.+)\/activate$~' => ['tables_activate'],
             '~^\/api\/v1\/admin\/changelog\/(.+)\/(.+)\/rollback\/(.+)$~' => ['tables_update'],
             '~^\/api\/v1\/tables\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v1\/flows\/(.+)\/decisions$~' => ['decisions_make'],
+            // An inactive version also needs decisions_make_inactive, checked in
+            // ConsumerController::tableCheckV2 once the version is known.
+            '~^\/api\/v2\/tables\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v1\/projects\/collaborators\/confirm$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/collaborators\/invitation\/resend$~' => ['users_manage'],
             '~^\/api\/v1\/invite$~' => ['users_manage'],
