@@ -191,7 +191,7 @@ GET /api/v1/admin/tables?size=50&page=2
 | `200` | Succès |
 | `201` | Ressource créée |
 | `401` | Non authentifié |
-| `403` | Accès refusé (ex. : aucun admin actif) |
+| `403` | Accès refusé (ex. : aucun admin actif ; `password_change_required` tant que le mot de passe de l'appelant est temporaire, voir [ADMIN.fr.md](ADMIN.fr.md#comptes-et-mots-de-passe-temporaires)) |
 | `404` | Ressource introuvable |
 | `410` | Token expiré |
 | `409` | Conflit (ex. : modification d'une version de table publiée) |
@@ -344,6 +344,11 @@ nécessite de fournir `current_password`.
 La modification de l'`email` déclenche un nouveau flux de vérification — la nouvelle adresse
 est stockée dans `temporary_email` en attendant la confirmation.
 
+Tant que `must_change_password` vaut `true` (mot de passe temporaire donné par
+un admin ou un superadmin), cette route et `GET /api/v1/users/current` sont les
+seules ouvertes au compte : envoyer `password` avec le mot de passe temporaire
+en `current_password` lève l'obligation.
+
 ---
 
 #### `GET /api/v1/users?name=jean` — Rechercher des utilisateurs
@@ -419,6 +424,48 @@ superadmin, la plus récente d'abord. Filtres `application_id` (sa création
 comprise), `user_id` ;
 `size` (1 à 200, 50 par défaut) et `page`. Les champs d'une entrée sont décrits
 dans [ADMIN.fr.md](ADMIN.fr.md#journal-dadministration).
+
+---
+
+#### `GET /api/v1/superadmin/users`
+
+Superadmin seulement. Tous les comptes avec leurs applications (`_id`,
+`title`, `role`), y compris ceux sans application. `search` (début d'un mot
+du nom d'utilisateur ou de l'adresse), `without_application=1`, `size` (1 à
+200, 50 par défaut), `page`.
+
+---
+
+#### `POST /api/v1/superadmin/users/{id}/password`
+
+Superadmin seulement. Donne au compte un mot de passe temporaire, rendu une
+seule fois (`temporary_password`, `email_sent`), et ferme ses sessions. La
+personne devra le remplacer à sa prochaine connexion. 403 sur son propre
+compte ou celui d'un superadmin.
+
+---
+
+#### `DELETE /api/v1/superadmin/users/{id}`
+
+Superadmin seulement. Supprime le compte définitivement : il quitte toutes ses
+applications (listées dans la réponse) et ses invitations en attente sont
+annulées. 403 sur son propre compte ou celui d'un superadmin.
+
+---
+
+#### `POST /api/v1/projects/collaborators/account`
+
+Admin d'application seulement, avec `X-Application`. Crée un compte actif dans
+l'application avec un mot de passe temporaire, rendu une seule fois :
+
+```json
+{ "email": "nouveau@example.com", "username": "nouvel.utilisateur", "role": "member", "scope": ["tables_view"] }
+```
+
+`username` est facultatif (tiré de l'adresse). Les droits doivent être détenus
+par l'appelant et comprendre `tables_view`. Une adresse déjà utilisée par un
+compte donne 422 : ajouter ce compte avec `POST /api/v1/projects/users`.
+Détails dans [ADMIN.fr.md](ADMIN.fr.md#comptes-et-mots-de-passe-temporaires).
 
 ---
 

@@ -670,6 +670,64 @@ components:
             otherwise. Set only by `php artisan gandalf:superadmin`, never
             through the API.
           example: true
+        must_change_password:
+          type: boolean
+          description: >
+            True while the password is a temporary one, given by an admin or a
+            superadmin (ADMIN.md). Until the person chooses a new password, only
+            `GET` and `PUT /api/v1/users/current` are open to them; every other
+            user route answers `403 password_change_required`.
+          example: false
+
+    AdminAccount:
+      type: object
+      description: An account as a superadmin lists it (ADMIN.md).
+      allOf:
+        - $ref: '#/components/schemas/User'
+      properties:
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        applications:
+          type: array
+          description: The applications the account belongs to; empty when none.
+          items:
+            type: object
+            properties:
+              _id:
+                type: string
+              title:
+                type: string
+              role:
+                type: string
+                example: admin
+
+    TemporaryPassword:
+      type: object
+      properties:
+        user_id:
+          type: string
+          example: "6a4f905e5b092138b30a8a58"
+        username:
+          type: string
+          example: "new.user"
+        email:
+          type: string
+          format: email
+          example: "new@example.com"
+        temporary_password:
+          type: string
+          description: >
+            Returned once. The person must replace it at their next sign-in
+            (`must_change_password`).
+          example: "Fbb2QQTzvWsU"
+        email_sent:
+          type: boolean
+          description: >
+            Whether it was also emailed. A refused email does not fail the
+            request.
+          example: false
 
     AdminLogEntry:
       type: object
@@ -2694,6 +2752,146 @@ paths:
         "403":
           description: The caller is not a superadmin.
 
+  /api/v1/superadmin/users:
+    get:
+      tags: [Projects]
+      summary: Every account (superadmin)
+      description: |
+        Reserved to superadmins (ADMIN.md). Every account, by username, with
+        the applications it belongs to, those that belong to none included.
+      operationId: superadminUsers
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: search
+          in: query
+          description: Start of a word of the username or of the email address (pending address included), ignoring case.
+          schema:
+            type: string
+            maxLength: 100
+        - name: without_application
+          in: query
+          description: 1 keeps the accounts that belong to no application.
+          schema:
+            type: integer
+            enum: [0, 1]
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Accounts, paginated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdminAccount'
+                  paging:
+                    $ref: '#/components/schemas/Paging'
+        "401":
+          description: No user token.
+        "403":
+          description: The caller is not a superadmin.
+
+  /api/v1/superadmin/users/{id}:
+    delete:
+      tags: [Projects]
+      summary: Delete an account for good (superadmin)
+      description: |
+        Reserved to superadmins (ADMIN.md). **Irreversible.** The account
+        leaves every application it belongs to, its pending invitations are
+        cancelled, and it is deleted. Refused for one's own account and for a
+        superadmin's.
+      operationId: superadminDeleteUser
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Account deleted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: object
+                    properties:
+                      _id:
+                        type: string
+                      applications:
+                        type: array
+                        description: The applications it left.
+                        items:
+                          type: object
+                          properties:
+                            _id:
+                              type: string
+                            title:
+                              type: string
+        "403":
+          description: Not a superadmin, or one's own account (`own_account`), or a superadmin's (`superadmin_account`).
+        "404":
+          description: No account found for this id.
+
+  /api/v1/superadmin/users/{id}/password:
+    post:
+      tags: [Projects]
+      summary: Give an account a temporary password (superadmin)
+      description: |
+        Reserved to superadmins (ADMIN.md). Replaces the account's password
+        with a temporary one, returned once and emailed when sending works.
+        The account is signed out everywhere and activated if its address was
+        not verified; the person must replace the password at their next
+        sign-in. Refused for one's own account and for a superadmin's.
+      operationId: superadminResetPassword
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Temporary password given.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/TemporaryPassword'
+        "403":
+          description: Not a superadmin, or one's own account (`own_account`), or a superadmin's (`superadmin_account`).
+        "404":
+          description: No account found for this id.
+
   /api/v1/projects/export:
     get:
       tags: [Projects]
@@ -2832,13 +3030,24 @@ paths:
                         type: string
                         enum: [active]
                         example: "active"
+                      username:
+                        type: string
+                        description: Only present when an invitation was confirmed.
+                        example: "invited.person"
                       temporary_password:
                         type: string
                         description: >
                           Only present when an invitation was confirmed (a new
                           account was created). Show it to the admin so they can
-                          pass it on; the user must change it after first login.
+                          pass it on; the person must replace it at their first
+                          sign-in (`must_change_password`).
                         example: "Fbb2QQTzvWsU"
+                      email_sent:
+                        type: boolean
+                        description: >
+                          Only present when an invitation was confirmed: whether
+                          the temporary password was also emailed.
+                        example: false
         "403":
           description: The caller is not a project admin.
         "404":
@@ -2931,6 +3140,72 @@ paths:
           description: Missing `email`.
 
   /api/v1/projects/collaborators/account:
+    post:
+      tags: [Projects]
+      summary: Create an account directly in the project (admin only)
+      description: |
+        Creates an active account in the current project with the given role
+        and scopes, and a temporary password returned once (ADMIN.md). No
+        invitation and no email to click; the person must replace the
+        password at their first sign-in.
+
+        Only a project admin may call this (`403` otherwise). The scopes must
+        be held by the caller and include the required ones. An email already
+        used by an account is refused (`422`): add that account with
+        `POST /api/v1/projects/users`. A pending invitation of this email to
+        this project is consumed. Requires the `users_manage` scope.
+      operationId: createAccount
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role, scope]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "new@example.com"
+                username:
+                  type: string
+                  minLength: 2
+                  maxLength: 32
+                  description: Derived from the email when absent.
+                  example: "new.user"
+                role:
+                  type: string
+                  example: "member"
+                scope:
+                  type: array
+                  items:
+                    type: string
+                  example: ["tables_view"]
+      responses:
+        "201":
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    allOf:
+                      - $ref: '#/components/schemas/TemporaryPassword'
+                    properties:
+                      status:
+                        type: string
+                        enum: [active]
+        "403":
+          description: The caller is not a project admin.
+        "422":
+          description: Email or username already used, or scopes not held or missing a required one.
     delete:
       tags: [Projects]
       summary: Permanently delete a user account (admin only)

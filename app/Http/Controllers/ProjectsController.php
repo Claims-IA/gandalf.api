@@ -299,6 +299,7 @@ class ProjectsController extends AbstractController
 
         return $this->response->json([
             'user_id'            => (string) $newUser->_id,
+            'username'           => $newUser->username,
             'email'              => $email,
             'status'             => 'active',
             'temporary_password' => $temporaryPassword,

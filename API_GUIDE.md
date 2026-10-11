@@ -190,7 +190,7 @@ GET /api/v1/admin/tables?size=50&page=2
 | `200`     | Success                         |
 | `201`     | Resource created                |
 | `401`     | Unauthenticated                 |
-| `403`     | Forbidden (e.g. inactive admin) |
+| `403`     | Forbidden (e.g. inactive admin; `password_change_required` while the caller's password is temporary, see [ADMIN.md](ADMIN.md#accounts-and-temporary-passwords)) |
 | `404`     | Resource not found              |
 | `410`     | Token expired                   |
 | `409`     | Conflict (e.g. editing a published table version) |
@@ -334,6 +334,11 @@ Requires Bearer token. All fields optional. Changing `password` requires `curren
 Changing `email` triggers a new verification flow — the new address goes into
 `temporary_email` first.
 
+While `must_change_password` is `true` (a temporary password given by an
+admin or a superadmin), this route and `GET /api/v1/users/current` are the
+only ones open to the account: sending `password` with the temporary password
+as `current_password` clears it.
+
 ---
 
 #### `GET /api/v1/users?name=john` — Search users
@@ -402,6 +407,47 @@ Superadmin only. Permanently deletes the application and **all** its decision ta
 Superadmin only. The admin log: every request made by a superadmin, most recent
 first. Filters `application_id` (its creation included), `user_id`; `size` (1 to 200, default 50) and
 `page`. Entry fields are described in [ADMIN.md](ADMIN.md#admin-log).
+
+---
+
+#### `GET /api/v1/superadmin/users`
+
+Superadmin only. Every account with its applications (`_id`, `title`,
+`role`), those without an application included. `search` (start of a word of
+the username or email), `without_application=1`, `size` (1 to 200, default
+50), `page`.
+
+---
+
+#### `POST /api/v1/superadmin/users/{id}/password`
+
+Superadmin only. Gives the account a temporary password, returned once
+(`temporary_password`, `email_sent`), and ends its sessions. The person must
+replace it at their next sign-in. 403 on one's own account or a superadmin's.
+
+---
+
+#### `DELETE /api/v1/superadmin/users/{id}`
+
+Superadmin only. Deletes the account for good: it leaves every application
+(listed in the response) and its pending invitations are cancelled. 403 on
+one's own account or a superadmin's.
+
+---
+
+#### `POST /api/v1/projects/collaborators/account`
+
+Application admin only, with `X-Application`. Creates an active account in the
+application with a temporary password, returned once:
+
+```json
+{ "email": "new@example.com", "username": "new.user", "role": "member", "scope": ["tables_view"] }
+```
+
+`username` is optional (derived from the email). The scopes must be held by
+the caller and include `tables_view`. An email already used by an account
+gives 422: add that account with `POST /api/v1/projects/users`. Details in
+[ADMIN.md](ADMIN.md#accounts-and-temporary-passwords).
 
 ---
 
