@@ -275,17 +275,69 @@ class FlowVersioning
      */
     public function isOutdated(Flow $flow)
     {
-        $active = $this->activeVersion($flow);
-        $actives = [];
-        foreach ((array) ($active ?: $flow)->nodes as $node) {
-            $node = (array) $node;
-            $pin = $node['table_version_id'] ?? null;
-            if ($pin && $pin !== self::activeTableVersionId($node['table_id'] ?? null, $actives)) {
-                return true;
+        return $this->outdatedFlows([$flow])[(string) $flow->getId()];
+    }
+
+    /**
+     * isOutdated() for a list of flows, in two queries whatever their number
+     * (their active versions, then the tables their nodes use): flow id =>
+     * whether the flow is outdated.
+     *
+     * @param  Flow[] $flows
+     * @return array
+     */
+    public function outdatedFlows($flows)
+    {
+        $activeIds = [];
+        foreach ($flows as $flow) {
+            if ($flow->active_version_id) {
+                $activeIds[] = (string) $flow->active_version_id;
+            }
+        }
+        $versions = [];
+        if ($activeIds) {
+            foreach (FlowVersion::whereIn('_id', $activeIds)->get(['_id', 'flow_id', 'nodes']) as $version) {
+                $versions[(string) $version->flow_id] = $version;
             }
         }
 
-        return false;
+        // The nodes of each flow's active version (the flow's own without one)
+        $nodesByFlow = [];
+        $tableIds = [];
+        foreach ($flows as $flow) {
+            $flowId = (string) $flow->getId();
+            $source = isset($versions[$flowId]) && (string) $versions[$flowId]->getId() === (string) $flow->active_version_id
+                ? $versions[$flowId]
+                : $flow;
+            $nodesByFlow[$flowId] = array_map(function ($node) {
+                return (array) $node;
+            }, (array) $source->nodes);
+            foreach ($nodesByFlow[$flowId] as $node) {
+                if (!empty($node['table_version_id']) && !empty($node['table_id'])) {
+                    $tableIds[(string) $node['table_id']] = true;
+                }
+            }
+        }
+        $activeTableVersions = [];
+        if ($tableIds) {
+            foreach (Table::whereIn('_id', array_keys($tableIds))->get(['_id', 'active_version_id']) as $table) {
+                $activeTableVersions[(string) $table->getId()] = $table->active_version_id ? (string) $table->active_version_id : null;
+            }
+        }
+
+        $outdated = [];
+        foreach ($nodesByFlow as $flowId => $nodes) {
+            $outdated[$flowId] = false;
+            foreach ($nodes as $node) {
+                $pin = $node['table_version_id'] ?? null;
+                if ($pin && (string) $pin !== ($activeTableVersions[(string) ($node['table_id'] ?? '')] ?? null)) {
+                    $outdated[$flowId] = true;
+                    break;
+                }
+            }
+        }
+
+        return $outdated;
     }
 
     /**

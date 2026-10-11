@@ -67,13 +67,17 @@ class FlowsController extends AbstractController
     {
         $this->validateRoute();
 
+        $flows = $this->getRepository()->readListWithFilters($this->request->all());
+        // In two queries for the page, not a few per flow
+        $outdated = app(FlowVersioning::class)->outdatedFlows($flows->getCollection()->all());
+
         return $this->response->jsonPaginator(
-            $this->getRepository()->readListWithFilters($this->request->all()),
+            $flows,
             [],
-            function (ListableInterface $model) {
+            function (ListableInterface $model) use ($outdated) {
                 return $model->toListArray() + [
                     'active_version_id' => $model->active_version_id,
-                    'outdated' => app(FlowVersioning::class)->isOutdated($model),
+                    'outdated' => $outdated[(string) $model->getId()] ?? false,
                 ];
             }
         );

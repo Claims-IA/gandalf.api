@@ -157,10 +157,11 @@ une seule ligne par clé, table et version demandée.
 | Créer un brouillon | À partir d'une version publiée ou d'un autre brouillon. Plusieurs brouillons peuvent coexister | `tables_update` |
 | Modifier un brouillon | Champs, variantes, règles, répartition | `tables_update` |
 | Exécuter un brouillon | Depuis gandalf.web uniquement ; décisions marquées `test` | `tables_update` |
+| Exécuter une version publiée | Depuis gandalf.web uniquement, en test ; décisions marquées `test` | `decisions_make`, comme pour l'appeler |
 | Publier | Fige le brouillon et lui attribue le numéro suivant. La version active ne change pas. Avertit si le brouillon ne part pas de la version active | `tables_publish` |
 | Activer | La version publiée choisie devient la version active, de façon atomique. Ne concerne que les appels directs : les flows restent figés sur leurs versions | `tables_activate` |
 | Revenir en arrière | Réactiver une version précédente | `tables_activate` |
-| Changer la répartition | Mode et pourcentages des variantes d'une version, publiée ou non, sans republier | `tables_update` ; `tables_activate` pour la version active (voir [Points ouverts](#points-ouverts)) |
+| Changer la répartition | Mode et pourcentages des variantes d'une version, publiée ou non, sans republier | `tables_update` pour un brouillon ; `tables_activate` pour une version publiée, que des clés peuvent appeler avec `version` (voir [Points ouverts](#points-ouverts)) |
 | Supprimer un brouillon | À tout moment | `tables_update` |
 | Supprimer une version publiée | Seulement si elle n'est pas active, qu'aucun flow ni version de flow n'est figé dessus et qu'aucune clé ne l'appelle encore | `tables_publish` |
 
@@ -192,7 +193,7 @@ vérifie qu'aucune route n'y échappe.
 | Droit | Porté par | Rôle |
 | ----- | --------- | ---- |
 | `tables_publish` | utilisateurs | Publier une version ; supprimer une version publiée |
-| `tables_activate` | utilisateurs | Activer une version (mise en production) ; changer la répartition de la version active |
+| `tables_activate` | utilisateurs | Activer une version (mise en production) ; changer la répartition d'une version publiée ; revenir à une révision d'une autre version |
 | `decisions_make_inactive` | clés d'API et utilisateurs | « Make API call for inactive versions » : appeler une version publiée inactive avec le champ `version`. Un utilisateur le détient pour le donner à une clé (un utilisateur ne donne à une clé que les droits qu'il a) et pour appeler la route v2 avec son propre token |
 
 Les droits existants gardent leur sens. Une clé qui n'a que `decisions_make`
@@ -357,8 +358,8 @@ son origine :
 | Classeur exporté depuis | Import |
 | ----------------------- | ------ |
 | Un brouillon | Met le brouillon à jour (`200`), verrou sur le brouillon |
-| Une version publiée | Crée un brouillon à partir d'elle, nommé « Import Excel » (`201`) |
-| Une version publiée, mode de compatibilité actif | Met la table à jour, comme avant les versions |
+| Une version publiée (tous les autres cas) | Crée un brouillon à partir d'elle, nommé « Import Excel » (`201`) |
+| La version active, mode de compatibilité actif | Met la table à jour, comme avant les versions |
 | Une table, avant les versions (pas de `version_id`) | Met la table à jour |
 
 Un brouillon ne reçoit que le contenu : le titre et la description restent ceux
@@ -545,9 +546,10 @@ Mise en production A : lots 1 à 3. Mise en production B : lots 4 à 6.
 
 ## Points ouverts
 
-- **Droit pour changer la répartition d'une version active** : c'est un
-  changement de production. Mis en place tel que proposé au lot 2
-  (`tables_activate`), à confirmer.
+- **Droit pour changer la répartition d'une version publiée** : c'est un
+  changement de production, pour la version active comme pour les clés qui en
+  appellent une autre avec `version`. Mis en place avec `tables_activate`
+  (lot 2, puis étendu à toute version publiée après la revue), à confirmer.
 - **« Aucune clé ne l'appelle encore »** : fenêtre à fixer. Mis en place tel
   que proposé au lot 3 (dernier appel il y a moins de 30 jours,
   `TABLE_VERSIONS_CALL_WINDOW_DAYS`), à confirmer.

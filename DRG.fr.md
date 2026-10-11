@@ -391,7 +391,7 @@ protégées par ACL.
 | `POST   /api/v1/admin/flows/{id}/versions` | créer un brouillon (`from_version_id`, `name`) | `tables_update` |
 | `GET/PUT/DELETE /api/v1/admin/flows/{id}/versions/{version_id}` | lire, modifier un brouillon, supprimer (une version publiée : + `tables_publish`) | `tables_view` / `tables_update` |
 | `POST   /api/v1/admin/flows/{id}/versions/{version_id}/publish` | publier un brouillon (`comment`) | `tables_publish` |
-| `POST   /api/v1/admin/flows/{id}/versions/{version_id}/decisions` | exécution de test d'un brouillon ou d'une version (`{ data }`, marquée `test`) | `tables_update` |
+| `POST   /api/v1/admin/flows/{id}/versions/{version_id}/decisions` | exécution de test d'un brouillon ou d'une version (`{ data }`, marquée `test`) | `decisions_make` ; `tables_update` pour un brouillon |
 | `POST   /api/v1/admin/flows/{id}/activate` | activer une version publiée (`version_id`) | `tables_activate` |
 | `GET    /api/v1/admin/flows/{id}/calls` | appels récents des clés d'API du projet | `tables_view` |
 | `GET    /api/v1/admin/tables/{id}/flows` | flows qui utilisent une table, version par nœud | `tables_view` |

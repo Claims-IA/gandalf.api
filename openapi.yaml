@@ -3375,7 +3375,8 @@ paths:
       description: >
         Runs a draft or a version from gandalf.web with `{ data }`. The run and
         its decisions are flagged `test`; the rules are always returned.
-        Requires `tables_update`.
+        Requires `decisions_make` for a published version, and `tables_update`
+        for a draft.
       operationId: runFlowVersion
       security:
         - BearerAuth: []
@@ -4057,8 +4058,9 @@ paths:
           optimistic lock on the draft;
         - from a **published version**, which is frozen: a new draft is created
           from it (`201`, named "Import Excel");
-        - while the release A compatibility mode is on, a published version's
-          workbook updates the table as before.
+        - while the release A compatibility mode is on, the active version's
+          workbook updates the table as before (another version's workbook
+          still creates a draft).
         The response is then the draft, with `meta.imported_into = "version"`
         (`"table"` otherwise). Only the content goes into a draft: the title and
         description stay the table's, the content is validated against the
@@ -4675,9 +4677,10 @@ paths:
       summary: Change a version's variant split
       description: >
         Changes the split mode and percentages of a draft or a published
-        version, without creating a version. Requires `tables_update`, and
-        `tables_activate` for the active version, whose change the table
-        follows at once.
+        version, without creating a version. Requires `tables_update` for a
+        draft and `tables_activate` for a published version (the active one,
+        whose change the table follows at once, or one that keys call with
+        `version`).
       operationId: updateTableVersionSplit
       security:
         - BearerAuth: []
@@ -4769,7 +4772,8 @@ paths:
         Runs a draft or a version from gandalf.web, with the body of the route
         v2 without `version`. The decision is flagged `test`, always carries
         the rules, and is left out of analytics and of the default decision
-        history. Requires `tables_update`.
+        history. Requires `decisions_make` for a published version, and
+        `tables_update` for a draft.
       operationId: runTableVersion
       security:
         - BearerAuth: []

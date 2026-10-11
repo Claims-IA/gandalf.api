@@ -30,12 +30,13 @@ use App\Services\FlowEngine;
 use App\Services\VersionCalls;
 use App\Repositories\FlowRepository;
 use App\Repositories\FlowVersionsRepository;
-use Illuminate\Contracts\Validation\ValidationException;
 use Nebo15\LumenApplicationable\Models\Application;
-use Nebo15\LumenApplicationable\Exceptions\AccessDeniedException;
+use App\Http\Controllers\Concerns\ChecksScopes;
 
 class FlowVersionsController extends Controller
 {
+    use ChecksScopes;
+
     private $request;
 
     private $response;
@@ -165,12 +166,17 @@ class FlowVersionsController extends Controller
     /**
      * Test run of a draft or a version from gandalf.web, body `{ data }`. The
      * run and its decisions are flagged `test`; the rules are always returned.
+     * A published version needs decisions_make (the ACL), as calling it does;
+     * a draft also needs tables_update.
      */
     public function run(FlowEngine $engine, Application $application, $id, $version_id)
     {
         $this->validateInput($this->request->all(), ['data' => 'present|array']);
         $flow = $this->flows->read($id);
         $version = $this->versions->find($flow, $version_id);
+        if (!$version->isPublished()) {
+            $this->requireScope('tables_update');
+        }
 
         return $this->response->json(
             $engine->run($flow, (array) $this->request->input('data'), $application->_id, true, $version, true)
@@ -193,19 +199,5 @@ class FlowVersionsController extends Controller
         return $version->toArray() + ['is_active' => $this->versions->isActive($flow, $version)];
     }
 
-    private function validateInput(array $data, array $rules)
-    {
-        $validator = \Validator::make($data, $rules);
-        if ($validator->fails()) {
-            throw new ValidationException($validator);
-        }
-    }
 
-    private function requireScope($scope)
-    {
-        $member = $this->request->user()->getApplicationUser();
-        if (!$member->{'can' . ucfirst($scope)}()) {
-            throw new AccessDeniedException('', 0, null, [$scope]);
-        }
-    }
 }

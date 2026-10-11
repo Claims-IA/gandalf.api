@@ -88,7 +88,9 @@ return [
             '~^\/api\/v1\/admin\/flows\/(.+)\/moveto\/(.+)$~' => ['tables_create', 'tables_delete'],
             // Table versions (VERSIONS.md)
             '~^\/api\/v1\/admin\/tables\/(.+)\/versions\/(.+)\/publish$~' => ['tables_publish'],
-            '~^\/api\/v1\/admin\/tables\/(.+)\/versions\/(.+)\/decisions$~' => ['tables_update'],
+            // Test run: a published version needs decisions_make, as calling
+            // it does; a draft also needs tables_update (checked by the controller).
+            '~^\/api\/v1\/admin\/tables\/(.+)\/versions\/(.+)\/decisions$~' => ['tables_view', 'decisions_make'],
             '~^\/api\/v1\/admin\/tables\/(.+)\/versions$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/tables\/(.+)\/activate$~' => ['tables_activate'],
             // + tables_publish / tables_activate for publish / activate, checked in
@@ -96,7 +98,7 @@ return [
             '~^\/api\/v1\/admin\/tables\/(.+)\/flows\/update$~' => ['tables_update'],
             // Flow versions (VERSIONS.md, batch 4)
             '~^\/api\/v1\/admin\/flows\/(.+)\/versions\/(.+)\/publish$~' => ['tables_publish'],
-            '~^\/api\/v1\/admin\/flows\/(.+)\/versions\/(.+)\/decisions$~' => ['tables_update'],
+            '~^\/api\/v1\/admin\/flows\/(.+)\/versions\/(.+)\/decisions$~' => ['tables_view', 'decisions_make'],
             '~^\/api\/v1\/admin\/flows\/(.+)\/versions$~' => ['tables_update'],
             '~^\/api\/v1\/admin\/flows\/(.+)\/activate$~' => ['tables_activate'],
             '~^\/api\/v1\/admin\/changelog\/(.+)\/(.+)\/rollback\/(.+)$~' => ['tables_update'],

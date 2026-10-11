@@ -376,7 +376,7 @@ All routes are application-scoped (`X-Application` header) and ACL-gated.
 | `POST   /api/v1/admin/flows/{id}/versions` | create a draft (`from_version_id`, `name`) | `tables_update` |
 | `GET/PUT/DELETE /api/v1/admin/flows/{id}/versions/{version_id}` | read, edit a draft, delete (a published version: + `tables_publish`) | `tables_view` / `tables_update` |
 | `POST   /api/v1/admin/flows/{id}/versions/{version_id}/publish` | publish a draft (`comment`) | `tables_publish` |
-| `POST   /api/v1/admin/flows/{id}/versions/{version_id}/decisions` | test run of a draft or a version (`{ data }`, flagged `test`) | `tables_update` |
+| `POST   /api/v1/admin/flows/{id}/versions/{version_id}/decisions` | test run of a draft or a version (`{ data }`, flagged `test`) | `decisions_make`; `tables_update` for a draft |
 | `POST   /api/v1/admin/flows/{id}/activate` | activate a published version (`version_id`) | `tables_activate` |
 | `GET    /api/v1/admin/flows/{id}/calls` | recent calls of the project's API keys | `tables_view` |
 | `GET    /api/v1/admin/tables/{id}/flows` | flows using a table, version per node | `tables_view` |

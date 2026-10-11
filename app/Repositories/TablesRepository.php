@@ -582,10 +582,7 @@ class TablesRepository extends AbstractRepository
     public function analyzeTableDecisions($table_id, $variant_id)
     {
         $table = $this->read($table_id);
-        // Use the raw MongoDB driver for this heavy read to avoid Eloquent's per-row hydration overhead
-        $mongo = new Manager(sprintf("mongodb://%s:%d", env('DB_HOST'), env('DB_PORT')));
-        $query = new Query(
-            [
+        $filter = [
             'table._id' => new ObjectID($table_id),
             'table.variant._id' => new ObjectId($variant_id),
             'applications' => ApplicationableHelper::getApplicationId(),
@@ -593,8 +590,21 @@ class TablesRepository extends AbstractRepository
             'test' => ['$ne' => true],
             // Only include decisions made after the table was last updated (older decisions
             // may reference rules that no longer exist in the current table definition)
-            'created_at' => ['$gte' => new UTCDatetime($table->updated_at->timestamp * 1000)]
-            ],
+            'created_at' => ['$gte' => new UTCDatetime($table->updated_at->timestamp * 1000)],
+        ];
+        // The analytics annotate the active content: decisions of another
+        // version (route v2 with `version`) keep their rule and condition ids
+        // but not their meaning. Decisions made before versions have none.
+        if ($table->active_version_id) {
+            $filter['$or'] = [
+                ['table.version._id' => new ObjectID((string) $table->active_version_id)],
+                ['table.version' => null],
+            ];
+        }
+        // Use the raw MongoDB driver for this heavy read to avoid Eloquent's per-row hydration overhead
+        $mongo = new Manager(sprintf("mongodb://%s:%d", env('DB_HOST'), env('DB_PORT')));
+        $query = new Query(
+            $filter,
             // Project only the 'rules' field to minimise data transfer from MongoDB
             ['projection' => ['rules' => 1]]
         );

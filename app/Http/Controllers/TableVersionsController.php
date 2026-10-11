@@ -38,12 +38,13 @@ use App\Repositories\TablesRepository;
 use App\Validators\TableRulesProvider;
 use App\Repositories\TableVersionsRepository;
 use App\Repositories\FlowVersionsRepository;
-use Illuminate\Contracts\Validation\ValidationException;
 use Nebo15\LumenApplicationable\Models\Application;
-use Nebo15\LumenApplicationable\Exceptions\AccessDeniedException;
+use App\Http\Controllers\Concerns\ChecksScopes;
 
 class TableVersionsController extends Controller
 {
+    use ChecksScopes;
+
     private $request;
 
     private $response;
@@ -172,7 +173,9 @@ class TableVersionsController extends Controller
         ]);
         $table = $this->tables->read($id);
         $version = $this->versions->find($table, $version_id);
-        if ($this->versions->isActive($table, $version)) {
+        // A published version is run in production: the active one by direct
+        // calls, any other by the keys that call it with `version` (route v2).
+        if ($version->isPublished()) {
             $this->requireScope('tables_activate');
         }
         $version = $this->versions->updateSplit(
@@ -213,12 +216,16 @@ class TableVersionsController extends Controller
      * Test run of a draft or a version from gandalf.web, with the body of the
      * route v2 (`{ variant_id, data }`). The decision is flagged `test`, left
      * out of analytics and of the default decision history, and always carries
-     * the rule details.
+     * the rule details. A published version needs decisions_make (the ACL), as
+     * calling it does; a draft also needs tables_update.
      */
     public function run(Scoring $scoring, Application $application, $id, $version_id)
     {
         $table = $this->tables->read($id);
         $version = $this->versions->find($table, $version_id);
+        if (!$version->isPublished()) {
+            $this->requireScope('tables_update');
+        }
 
         return $this->response->json(
             $scoring->evaluateRequest($table, $version, $this->request->all(), $application->_id, true, true)
@@ -285,19 +292,5 @@ class TableVersionsController extends Controller
         return $version->toArray() + ['is_active' => $this->versions->isActive($table, $version)];
     }
 
-    private function validateInput(array $data, array $rules)
-    {
-        $validator = \Validator::make($data, $rules);
-        if ($validator->fails()) {
-            throw new ValidationException($validator);
-        }
-    }
 
-    private function requireScope($scope)
-    {
-        $member = $this->request->user()->getApplicationUser();
-        if (!$member->{'can' . ucfirst($scope)}()) {
-            throw new AccessDeniedException('', 0, null, [$scope]);
-        }
-    }
 }

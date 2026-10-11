@@ -178,7 +178,13 @@ class TableImportService
             $existing = $this->repository->read($result->tableId);
             // 404 version_not_found when the exported version was deleted since
             $version = $result->versionId === null ? null : $this->versions->find($existing, $result->versionId);
-            if ($version && (!$version->isPublished() || !TableVersioning::legacyAutoPublish())) {
+            // Only a workbook of the active version merges into the table, and
+            // only in compatibility mode (the save publishes and activates it).
+            // Any other version's workbook goes to a draft: its lock token is
+            // that version's, and merging it would put old content in production.
+            $intoTable = $version === null
+                || (TableVersioning::legacyAutoPublish() && $this->versions->isActive($existing, $version));
+            if (!$intoTable) {
                 return $this->importIntoVersion($existing, $version, $result, $force);
             }
             $payload = $this->mergeService->mergeIntoTable($existing, $result, $force);

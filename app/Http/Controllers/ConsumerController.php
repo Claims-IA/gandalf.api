@@ -30,7 +30,7 @@ use App\Services\TableVersioning;
 use App\Repositories\TablesRepository;
 use App\Repositories\FlowRepository;
 use App\Repositories\FlowVersionsRepository;
-use Illuminate\Contracts\Validation\ValidationException;
+use App\Http\Controllers\Concerns\ChecksScopes;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
 use Nebo15\LumenApplicationable\Models\Application;
 use Nebo15\REST\Response;
@@ -40,6 +40,8 @@ use Nebo15\REST\Traits\ValidatesRequestsTrait;
 
 class ConsumerController extends Controller
 {
+    use ChecksScopes;
+
     use ValidatesRequestsTrait;
 
     private $response;
@@ -122,10 +124,7 @@ class ConsumerController extends Controller
         $id
     ) {
         $this->assertActiveAdmin($application);
-        $validator = \Validator::make($request->all(), ['version' => 'integer|min:1']);
-        if ($validator->fails()) {
-            throw new ValidationException($validator);
-        }
+        $this->validateInput($request->all(), ['version' => 'integer|min:1']);
         $table = $tables->read($id);
         $number = $request->input('version');
         $version = $number === null
@@ -192,25 +191,6 @@ class ConsumerController extends Controller
         return $version;
     }
 
-    /**
-     * Whether the caller, a member user or an API key of the application,
-     * holds a scope.
-     *
-     * @param  string $scope
-     * @return bool
-     */
-    private function callerCan($scope)
-    {
-        $method = 'can' . ucfirst($scope);
-        $guard = \Auth::guard();
-        if (!$guard->guest()) {
-            $member = $guard->user()->getApplicationUser();
-
-            return $member && $member->$method();
-        }
-
-        return app()->bound('applicationable.consumer') && app('applicationable.consumer')->$method();
-    }
 
     /**
      * Execute a Decision Requirement Graph (Flow) against the provided inputs.
@@ -272,10 +252,7 @@ class ConsumerController extends Controller
         $id
     ) {
         $this->assertActiveAdmin($application);
-        $validator = \Validator::make($request->all(), ['version' => 'integer|min:1', 'data' => 'present|array']);
-        if ($validator->fails()) {
-            throw new ValidationException($validator);
-        }
+        $this->validateInput($request->all(), ['version' => 'integer|min:1', 'data' => 'present|array']);
         $flow = $flows->read($id);
         $number = $request->input('version');
         $version = null;

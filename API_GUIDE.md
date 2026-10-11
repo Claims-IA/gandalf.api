@@ -466,9 +466,9 @@ lifecycle: [VERSIONS.md](VERSIONS.md). All routes require Bearer token +
 | Scope | Needed for |
 | ----- | ---------- |
 | `tables_view` | Listing and reading versions |
-| `tables_update` | Creating, editing and deleting drafts; changing the split of an inactive version |
+| `tables_update` | Creating, editing, running and deleting drafts; changing the split of a draft |
 | `tables_publish` | Publishing a draft; deleting a published version |
-| `tables_activate` | Activating a version; changing the split of the active version |
+| `tables_activate` | Activating a version; changing the split of a published version |
 | `decisions_make_inactive` | Running a published version other than the active one with the route v2; giving that scope to an API key |
 
 The owner of a new project holds every scope. Other members get
@@ -558,8 +558,9 @@ change. `409 version_published` when the version is already published.
 Allowed on drafts and published versions: the split is an operating setting
 and creates no version. Variants left out keep their percentage. In `percent`
 mode the percentages must add up to 100 (`422`). An unknown variant answers
-`422 variant_not_found`. On the active version it needs `tables_activate`, and
-the table follows at once.
+`422 variant_not_found`. On a published version it needs `tables_activate`:
+the active one is run by direct calls (the table follows at once), any other
+by the keys that call it with `version`.
 
 ---
 
@@ -599,7 +600,8 @@ the changes published since it was branched off, or it is a rollback.
 ```
 
 Runs a draft or a version from gandalf.web, with the body of the route v2
-without `version`. Requires `tables_update`. The decision is flagged
+without `version`. Requires `decisions_make` for a published version, as
+calling it does, and `tables_update` for a draft. The decision is flagged
 `"test": true`, always carries the `rules`, and is left out of analytics and
 of the default decision history.
 
@@ -655,8 +657,9 @@ version:
   draft (`409` when it changed since the export, `force=1` overrides);
 - from a published version, which is frozen: creates a draft from it, named
   "Import Excel" (`201`);
-- while the release A compatibility mode is on, a published version's workbook
-  updates the table, as before versions.
+- while the release A compatibility mode is on, the active version's workbook
+  updates the table, as before versions (another version's workbook still
+  creates a draft).
 
 The response is then the draft, with `meta.imported_into = "version"`. Only
 the content goes into a draft: the title and description stay the table's.

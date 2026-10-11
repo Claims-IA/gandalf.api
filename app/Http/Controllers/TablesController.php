@@ -293,6 +293,7 @@ class TablesController extends AbstractController
      * A round-trip file exported from a version (VERSIONS.md, batch 2b) updates
      * that draft (200), or creates a draft from that published version (201):
      * the response is then the draft, with meta.imported_into = "version".
+     * In compatibility mode, a file of the active version updates the table.
      *
      * @return \Illuminate\Http\JsonResponse
      */

@@ -15,9 +15,14 @@ namespace App\Http\Controllers;
 use Laravel\Lumen\Routing\Controller;
 use Nebo15\Changelog\Changelog;
 use Nebo15\Changelog\ControllerInterface;
+use App\Models\FlowVersion;
 use App\Models\Table;
+use App\Models\TableVersion;
 use App\Repositories\FlowRepository;
 use App\Repositories\TablesRepository;
+use App\Services\FlowVersioning;
+use App\Services\TableVersioning;
+use App\Http\Controllers\Concerns\ChecksScopes;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
 use Nebo15\REST\Response;
 use Illuminate\Http\Request;
@@ -25,6 +30,8 @@ use Illuminate\Contracts\Validation\ValidationException;
 
 class ChangelogController extends Controller implements ControllerInterface
 {
+    use ChecksScopes;
+
     protected $request;
 
     protected $response;
@@ -126,6 +133,9 @@ class ChangelogController extends Controller implements ControllerInterface
      * overwritten. The document is loaded within the current application
      * (404 when it is no longer there) and the snapshot applied to it.
      *
+     * A table or flow revision reactivates the version it recorded: see
+     * guardVersionRollback() for the scope and the versions it needs.
+     *
      * @param  string $table        The MongoDB collection name.
      * @param  string $model_id     The MongoDB ObjectID of the document.
      * @param  string $changelog_id The changelog entry ID to restore.
@@ -146,22 +156,81 @@ class ChangelogController extends Controller implements ControllerInterface
             ->where('applications', (string) $applicationId)
             ->firstOrFail();
 
+        $attributes = $changelog->model['attributes'];
+        $activeBefore = $document->active_version_id ? (string) $document->active_version_id : null;
+        if (in_array($table, ['tables', 'flows'], true)) {
+            $attributes = $this->guardVersionRollback($table, $model_id, $attributes, $activeBefore);
+        }
+
         // A table rollback can rename fields back (same field _id, other key):
         // the flows that followed the rename must follow the rollback too.
         // (The save result only says whether it succeeded, so the fields after
         // it are read back.)
         $fieldsBefore = $table === 'tables' ? $this->tableFields($model_id) : [];
 
-        $result = ['reverted' => $document->setRawAttributes($changelog->model['attributes'])->save()];
+        $result = ['reverted' => $document->setRawAttributes($attributes)->save()];
 
         if ($table === 'tables') {
             $renames = TablesRepository::fieldRenamesBetween($fieldsBefore, $this->tableFields($model_id));
             if ($renames) {
                 $result += (new FlowRepository())->followFieldRenames($model_id, $renames);
             }
+            // The rollback reactivated another version: in compatibility mode
+            // the flows follow, as on any activation (the save published
+            // nothing, the content being that version's).
+            $activeAfter = isset($attributes['active_version_id']) ? (string) $attributes['active_version_id'] : null;
+            if ($activeAfter !== $activeBefore) {
+                app(FlowVersioning::class)->followTable(Table::find($model_id));
+            }
         }
 
         return $this->response->json($result);
+    }
+
+    /**
+     * A table or flow revision records its active version (VERSIONS.md):
+     * rolling back to it reactivates that version, a production change.
+     * - Outside the compatibility mode, that needs tables_activate, and the
+     *   version must still exist (409 version_deleted), as must the revision's
+     *   version (409 version_unknown for a revision older than versions).
+     * - In the compatibility mode, where a save already activates with
+     *   tables_update, a revision whose version is gone, or older than
+     *   versions, restores its content only: the save publishes it as a new
+     *   version.
+     *
+     * @param  string      $table         'tables' or 'flows'.
+     * @param  string      $modelId
+     * @param  array       $attributes    The revision's attributes.
+     * @param  string|null $activeBefore  The active version now.
+     * @return array  The attributes to restore.
+     */
+    private function guardVersionRollback($table, $modelId, array $attributes, $activeBefore)
+    {
+        $target = isset($attributes['active_version_id']) ? (string) $attributes['active_version_id'] : null;
+        if ($target === $activeBefore) {
+            return $attributes;
+        }
+        $versions = $table === 'tables'
+            ? TableVersion::where('table_id', (string) $modelId)
+            : FlowVersion::where('flow_id', (string) $modelId);
+        $exists = $target !== null && $versions->where('_id', $target)->exists();
+
+        if (TableVersioning::legacyAutoPublish()) {
+            if (!$exists) {
+                $attributes['active_version_id'] = $activeBefore;
+            }
+
+            return $attributes;
+        }
+        if ($target === null) {
+            abort(409, 'version_unknown');
+        }
+        if (!$exists) {
+            abort(409, 'version_deleted');
+        }
+        $this->requireScope('tables_activate');
+
+        return $attributes;
     }
 
     /**

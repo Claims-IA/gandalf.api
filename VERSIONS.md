@@ -151,10 +151,11 @@ version.
 | Create a draft | From a published version or another draft. Several drafts can coexist | `tables_update` |
 | Edit a draft | Fields, variants, rules, split | `tables_update` |
 | Run a draft | From gandalf.web only; decisions flagged `test` | `tables_update` |
+| Run a published version | From gandalf.web only, as a test; decisions flagged `test` | `decisions_make`, as calling it |
 | Publish | Freezes the draft and gives it the next number. The active version does not change. Warns when the draft does not start from the active version | `tables_publish` |
 | Activate | The chosen published version becomes the active one, atomically. Only affects direct calls: flows stay pinned to their versions | `tables_activate` |
 | Roll back | Reactivate an earlier version | `tables_activate` |
-| Change the split | Mode and percentages of a version's variants, published or not, without republishing | `tables_update`; `tables_activate` for the active version (see [Open points](#open-points)) |
+| Change the split | Mode and percentages of a version's variants, published or not, without republishing | `tables_update` for a draft; `tables_activate` for a published version, which keys may call with `version` (see [Open points](#open-points)) |
 | Delete a draft | At any time | `tables_update` |
 | Delete a published version | Only if it is not active, no flow or flow version is pinned to it and no key still calls it | `tables_publish` |
 
@@ -185,7 +186,7 @@ no route escapes them.
 | Scope | Held by | Role |
 | ----- | ------- | ---- |
 | `tables_publish` | users | Publish a version; delete a published version |
-| `tables_activate` | users | Activate a version (go to production); change the split of the active version |
+| `tables_activate` | users | Activate a version (go to production); change the split of a published version; roll back to a revision of another version |
 | `decisions_make_inactive` | API keys and users | "Make API call for inactive versions": call an inactive published version with the `version` field. A user holds it to give it to a key (a user only gives a key the scopes they hold) and to call the route v2 with their own token |
 
 Existing scopes keep their meaning. A key holding only `decisions_make` runs
@@ -343,8 +344,8 @@ to its origin:
 | Workbook exported from | Import |
 | ---------------------- | ------ |
 | A draft | Updates the draft (`200`), lock on the draft |
-| A published version | Creates a draft from it, named "Import Excel" (`201`) |
-| A published version, compatibility mode on | Updates the table, as before versions |
+| A published version (any other case) | Creates a draft from it, named "Import Excel" (`201`) |
+| The active version, compatibility mode on | Updates the table, as before versions |
 | A table, before versions (no `version_id`) | Updates the table |
 
 A draft receives the content only: the title and description stay the
@@ -519,9 +520,10 @@ Release A: batches 1 to 3. Release B: batches 4 to 6.
 
 ## Open points
 
-- **Scope required to change the split of the active version**: it is a
-  production change. Implemented as proposed in batch 2 (`tables_activate`),
-  to confirm.
+- **Scope required to change the split of a published version**: it is a
+  production change, for the active version and for the keys that call
+  another one with `version`. Implemented with `tables_activate` (batch 2, then
+  extended to every published version after review), to confirm.
 - **"No key still calls it"**: window to define. Implemented as proposed in
   batch 3 (last call less than 30 days ago, `TABLE_VERSIONS_CALL_WINDOW_DAYS`),
   to confirm.

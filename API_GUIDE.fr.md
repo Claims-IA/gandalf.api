@@ -514,9 +514,9 @@ Toutes les routes exigent un token Bearer + `X-Application`.
 | Droit | Nécessaire pour |
 | ----- | --------------- |
 | `tables_view` | Lister et lire les versions |
-| `tables_update` | Créer, modifier et supprimer des brouillons ; changer la répartition d'une version inactive |
+| `tables_update` | Créer, modifier, exécuter et supprimer des brouillons ; changer la répartition d'un brouillon |
 | `tables_publish` | Publier un brouillon ; supprimer une version publiée |
-| `tables_activate` | Activer une version ; changer la répartition de la version active |
+| `tables_activate` | Activer une version ; changer la répartition d'une version publiée |
 | `decisions_make_inactive` | Exécuter une version publiée autre que la version active avec la route v2 ; donner ce droit à une clé d'API |
 
 Le propriétaire d'un nouveau projet a tous les droits. Les autres membres
@@ -608,8 +608,10 @@ change pas. `409 version_published` si la version est déjà publiée.
 Permis sur les brouillons et les versions publiées : la répartition est un
 réglage d'exploitation et ne crée pas de version. Les variantes omises gardent
 leur pourcentage. En mode `percent`, la somme doit faire 100 (`422`). Une
-variante inconnue répond `422 variant_not_found`. Sur la version active, il
-faut `tables_activate`, et la table suit immédiatement.
+variante inconnue répond `422 variant_not_found`. Sur une version publiée, il
+faut `tables_activate` : la version active est exécutée par les appels directs
+(la table suit immédiatement), une autre par les clés qui l'appellent avec
+`version`.
 
 ---
 
@@ -652,7 +654,8 @@ retour en arrière.
 ```
 
 Exécute un brouillon ou une version depuis gandalf.web, avec le corps de la
-route v2 sans `version`. Exige `tables_update`. La décision est marquée
+route v2 sans `version`. Exige `decisions_make` pour une version publiée,
+comme pour l'appeler, et `tables_update` pour un brouillon. La décision est marquée
 `"test": true`, contient toujours les `rules`, et reste en dehors des analytics
 et de l'historique des décisions par défaut.
 
@@ -712,7 +715,8 @@ version :
 - depuis une version publiée, qui est figée : crée un brouillon à partir d'elle,
   nommé « Import Excel » (`201`) ;
 - tant que le mode de compatibilité de la mise en production A est actif, le
-  classeur d'une version publiée met la table à jour, comme avant les versions.
+  classeur de la version active met la table à jour, comme avant les versions
+  (celui d'une autre version crée toujours un brouillon).
 
 La réponse est alors le brouillon, avec `meta.imported_into = "version"`. Seul
 le contenu va dans un brouillon : le titre et la description restent ceux de
