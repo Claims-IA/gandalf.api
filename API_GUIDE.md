@@ -351,10 +351,14 @@ admin can invite with the `admin` role (`403` otherwise).
 ```json
 {
   "email": "colleague@example.com",
-  "role": "manager",
-  "scope": ["tables_read", "decisions_read"]
+  "role": "member",
+  "scope": ["tables_view", "decisions_view"]
 }
 ```
+
+`role` is free text: only `admin` has an effect. Any other value (`member`,
+which gandalf.web sends, or `manager`, which the former interface sent) makes a
+plain member.
 
 > The requested `scope` must be a **subset** of the inviting user's own scope.
 > A superadmin acts as an admin holding every scope in every application, so

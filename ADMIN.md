@@ -32,8 +32,16 @@ API keys never reach the superadmin role.
 | ---- | ------- | --- |
 | Superadmin | Claims IA accounts, flag `superadmin: true` on the user | Create, list and delete every application; act as an admin holding every user scope in every application, member or not; read the admin log |
 | Application admin | A member with `role: admin` | Everything their scopes allow in their application: users, scopes, API keys, tables, settings. Invite another admin. Never delete the application |
-| Member | A member with another role | What their scopes allow |
+| Member | A member with any other role value: `member` (current gandalf.web), `manager` (former interface), `user` (demo seed)... | What their scopes allow |
 | API key (consumer) | `client_id` and `client_secret` of an application | Its consumer scopes (`decisions_make`, `decisions_view`) |
+
+The role is free text stored for each member: only `admin` has an effect, and
+the code reads no other value. It is set by an invitation (only an admin
+invites with the `admin` role) or by `POST /api/v1/projects/users/admin`, where
+an admin names another admin, who gets the caller's scopes. Adding an account
+(`POST /api/v1/projects/users`) or changing a member (`PUT
+/api/v1/projects/users`) refuses the `admin` role. The superadmin is not a role
+value but a flag on the account; API keys are not members.
 
 A superadmin keeps their own memberships: Claims IA can use its own
 applications as an ordinary member. Their role does not appear in the

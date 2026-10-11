@@ -33,8 +33,18 @@ Une clé d'API n'accède jamais au rôle de superadmin.
 | ---- | ---------- | ---- |
 | Superadmin | Comptes Claims IA, indicateur `superadmin: true` sur l'utilisateur | Créer, lister et supprimer toutes les applications ; agir comme un admin qui a tous les droits utilisateur dans toutes les applications, membre ou non ; lire le journal d'administration |
 | Admin d'application | Un membre avec `role: admin` | Tout ce que ses droits permettent dans son application : utilisateurs, droits, clés d'API, tables, paramètres. Inviter un autre admin. Jamais supprimer l'application |
-| Membre | Un membre avec un autre rôle | Ce que ses droits permettent |
+| Membre | Un membre avec toute autre valeur de rôle : `member` (gandalf.web actuel), `manager` (ancienne interface), `user` (jeu de démonstration)… | Ce que ses droits permettent |
 | Clé d'API (consumer) | `client_id` et `client_secret` d'une application | Ses droits de clé (`decisions_make`, `decisions_view`) |
+
+Le rôle est un texte libre enregistré pour chaque membre : seule la valeur
+`admin` a un effet, et le code ne lit aucune autre valeur. Il est donné par une
+invitation (seul un admin invite avec le rôle `admin`) ou par
+`POST /api/v1/projects/users/admin`, par lequel un admin nomme un autre admin,
+qui reçoit les droits de l'appelant. L'ajout d'un compte
+(`POST /api/v1/projects/users`) et la modification d'un membre
+(`PUT /api/v1/projects/users`) refusent le rôle `admin`. Le superadmin n'est pas
+une valeur de rôle mais un indicateur du compte ; les clés d'API ne sont pas des
+membres.
 
 Un superadmin garde ses propres appartenances : Claims IA peut utiliser ses
 propres applications comme un membre ordinaire. Son rôle n'apparaît pas parmi
