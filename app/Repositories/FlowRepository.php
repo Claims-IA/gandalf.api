@@ -6,6 +6,11 @@
  * Beyond the standard CRUD it enforces that a saved flow is a well-formed,
  * acyclic graph whose wiring is type-compatible with the referenced tables.
  *
+ * Each node is pinned to a version of its table (VERSIONS.md, batch 4): the
+ * graph is checked against the fields of the pinned version, and a node saved
+ * without a pin keeps its current one or takes its table's active version
+ * (FlowVersioning::pinNodes).
+ *
  * @package App\Repositories
  */
 
@@ -14,7 +19,10 @@ namespace App\Repositories;
 use App\Models\Flow;
 use App\Models\Table;
 use App\Models\FlowRun;
+use App\Models\TableVersion;
 use App\Services\GraphSort;
+use App\Services\FlowVersioning;
+use App\Services\TableVersioning;
 use App\Exceptions\FlowValidationException;
 use App\Repositories\TablesRepository;
 use MongoDB\BSON\Regex;
@@ -99,6 +107,10 @@ class FlowRepository extends AbstractRepository
             }
         }
 
+        $versioning = app(FlowVersioning::class);
+        $current = $id ? $versioning->activeVersion($model) : null;
+        $values['nodes'] = $versioning->pinNodes((array) ($values['nodes'] ?? []), $current ?: ($id ? $model : null));
+
         $this->validateGraph($values);
 
         if ($model instanceof Applicationable) {
@@ -139,12 +151,16 @@ class FlowRepository extends AbstractRepository
         unset($values['applications']);
         unset($values['category_id']);
 
-        $values['nodes'] = $this->copyReferencedTables(
+        unset($values['active_version_id']);
+
+        // Pinned to the target tables' active versions: the copy starts its own
+        // versions (in compatibility mode, its save publishes the first one).
+        $values['nodes'] = app(FlowVersioning::class)->pinNodes(self::withoutPins($this->copyReferencedTables(
             $source->nodes ?: [],
             $source->edges ?: [],
             $source->inputs ?: [],
             $project_id
-        );
+        )));
 
         /** @var Flow $model */
         $model = $this->getModel()->newInstance();
@@ -177,18 +193,38 @@ class FlowRepository extends AbstractRepository
         /** @var Flow $flow */
         $flow = $this->read($id);
 
-        $flow->nodes = $this->copyReferencedTables(
+        // Its versions pin the source project's tables: the moved flow starts
+        // its versions again, pinned to the target tables' active versions.
+        \App\Models\FlowVersion::where('flow_id', (string) $flow->getId())->delete();
+        $flow->active_version_id = null;
+        $flow->nodes = app(FlowVersioning::class)->pinNodes(self::withoutPins($this->copyReferencedTables(
             $flow->nodes ?: [],
             $flow->edges ?: [],
             $flow->inputs ?: [],
             $project_id
-        );
+        )));
         // String id, consistent with how `applications` is stored across the codebase.
         $flow->applications = [(string) $project_id];
         $flow->category_id = null;
         $flow->save();
 
         return $flow;
+    }
+
+    /**
+     * Nodes without their table version pins.
+     *
+     * @param  array $nodes
+     * @return array
+     */
+    private static function withoutPins(array $nodes)
+    {
+        return array_map(function ($node) {
+            $node = (array) $node;
+            unset($node['table_version_id']);
+
+            return $node;
+        }, $nodes);
     }
 
     /**
@@ -258,18 +294,26 @@ class FlowRepository extends AbstractRepository
      * flow keeps running as before, and is reported in flows_invalid, as its next
      * save would be refused until it is fixed.
      *
+     * Only in the compatibility mode (VERSIONS.md), where flows follow their
+     * tables: otherwise a flow stays on its pinned table versions, and the
+     * renames apply when a new flow version pins the new table version
+     * (FlowVersionsRepository::updateToActive).
+     *
      * @param  string $tableId
      * @param  array  $renames  old key => new key
      * @return array  ['flows_updated' => titles, 'flows_failed' => titles, 'flows_invalid' => titles (among flows_updated)]
      */
     public function followFieldRenames($tableId, array $renames)
     {
+        $result = ['flows_updated' => [], 'flows_failed' => [], 'flows_invalid' => []];
+        if (!TableVersioning::legacyAutoPublish()) {
+            return $result;
+        }
         $tableId = (string) $tableId;
         $flows = Flow::where('applications', (string) ApplicationableHelper::getApplicationId())
             ->where('nodes.table_id', $tableId)
             ->get();
 
-        $result = ['flows_updated' => [], 'flows_failed' => [], 'flows_invalid' => []];
         foreach ($flows as $flow) {
             try {
                 $edges = self::renameEdges(
@@ -544,9 +588,10 @@ class FlowRepository extends AbstractRepository
      *
      * @param  string   $flowId
      * @param  int|null $size
+     * @param  bool     $test  Test runs from gandalf.web instead of the others.
      * @return \Illuminate\Pagination\LengthAwarePaginator
      */
-    public function getRuns($flowId, $size = null)
+    public function getRuns($flowId, $size = null, $test = false)
     {
         // Ensures the flow exists in the current project (throws 404 otherwise).
         $this->read($flowId);
@@ -558,6 +603,8 @@ class FlowRepository extends AbstractRepository
         // traverse it).
         $query = FlowRun::where('applications', ApplicationableHelper::getApplicationId())
             ->whereRaw(['flow._id' => (string) $flowId])
+            // Runs made before batch 4 have no test flag: they are not tests.
+            ->where('test', $test ? '=' : '!=', true)
             ->orderBy('created_at', 'desc');
 
         return $this->paginateQuery($query, $size);
@@ -566,8 +613,10 @@ class FlowRepository extends AbstractRepository
     /**
      * Validate the flow graph.
      *
-     * Checks, in order: referenced tables exist in the project; node ids are
-     * unique; every edge target field is a real field key on its node's table;
+     * Checks, in order: referenced tables exist in the project, and pinned
+     * versions are published versions of them; node ids are unique; every edge
+     * target field is a real field key on its node's table (the pinned version's
+     * fields);
      * every edge source resolves (a declared input, or an upstream node's
      * output); type compatibility of each wire (a `json` output cannot feed a
      * typed input); the graph is acyclic (a DAG); and at least one output is
@@ -596,8 +645,10 @@ class FlowRepository extends AbstractRepository
 
         // Resolve nodes → their tables, checking uniqueness and project scope.
         $nodeTable = [];       // node_id => Table
+        $nodeContent = [];     // node_id => pinned TableVersion, or the Table without pin
         $nodeIds = [];
         foreach ($nodes as $node) {
+            $node = (array) $node;
             $nodeId = isset($node['node_id']) ? $node['node_id'] : null;
             $tableId = isset($node['table_id']) ? $node['table_id'] : null;
             if (!$nodeId) {
@@ -615,7 +666,21 @@ class FlowRepository extends AbstractRepository
                 $errors[] = "Node '$nodeId' references a table that does not exist in this project.";
                 continue;
             }
+            $pin = isset($node['table_version_id']) ? $node['table_version_id'] : null;
+            $content = $table;
+            if ($pin) {
+                $content = TableVersion::where('_id', (string) $pin)->where('table_id', (string) $table->_id)->first();
+                if (!$content) {
+                    $errors[] = "Node '$nodeId' is pinned to a version that is not a version of its table.";
+                    continue;
+                }
+                if (!$content->isPublished()) {
+                    $errors[] = "Node '$nodeId' is pinned to a draft: pin a published version of its table.";
+                    continue;
+                }
+            }
             $nodeTable[$nodeId] = $table;
+            $nodeContent[$nodeId] = $content;
         }
 
         // Validate each edge and collect the dependency graph (target → sources).
@@ -638,7 +703,7 @@ class FlowRepository extends AbstractRepository
                 continue;
             }
             // Target field must be a real field key on the node's table.
-            if (!$intoField || !$this->tableHasField($nodeTable[$intoNode], $intoField)) {
+            if (!$intoField || !$this->tableHasField($nodeContent[$intoNode], $intoField)) {
                 $errors[] = "Edge #$i targets field '$intoField', which is not a field of node '$intoNode'.";
                 continue;
             }
@@ -650,7 +715,7 @@ class FlowRepository extends AbstractRepository
             }
             $wiredFields[$fieldKey] = true;
 
-            $targetType = $this->fieldType($nodeTable[$intoNode], $intoField);
+            $targetType = $this->fieldType($nodeContent[$intoNode], $intoField);
 
             // Source: a declared input, or an upstream node's output.
             if (isset($from['input'])) {
@@ -694,7 +759,7 @@ class FlowRepository extends AbstractRepository
             if (!isset($nodeTable[$nid])) {
                 continue;
             }
-            foreach (($nodeTable[$nid]->fields ?: []) as $field) {
+            foreach (($nodeContent[$nid]->fields ?: []) as $field) {
                 $key = isset($field['key']) ? $field['key'] : null;
                 if ($key === null) {
                     continue;
@@ -780,11 +845,11 @@ class FlowRepository extends AbstractRepository
     /**
      * Whether a table has a field with the given key.
      *
-     * @param  Table  $table
-     * @param  string $key
+     * @param  Table|TableVersion $table  The table, or the version a node is pinned to.
+     * @param  string             $key
      * @return bool
      */
-    private function tableHasField(Table $table, $key)
+    private function tableHasField(Table|TableVersion $table, $key)
     {
         foreach (($table->fields ?: []) as $field) {
             if (isset($field['key']) && $field['key'] === $key) {
@@ -798,11 +863,11 @@ class FlowRepository extends AbstractRepository
     /**
      * The declared type of a table field.
      *
-     * @param  Table  $table
-     * @param  string $key
+     * @param  Table|TableVersion $table  The table, or the version a node is pinned to.
+     * @param  string             $key
      * @return string  numeric | boolean | string | date
      */
-    private function fieldType(Table $table, $key)
+    private function fieldType(Table|TableVersion $table, $key)
     {
         foreach (($table->fields ?: []) as $field) {
             if (isset($field['key']) && $field['key'] === $key) {

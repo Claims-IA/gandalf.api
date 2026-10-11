@@ -8,15 +8,29 @@
  * allowing decisions to be evaluated, preventing orphaned applications from
  * consuming quota. Decision creation is delegated entirely to the Scoring service.
  *
+ * Table versions (VERSIONS.md, batches 3 and 4): the route v2 takes
+ * `{ version, variant_id, data }` (`{ version, data }` for a flow) and runs the
+ * requested published version, the route v1 keeps its flat body, runs the
+ * active version and is deprecated. Both count the calls of API keys
+ * (VersionCalls).
+ *
  * @package App\Http\Controllers
  */
 
 namespace App\Http\Controllers;
 
 use App\Exceptions\AdminIsNotActivatedException;
+use App\Models\Table;
+use App\Models\TableVersion;
 use App\Models\User;
 use App\Services\Scoring;
 use App\Services\FlowEngine;
+use App\Services\VersionCalls;
+use App\Services\TableVersioning;
+use App\Repositories\TablesRepository;
+use App\Repositories\FlowRepository;
+use App\Repositories\FlowVersionsRepository;
+use App\Http\Controllers\Concerns\ChecksScopes;
 use Nebo15\LumenApplicationable\ApplicationableHelper;
 use Nebo15\LumenApplicationable\Models\Application;
 use Nebo15\REST\Response;
@@ -26,6 +40,8 @@ use Nebo15\REST\Traits\ValidatesRequestsTrait;
 
 class ConsumerController extends Controller
 {
+    use ChecksScopes;
+
     use ValidatesRequestsTrait;
 
     private $response;
@@ -58,15 +74,123 @@ class ConsumerController extends Controller
      * @return \Illuminate\Http\JsonResponse
      * @throws AdminIsNotActivatedException if the application has no active admin users.
      */
-    public function tableCheck(Request $request, Scoring $scoring, Application $application, $id)
-    {
+    public function tableCheck(
+        Request $request,
+        Scoring $scoring,
+        VersionCalls $calls,
+        Application $application,
+        $id
+    ) {
         $this->assertActiveAdmin($application);
 
         // The show_meta application setting controls whether rule details are included in the response
-        return $this->response->json(
-            $scoring->check($id, $request->all(), $application->_id, $application->getSettingsElem('show_meta', false))
-        );
+        $decision = $scoring->check($id, $request->all(), $application->_id, $application->getSettingsElem('show_meta', false));
+        $calls->record($id, null, $application->_id);
+        $response = $this->response->json($decision);
+        $response->headers->add(self::v1DeprecationHeaders(
+            $id,
+            env('DECISIONS_V1_DEPRECATED_AT'),
+            env('DECISIONS_V1_SUNSET')
+        ));
+
+        return $response;
     }
+
+    /**
+     * Route v2: evaluate a published version of a table.
+     *
+     * Body `{ "version": 4, "variant_id": "…", "data": { … } }`, `version` and
+     * `variant_id` optional. Without `version`, the active version runs. A
+     * published version other than the active one needs the
+     * decisions_make_inactive scope (403 version_not_allowed); a draft has no
+     * number and is never reachable here (404 version_not_found).
+     *
+     * @param  Request          $request
+     * @param  Scoring          $scoring
+     * @param  TablesRepository $tables
+     * @param  TableVersioning  $versioning
+     * @param  VersionCalls     $calls
+     * @param  Application      $application
+     * @param  string           $id
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function tableCheckV2(
+        Request $request,
+        Scoring $scoring,
+        TablesRepository $tables,
+        TableVersioning $versioning,
+        VersionCalls $calls,
+        Application $application,
+        $id
+    ) {
+        $this->assertActiveAdmin($application);
+        $this->validateInput($request->all(), ['version' => 'integer|min:1']);
+        $table = $tables->read($id);
+        $number = $request->input('version');
+        $version = $number === null
+            ? $versioning->activeVersion($table)
+            : $this->requestedVersion($table, (int) $number);
+
+        $decision = $scoring->evaluateRequest(
+            $table,
+            $version,
+            $request->except('version'),
+            $application->_id,
+            $application->getSettingsElem('show_meta', false)
+        );
+        $calls->record($id, $number === null ? null : (int) $number, $application->_id);
+
+        return $this->response->json($decision);
+    }
+
+    /**
+     * Headers announcing the end of the route v1 (RFC 9745 Deprecation,
+     * RFC 8594 Sunset), from two dates set in the environment. No date, no header.
+     *
+     * @param  string      $id            Table or flow id.
+     * @param  string|null $deprecatedAt  e.g. "2026-11-01" (DECISIONS_V1_DEPRECATED_AT)
+     * @param  string|null $sunset        e.g. "2027-06-30" (DECISIONS_V1_SUNSET)
+     * @param  string      $resource      tables | flows
+     * @return array
+     */
+    public static function v1DeprecationHeaders($id, $deprecatedAt, $sunset, $resource = 'tables')
+    {
+        $headers = [];
+        if ($deprecatedAt && ($time = strtotime($deprecatedAt . ' UTC')) !== false) {
+            $headers['Deprecation'] = '@' . $time;
+            $headers['Link'] = '</api/v2/' . $resource . '/' . $id . '/decisions>; rel="successor-version"';
+        }
+        if ($sunset && ($time = strtotime($sunset . ' UTC')) !== false) {
+            $headers['Sunset'] = gmdate('D, d M Y H:i:s', $time) . ' GMT';
+        }
+
+        return $headers;
+    }
+
+    /**
+     * The published version of a table numbered $number, if the caller may run it.
+     *
+     * @param  Table $table
+     * @param  int   $number
+     * @return TableVersion
+     */
+    private function requestedVersion(Table $table, $number)
+    {
+        $version = TableVersion::where('table_id', (string) $table->getId())
+            ->where('status', TableVersion::STATUS_PUBLISHED)
+            ->where('number', $number)
+            ->first();
+        if (!$version) {
+            abort(404, 'version_not_found');
+        }
+        $active = (string) $table->active_version_id === (string) $version->getId();
+        if (!$active && !$this->callerCan('decisions_make_inactive')) {
+            abort(403, 'version_not_allowed');
+        }
+
+        return $version;
+    }
+
 
     /**
      * Execute a Decision Requirement Graph (Flow) against the provided inputs.
@@ -82,13 +206,73 @@ class ConsumerController extends Controller
      * @return \Illuminate\Http\JsonResponse
      * @throws AdminIsNotActivatedException if the application has no active admin users.
      */
-    public function flowCheck(Request $request, FlowEngine $flowEngine, Application $application, $id)
-    {
+    public function flowCheck(
+        Request $request,
+        FlowEngine $flowEngine,
+        VersionCalls $calls,
+        Application $application,
+        $id
+    ) {
         $this->assertActiveAdmin($application);
 
-        return $this->response->json(
-            $flowEngine->run($id, $request->all(), $application->_id, $application->getSettingsElem('show_meta', false))
+        $run = $flowEngine->run($id, $request->all(), $application->_id, $application->getSettingsElem('show_meta', false));
+        $calls->recordFlow($id, null, $application->_id);
+        $response = $this->response->json($run);
+        $response->headers->add(self::v1DeprecationHeaders(
+            $id,
+            env('DECISIONS_V1_DEPRECATED_AT'),
+            env('DECISIONS_V1_SUNSET'),
+            'flows'
+        ));
+
+        return $response;
+    }
+
+    /**
+     * Route v2 for a flow: body `{ "version": 2, "data": { … } }`, `version`
+     * optional. As for a table, another published version than the active one
+     * needs decisions_make_inactive (403 version_not_allowed).
+     *
+     * @param  Request                $request
+     * @param  FlowEngine             $flowEngine
+     * @param  FlowRepository         $flows
+     * @param  FlowVersionsRepository $versions
+     * @param  VersionCalls           $calls
+     * @param  Application            $application
+     * @param  string                 $id
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function flowCheckV2(
+        Request $request,
+        FlowEngine $flowEngine,
+        FlowRepository $flows,
+        FlowVersionsRepository $versions,
+        VersionCalls $calls,
+        Application $application,
+        $id
+    ) {
+        $this->assertActiveAdmin($application);
+        $this->validateInput($request->all(), ['version' => 'integer|min:1', 'data' => 'present|array']);
+        $flow = $flows->read($id);
+        $number = $request->input('version');
+        $version = null;
+        if ($number !== null) {
+            $version = $versions->findPublished($flow, (int) $number);
+            if (!$versions->isActive($flow, $version) && !$this->callerCan('decisions_make_inactive')) {
+                abort(403, 'version_not_allowed');
+            }
+        }
+
+        $run = $flowEngine->run(
+            $flow,
+            (array) $request->input('data'),
+            $application->_id,
+            $application->getSettingsElem('show_meta', false),
+            $version
         );
+        $calls->recordFlow($id, $number === null ? null : (int) $number, $application->_id);
+
+        return $this->response->json($run);
     }
 
     /**

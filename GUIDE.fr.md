@@ -181,6 +181,13 @@ Les rôles sont attribués lors de l'invitation d'un utilisateur à une applicat
 Seul un superadmin crée ou supprime une application : voir
 [ADMIN.fr.md](ADMIN.fr.md).
 
+Deux droits encadrent la mise en production des versions de table :
+`tables_publish` (publier une version, supprimer une version publiée) et
+`tables_activate` (activer une version, changer la répartition des variantes
+de la version active). Le propriétaire d'un projet les a ; un admin les accorde
+aux autres membres. Ceux qui préparent et publient une version ne sont pas
+forcément ceux qui la mettent en production.
+
 ---
 
 ### 2.2 Tables, règles et conditions
@@ -206,6 +213,10 @@ Une **Table** est le conteneur principal du moteur de décision. Elle définit :
 #### Les Variantes
 
 Chaque table contient au moins une **Variante**. Les règles sont définies au niveau de la variante. Une table peut avoir plusieurs variantes pour faire de l'A/B testing (voir section 2.3).
+
+#### Les versions
+
+Le contenu d'une table (champs, variantes, règles) est versionné : l'API exécute la **version active** de la table, et chaque décision enregistre la version qu'elle a exécutée (`table.version`). Pour l'instant, chaque enregistrement qui change le contenu d'une table publie et active automatiquement une nouvelle version : l'utilisation ne change pas. L'API permet aussi de gérer les versions explicitement : préparer des brouillons, les publier, activer une version publiée ou revenir à une version précédente (voir [API_GUIDE.fr.md](API_GUIDE.fr.md#versions-de-table)). Le cycle complet est décrit dans [VERSIONS.fr.md](VERSIONS.fr.md).
 
 #### Les Règles
 
@@ -290,15 +301,22 @@ Le comportement de sélection est contrôlé par `variants_probability` au nivea
 
 | Valeur | Comportement |
 |--------|--------------|
-| `first` | Toujours utiliser la première variante (ou celle marquée `is_default = true`). |
+| `first` | Toujours utiliser la première variante. |
 | `random` | Sélection aléatoire uniforme entre toutes les variantes. |
 | `percent` | Sélection pondérée. Chaque variante a un champ `probability` (1–100) ; la somme doit faire 100. |
 
 Il est aussi possible de **forcer une variante** en passant son `_id` dans le corps de la requête d'évaluation (champ `variant_id`).
 
-#### Marqueur de variante par défaut
+Chaque version de la table a sa propre répartition. Elle se change sur une version déjà publiée sans en créer de nouvelle (route `split`, voir [API_GUIDE.fr.md](API_GUIDE.fr.md#versions-de-table)) : c'est un réglage d'exploitation, pas un changement de règles.
 
-Chaque table doit avoir exactement une variante avec `is_default: true`. Cette variante est utilisée comme référence lors de la sélection `first`.
+#### Export d'une variante
+
+Il n'y a pas de variante par défaut. Les exports Excel et CSV portent sur une
+seule variante : celle désignée par `variant_id`, la première sinon. Ils
+peuvent aussi porter sur une version précise (`version_id`, par défaut la
+version active). Réimporter un classeur Excel exporté depuis un brouillon met
+ce brouillon à jour ; depuis une version publiée, qui est figée, il crée un
+brouillon à partir d'elle (voir [API_GUIDE.fr.md](API_GUIDE.fr.md#versions-de-table)).
 
 ---
 
@@ -383,7 +401,6 @@ Content-Type: application/json
     {
       "title": "Règles standard",
       "description": "Variante de référence",
-      "is_default": true,
       "default_decision": "Refusé",
       "default_title": "Aucune règle applicable",
       "default_description": "La demande ne remplit aucun critère d'approbation.",
@@ -432,7 +449,6 @@ Content-Type: application/json
       {
         "_id": "65f1a2b3c4d5e6f7a8b9c0d5",
         "title": "Règles standard",
-        "is_default": true,
         "default_decision": "Refusé",
         "probability": 0,
         "rules": [
@@ -502,7 +518,6 @@ Content-Type: application/json
     {
       "_id": "65f1a2b3c4d5e6f7a8b9c0d5",
       "title": "Règles standard",
-      "is_default": true,
       "default_decision": "Refusé",
       "rules": [
         {
@@ -654,6 +669,43 @@ POST /api/v1/tables/65f1a2b3c4d5e6f7a8b9c0d1/decisions
 }
 ```
 
+#### Route v2 : choisir la version exécutée
+
+La route `POST /api/v1/tables/{id}/decisions` exécute toujours la **version
+active** de la table ; elle est déclarée obsolète. La route v2 sépare les
+paramètres d'exécution des données d'entrée et permet de fixer la version
+publiée à exécuter :
+
+```http
+POST /api/v2/tables/65f1a2b3c4d5e6f7a8b9c0d1/decisions
+Authorization: Basic <base64(consumer_id:consumer_secret)>
+X-Application: {APP_ID}
+Content-Type: application/json
+
+{
+  "version": 3,
+  "data": {
+    "credit_score": 780,
+    "revenu_annuel": 52000,
+    "pays": "FR"
+  }
+}
+```
+
+- Sans `version`, la version active est exécutée, comme en v1.
+- Avec `version`, la version publiée de ce numéro est exécutée. Si ce n'est pas
+  la version active, la clé d'API doit avoir le droit
+  `decisions_make_inactive` (« Make API call for inactive versions ») :
+  un client peut ainsi rester sur sa version et évoluer à son rythme.
+- La réponse est la même qu'en v1 ; `table.version` indique la version
+  exécutée.
+- Une erreur de saisie est signalée sous `data.*` (par exemple `data.pays`).
+
+Depuis gandalf.web, un brouillon ou une version se teste avec
+`POST /api/v1/admin/tables/{id}/versions/{version_id}/decisions` (même corps,
+sans `version`) : la décision est marquée `test` et n'entre pas dans les
+analytics. Les détails sont dans [API_GUIDE.fr.md](API_GUIDE.fr.md#post-apiv2tablesiddecisions--évaluer-une-version).
+
 ---
 
 ### 3.5 Exécution d'une variante spécifique
@@ -678,7 +730,6 @@ Content-Type: application/json
     {
       "_id": "65f1a2b3c4d5e6f7a8b9c0d5",
       "title": "Règles standard",
-      "is_default": true,
       "probability": 80,
       "default_decision": "Refusé",
       "rules": [...]
@@ -686,7 +737,6 @@ Content-Type: application/json
     {
       "title": "Règles assouplie (test)",
       "description": "Seuil de score abaissé à 550",
-      "is_default": false,
       "probability": 20,
       "default_decision": "Refusé",
       "rules": [
@@ -723,6 +773,10 @@ Content-Type: application/json
 ```
 
 Le champ `variant_id` force l'utilisation de la variante désignée, indépendamment de la stratégie de sélection configurée.
+
+Avec la route v2, `variant_id` se place à côté de `version`, hors de `data` :
+`{ "variant_id": "65f1a2b3c4d5e6f7a8b9c0f1", "data": { … } }`. Une variante
+absente de la version exécutée répond `422 variant_not_found`.
 
 ---
 

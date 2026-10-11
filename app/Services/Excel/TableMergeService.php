@@ -3,7 +3,8 @@
  * TableMergeService
  *
  * Builds the full table payload for TablesRepository::createOrUpdate() from a
- * parsed Excel import (one variant per file) merged into the existing table.
+ * parsed Excel import (one variant per file) merged into the existing table,
+ * or into the version the file was exported from (VERSIONS.md, batch 2b).
  *
  * Merge semantics:
  *  - optimistic lock: the file's exported_at must match the table's current
@@ -19,7 +20,7 @@
  *    the hidden column are passed through, preserving analytics continuity;
  *    ids absent from the sheet are deleted);
  *  - all other variants are re-submitted untouched with their _ids so that
- *    Table::setVariants preserves their created_* and is_default flags.
+ *    setVariants preserves their created_* stamps.
  *
  * @package App\Services\Excel
  */
@@ -29,6 +30,7 @@ namespace App\Services\Excel;
 use App\Exceptions\ExcelImportException;
 use App\Exceptions\TableConflictException;
 use App\Models\Table;
+use App\Models\TableVersion;
 
 class TableMergeService
 {
@@ -43,14 +45,15 @@ class TableMergeService
      * Merge the parsed Excel content into the existing table and return the
      * full payload for TablesRepository::createOrUpdate($payload, $tableId).
      *
-     * @param  Table             $existing  The table loaded from the repository.
-     * @param  ExcelImportResult $result    Parsed workbook.
-     * @param  bool              $force     Skip the optimistic-lock check.
+     * @param  Table|TableVersion $existing  The table, or the version the file was
+     *                                       exported from, holding the content to merge into.
+     * @param  ExcelImportResult  $result    Parsed workbook.
+     * @param  bool               $force     Skip the optimistic-lock check.
      * @return array
-     * @throws TableConflictException  When the table changed since export (409).
+     * @throws TableConflictException  When the table or version changed since export (409).
      * @throws ExcelImportException    On variant-not-found / field-in-use (422).
      */
-    public function mergeIntoTable(Table $existing, ExcelImportResult $result, bool $force = false): array
+    public function mergeIntoTable(Table|TableVersion $existing, ExcelImportResult $result, bool $force = false): array
     {
         $this->checkOptimisticLock($existing, $result, $force);
 
@@ -140,7 +143,6 @@ class TableMergeService
                     'description' => $result->variantDescription,
                 ], fn ($v) => $v !== '') + [
                     'default_decision' => $result->defaultDecision,
-                    'is_default' => true,
                     'rules' => $rules,
                 ],
             ],
@@ -157,7 +159,7 @@ class TableMergeService
      * it closes the race window left by updated_at's 1-second resolution — a
      * concurrent edit within the same second still changes the content hash.
      */
-    public static function contentHash(Table $table): string
+    public static function contentHash(Table|TableVersion $table): string
     {
         $snapshot = [
             'fields' => $table->fields()->get()->toArray(),
@@ -166,7 +168,7 @@ class TableMergeService
         return sha1(json_encode($snapshot));
     }
 
-    private function checkOptimisticLock(Table $existing, ExcelImportResult $result, bool $force): void
+    private function checkOptimisticLock(Table|TableVersion $existing, ExcelImportResult $result, bool $force): void
     {
         if ($force) {
             return;
@@ -202,7 +204,7 @@ class TableMergeService
      * @return array  Field payload entries in sheet column order.
      * @throws ExcelImportException  When a removed field is still used by another variant.
      */
-    private function mergeFields(Table $existing, $existingVariants, $targetVariant, ExcelImportResult $result): array
+    private function mergeFields(Table|TableVersion $existing, $existingVariants, $targetVariant, ExcelImportResult $result): array
     {
         // Existing fields indexed by key
         $existingByKey = [];
@@ -291,7 +293,7 @@ class TableMergeService
     /**
      * Target variant: rules from the sheet, scalars from _meta (title,
      * description, default_decision), the rest carried over from the DB.
-     * is_default / created_* are preserved by Table::setVariants via the _id.
+     * created_* stamps are preserved by setVariants via the _id.
      */
     private function buildTargetVariant($variant, ExcelImportResult $result): array
     {
@@ -326,7 +328,7 @@ class TableMergeService
      *
      * @return string[]
      */
-    private function collectNewFieldKeys(Table $existing, ExcelImportResult $result): array
+    private function collectNewFieldKeys(Table|TableVersion $existing, ExcelImportResult $result): array
     {
         $existingKeys = [];
         foreach ($existing->fields()->get() as $field) {

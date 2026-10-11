@@ -25,6 +25,7 @@ Maintained fork of a Lumen decision-table and flow API backed by MongoDB. Preser
 
 - [README.md](README.md), [API_GUIDE.md](API_GUIDE.md), [API_GUIDE.fr.md](API_GUIDE.fr.md), [openapi.yaml](openapi.yaml): public API documentation.
 - [DRG.md](DRG.md) and [DRG.fr.md](DRG.fr.md): bilingual flow model, execution and API guides.
+- [VERSIONS.md](VERSIONS.md) and [VERSIONS.fr.md](VERSIONS.fr.md): bilingual design and delivery status of table and flow versioning (drafts, published and active versions); update them with each versioning batch.
 - [ADMIN.md](ADMIN.md) and [ADMIN.fr.md](ADMIN.fr.md): bilingual two-level administration (superadmin, application admin, admin log).
 - [app/Http/routes.php](app/Http/routes.php), `app/Http/Controllers/` and `app/Repositories/`: request and persistence boundaries.
 - [app/Services/FlowEngine.php](app/Services/FlowEngine.php) and `app/Services/Excel/`: flow execution and spreadsheet codecs.

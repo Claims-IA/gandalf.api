@@ -20,6 +20,8 @@ use App\Exceptions\TableConflictException;
 use App\Services\ConditionsTypes;
 use App\Services\TableExportService;
 use App\Services\TableImportService;
+use App\Services\TableVersioning;
+use App\Repositories\TableVersionsRepository;
 use App\Validators\TableRulesProvider;
 use App\Http\Controllers\Concerns\CopyMoveGuard;
 use Nebo15\REST\AbstractController;
@@ -39,6 +41,8 @@ class TablesController extends AbstractController
 
     private TableExportService $exportService;
     private TableImportService $importService;
+    private TableVersionsRepository $versions;
+    private TableVersioning $versioning;
 
     protected $validationRules = [
         'create' => [],
@@ -67,10 +71,14 @@ class TablesController extends AbstractController
         Response $response,
         ConditionsTypes $conditionsTypes,
         TableExportService $exportService,
-        TableImportService $importService
+        TableImportService $importService,
+        TableVersionsRepository $versions,
+        TableVersioning $versioning
     ) {
         $this->exportService = $exportService;
         $this->importService = $importService;
+        $this->versions = $versions;
+        $this->versioning = $versioning;
 
         $rules = TableRulesProvider::rules($conditionsTypes);
         $this->validationRules['create'] = $rules;
@@ -197,9 +205,15 @@ class TablesController extends AbstractController
      *
      * Accepts a ?format=csv|excel|json query parameter (defaults to json).
      * Excel exports ONE variant as a round-trip workbook: ?variant_id=... selects
-     * it (default variant when omitted); re-importing the file updates the table.
-     * CSV exports the default variant (legacy 3-section format). JSON exports
-     * all variants.
+     * it (first variant when omitted); re-importing the file updates its origin.
+     * CSV exports one variant too (legacy 3-section format). JSON exports all
+     * variants.
+     *
+     * ?version_id=... exports a draft or a published version of the table
+     * (VERSIONS.md, batch 2b); without it, the active version. While the
+     * release A compatibility mode is on, the active version is exported from
+     * the table, which holds its copy: re-importing the file then updates the
+     * table, as before versions.
      *
      * @param  string $id  MongoDB ObjectID of the table
      * @return \Symfony\Component\HttpFoundation\Response
@@ -209,23 +223,39 @@ class TablesController extends AbstractController
         $format   = strtolower($this->request->query('format', 'json'));
         $table    = $this->getRepository()->read($id);
         $filename = $this->sanitizeFilename($table->title);
+        $variantId = $this->request->query('variant_id');
+        if ($variantId !== null && !preg_match('/^[0-9a-f]{24}$/i', $variantId)) {
+            return $this->response->json(['message' => 'variant_id invalide.'], 422);
+        }
+        $versionId = $this->request->query('version_id');
+        if ($versionId !== null && !preg_match('/^[0-9a-f]{24}$/i', $versionId)) {
+            return $this->response->json(['message' => 'version_id invalide.'], 422);
+        }
+        // 404 version_not_found for a version of another table
+        $version = $versionId !== null
+            ? $this->versions->find($table, $versionId)
+            : $this->versioning->activeVersion($table);
+        $source = ($version === null
+            || (TableVersioning::legacyAutoPublish() && $this->versions->isActive($table, $version)))
+            ? $table
+            : $version;
+        if ($versionId !== null) {
+            $filename .= $version->isPublished() ? '-v' . $version->number : '-draft';
+        }
 
         switch ($format) {
             case 'csv':
-                $content = $this->exportService->toCsv($table);
+                // Throws VariantNotFound (→404) when the variant does not exist
+                $content = $this->exportService->toCsv($table, $source, $variantId);
                 return response($content, 200, [
                     'Content-Type'        => 'text/csv; charset=UTF-8',
                     'Content-Disposition' => 'attachment; filename="' . $filename . '.csv"',
                 ]);
 
             case 'excel':
-                $variantId = $this->request->query('variant_id');
-                if ($variantId !== null && !preg_match('/^[0-9a-f]{24}$/i', $variantId)) {
-                    return $this->response->json(['message' => 'variant_id invalide.'], 422);
-                }
                 try {
                     // Throws VariantNotFound (→404) when the variant does not exist
-                    $tmpPath = $this->exportService->toExcel($table, $variantId);
+                    $tmpPath = $this->exportService->toExcel($table, $variantId, $version, $source);
                 } catch (ExcelImportException $e) {
                     // e.g. a field key colliding with a reserved sentinel header
                     return $this->response->json([
@@ -239,7 +269,7 @@ class TablesController extends AbstractController
 
             case 'json':
             default:
-                $content = $this->exportService->toJson($table);
+                $content = $this->exportService->toJson($table, $source);
                 return response($content, 200, [
                     'Content-Type'        => 'application/json; charset=UTF-8',
                     'Content-Disposition' => 'attachment; filename="' . $filename . '.json"',
@@ -259,6 +289,11 @@ class TablesController extends AbstractController
      *
      * All other files (JSON, CSV, legacy Excel dumps, or round-trip files
      * imported with mode=create) create a new table.
+     *
+     * A round-trip file exported from a version (VERSIONS.md, batch 2b) updates
+     * that draft (200), or creates a draft from that published version (201):
+     * the response is then the draft, with meta.imported_into = "version".
+     * In compatibility mode, a file of the active version updates the table.
      *
      * @return \Illuminate\Http\JsonResponse
      */
@@ -293,10 +328,16 @@ class TablesController extends AbstractController
                     $canCreate,
                     (bool) $member->canTables_update()
                 );
-                return $this->response->json(
-                    $outcome['table']->toArray(),
-                    $outcome['updated'] ? 200 : 201
-                );
+                $status = $outcome['updated'] ? 200 : 201;
+                if ($outcome['version']) {
+                    return $this->response->json(
+                        $outcome['version']->toArray()
+                            + ['is_active' => $this->versions->isActive($outcome['table'], $outcome['version'])],
+                        $status,
+                        ['imported_into' => 'version']
+                    );
+                }
+                return $this->response->json($outcome['table']->toArray(), $status, ['imported_into' => 'table']);
             }
 
             // Legacy formats (JSON, 3-section CSV, flat Excel) can only create:

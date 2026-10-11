@@ -9,7 +9,9 @@
  * Two Excel paths coexist:
  *  - round-trip workbooks (gandalf-xlsx-v2, hidden _meta sheet) go through
  *    fromExcelRoundTrip(): update-in-place with optimistic locking, full
- *    shared Lumen validation, cell-addressed errors;
+ *    shared Lumen validation, cell-addressed errors. A workbook exported from
+ *    a version (VERSIONS.md, batch 2b) updates that draft, or creates a draft
+ *    from that published version;
  *  - legacy flat Excel dumps (no _meta sheet) fall back to the 3-section
  *    parser below and always create a new table.
  *
@@ -46,7 +48,9 @@ namespace App\Services;
 
 use App\Exceptions\ExcelImportException;
 use App\Models\Table;
+use App\Models\TableVersion;
 use App\Repositories\TablesRepository;
+use App\Repositories\TableVersionsRepository;
 use App\Services\Excel\ExcelErrorTranslator;
 use App\Services\Excel\ExcelTableReader;
 use App\Services\Excel\TableMergeService;
@@ -62,19 +66,25 @@ class TableImportService
     private TableMergeService $mergeService;
     private ExcelErrorTranslator $errorTranslator;
     private ConditionsTypes $conditionsTypes;
+    private TableVersionsRepository $versions;
+
+    // Name of a draft created by importing a published version's workbook
+    const IMPORT_DRAFT_NAME = 'Import Excel';
 
     public function __construct(
         TablesRepository $repository,
         ExcelTableReader $excelReader,
         TableMergeService $mergeService,
         ExcelErrorTranslator $errorTranslator,
-        ConditionsTypes $conditionsTypes
+        ConditionsTypes $conditionsTypes,
+        TableVersionsRepository $versions
     ) {
         $this->repository = $repository;
         $this->excelReader = $excelReader;
         $this->mergeService = $mergeService;
         $this->errorTranslator = $errorTranslator;
         $this->conditionsTypes = $conditionsTypes;
+        $this->versions = $versions;
     }
 
     /**
@@ -102,6 +112,13 @@ class TableImportService
      * Create flow (mode=create, or a file without embedded ids): all ids are
      * dropped and a fresh single-variant table is created.
      *
+     * Versions (VERSIONS.md, batch 2b): a file exported from a draft updates
+     * that draft, with the lock on the draft. A file exported from a published
+     * version, which is frozen, creates a draft from it, unless the release A
+     * compatibility mode is on: the table is then updated as before, which
+     * publishes and activates a version. Files exported before versions carry
+     * no version and update the table.
+     *
      * @param  string $path       Absolute path of the uploaded workbook.
      * @param  string $mode       'auto' (ids → update, else create), 'create', 'update'.
      * @param  bool   $force      Skip the optimistic-lock check on update.
@@ -109,7 +126,8 @@ class TableImportService
      * @param  bool   $canUpdate  Whether the caller has the tables_update scope.
      *                            Both default to false: the import route itself
      *                            only requires tables_view.
-     * @return array{table: Table, updated: bool}
+     * @return array{table: Table, version: TableVersion|null, updated: bool}
+     *         `version`: the draft written, null when the table was.
      * @throws ExcelImportException                    422 — parse/merge/validation errors.
      * @throws \App\Exceptions\TableConflictException  409 — stale export.
      * @throws \Illuminate\Database\Eloquent\ModelNotFoundException 404 — table gone/other tenant.
@@ -158,6 +176,17 @@ class TableImportService
             // ModelNotFoundException (→404) when the id is unknown or belongs
             // to another application (repository is tenant-scoped)
             $existing = $this->repository->read($result->tableId);
+            // 404 version_not_found when the exported version was deleted since
+            $version = $result->versionId === null ? null : $this->versions->find($existing, $result->versionId);
+            // Only a workbook of the active version merges into the table, and
+            // only in compatibility mode (the save publishes and activates it).
+            // Any other version's workbook goes to a draft: its lock token is
+            // that version's, and merging it would put old content in production.
+            $intoTable = $version === null
+                || (TableVersioning::legacyAutoPublish() && $this->versions->isActive($existing, $version));
+            if (!$intoTable) {
+                return $this->importIntoVersion($existing, $version, $result, $force);
+            }
             $payload = $this->mergeService->mergeIntoTable($existing, $result, $force);
             $tableId = $result->tableId;
         } else {
@@ -172,7 +201,37 @@ class TableImportService
 
         return [
             'table' => $this->repository->createOrUpdate($payload, $tableId),
+            'version' => null,
             'updated' => $update,
+        ];
+    }
+
+    /**
+     * Merge a workbook into the version it was exported from: a draft is
+     * updated in place, a published version (frozen) gets a new draft holding
+     * the merged content. The content is validated against the table's types;
+     * the title and description stay the table's.
+     *
+     * @return array{table: Table, version: TableVersion, updated: bool}
+     */
+    private function importIntoVersion(Table $table, TableVersion $version, \App\Services\Excel\ExcelImportResult $result, bool $force): array
+    {
+        $payload = $this->mergeService->mergeIntoTable($version, $result, $force);
+        // Identity stays on the table: only the content goes into the draft.
+        unset($payload['title'], $payload['description']);
+        $payload['matching_type'] = $table->matching_type;
+        $payload['decision_type'] = $table->decision_type;
+        $this->validatePayload($payload, $result);
+
+        $updated = !$version->isPublished();
+        $draft = $updated
+            ? $version
+            : $this->versions->createDraft($table, (string) $version->getId(), self::IMPORT_DRAFT_NAME);
+
+        return [
+            'table' => $table,
+            'version' => $this->versions->updateDraft($draft, $payload),
+            'updated' => $updated,
         ];
     }
 
@@ -246,8 +305,8 @@ class TableImportService
     /**
      * Parse a JSON string into a table data array.
      *
-     * Supports the current export format where the default variant lives under
-     * the "table" key and additional variants live under "variants". Also accepts
+     * Supports the current export format where the first variant lives under
+     * the "table" key and the other variants under "variants". Also accepts
      * the legacy flat format where all variants are in a single "variants" array.
      *
      * _id fields are stripped so the import always creates a fresh document.
@@ -267,15 +326,9 @@ class TableImportService
             throw new \InvalidArgumentException('Le fichier JSON doit contenir un objet à la racine.');
         }
 
-        // Current format: default variant under "table", others under "variants"
+        // Current format: first variant under "table", the others under "variants"
         if (isset($data['table'])) {
-            $defaultVariant             = $data['table'];
-            $defaultVariant['is_default'] = true;
-            $otherVariants              = $data['variants'] ?? [];
-            foreach ($otherVariants as &$v) {
-                $v['is_default'] = false;
-            }
-            $data['variants'] = array_merge([$defaultVariant], array_values($otherVariants));
+            $data['variants'] = array_merge([$data['table']], array_values($data['variants'] ?? []));
             unset($data['table']);
         }
 
@@ -439,7 +492,6 @@ class TableImportService
                     'default_decision'    => $metadata['default_decision'] ?? '',
                     'default_title'       => '',
                     'default_description' => '',
-                    'is_default'          => true,
                     'rules'               => $rules,
                 ]
             ],

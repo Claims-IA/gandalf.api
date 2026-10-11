@@ -132,7 +132,19 @@ class ApplicationAclMiddleware
      */
     private function applicationCaller()
     {
-        $guard = $this->auth->guard();
+        return self::callerFrom($this->auth);
+    }
+
+    /**
+     * The caller as seen by the current application, from an auth factory:
+     * also used by the controllers' own scope checks (Concerns\ChecksScopes).
+     *
+     * @param  Auth $auth
+     * @return mixed
+     */
+    public static function callerFrom(Auth $auth)
+    {
+        $guard = $auth->guard();
         if (!$guard->guest()) {
             return $guard->user()->getApplicationUser();
         }

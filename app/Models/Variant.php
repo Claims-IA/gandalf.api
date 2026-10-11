@@ -36,7 +36,6 @@ class Variant extends Base
         'default_title'       => '',
         'default_description' => '',
         'probability'         => 0,
-        'is_default'          => false,
     ];
 
     protected $visible = [
@@ -47,7 +46,6 @@ class Variant extends Base
         'default_title',
         'default_description',
         'probability',
-        'is_default',
         'created_at',
         'created_by',
         'updated_at',
@@ -65,7 +63,6 @@ class Variant extends Base
         'default_decision',
         'matching_type',
         'probability',
-        'is_default',
         'created_at',
         'created_by',
         'updated_at',
@@ -78,7 +75,6 @@ class Variant extends Base
         'description'  => 'string',
         'default_title'       => 'string',
         'default_description' => 'string',
-        'is_default'   => 'boolean',
     ];
 
     /**

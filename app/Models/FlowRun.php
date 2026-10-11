@@ -10,11 +10,12 @@
  *
  * @package App\Models
  *
- * @property array  $flow         { _id, title }
+ * @property array  $flow         { _id, title, version: { _id, number } | null }
  * @property mixed  $application
  * @property array  $inputs
  * @property array  $answer
- * @property array  $nodes        Per-node trace: { node_id, table_id, decision_id, answer }
+ * @property array  $nodes        Per-node trace: { node_id, table_id, table_version, decision_id, answer }
+ * @property bool   $test         A test run from gandalf.web (VERSIONS.md, batch 4)
  */
 
 namespace App\Models;
@@ -46,6 +47,7 @@ class FlowRun extends Base implements Applicationable
         'answer',
         'nodes',
         'error',
+        'test',
         self::CREATED_AT,
         self::UPDATED_AT,
     ];
@@ -57,5 +59,6 @@ class FlowRun extends Base implements Applicationable
         'answer',
         'nodes',
         'error',
+        'test',
     ];
 }

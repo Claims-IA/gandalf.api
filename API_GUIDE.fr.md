@@ -20,6 +20,7 @@
    - [Utilisateurs](#utilisateurs)
    - [Projets](#projets)
    - [Tables de décision](#tables-de-décision)
+   - [Versions de table](#versions-de-table)
    - [Décisions (Admin)](#décisions-admin)
    - [Décisions (Consommateur)](#décisions-consommateur)
    - [Journal des modifications](#journal-des-modifications)
@@ -193,6 +194,7 @@ GET /api/v1/admin/tables?size=50&page=2
 | `403` | Accès refusé (ex. : aucun admin actif) |
 | `404` | Ressource introuvable |
 | `410` | Token expiré |
+| `409` | Conflit (ex. : modification d'une version de table publiée) |
 | `422` | Erreur de validation |
 
 ---
@@ -490,7 +492,7 @@ Exemple complet :
 
 #### `GET /api/v1/admin/tables/{id}` — Consulter une table
 
-Retourne la table complète avec tous ses champs, variantes et règles.
+Retourne la table complète avec tous ses champs, variantes et règles. `active_version_id` est la version publiée exécutée par défaut (voir [VERSIONS.fr.md](VERSIONS.fr.md)).
 
 ---
 
@@ -535,13 +537,239 @@ la règle ou la condition s'est déclenchée.
 
 ---
 
+### Versions de table
+
+Une table exécute sa **version active**. Les changements se préparent dans des
+**brouillons**, sont figés par la **publication** et mis en production par
+l'**activation**. Conception et cycle de vie : [VERSIONS.fr.md](VERSIONS.fr.md).
+Toutes les routes exigent un token Bearer + `X-Application`.
+
+| Droit | Nécessaire pour |
+| ----- | --------------- |
+| `tables_view` | Lister et lire les versions |
+| `tables_update` | Créer, modifier, exécuter et supprimer des brouillons ; changer la répartition d'un brouillon |
+| `tables_publish` | Publier un brouillon ; supprimer une version publiée |
+| `tables_activate` | Activer une version ; changer la répartition d'une version publiée |
+| `decisions_make_inactive` | Exécuter une version publiée autre que la version active avec la route v2 ; donner ce droit à une clé d'API |
+
+Le propriétaire d'un nouveau projet a tous les droits. Les autres membres
+reçoivent `tables_publish` et `tables_activate` d'un admin du projet. Un droit
+manquant répond `403 access_denied`, avec le droit dans `meta.scopes`.
+
+Tant que gandalf.web ne gère pas les versions (mode de compatibilité),
+`PUT /api/v1/admin/tables/{id}` publie et active encore une nouvelle version
+dès que le contenu change.
+
+#### `GET /api/v1/admin/tables/{id}/versions`
+
+Les brouillons (dernier modifié en premier), puis les versions publiées (la
+plus récente en premier), sans leur contenu.
+
+```json
+{
+  "data": [
+    { "_id": "...", "status": "draft", "number": null, "name": "Seuil 750", "origin_version_id": "...", "is_active": false },
+    { "_id": "...", "status": "published", "number": 2, "comment": "Relever le seuil", "published_at": "2026-10-10T16:59:42+00:00", "autopublished": false, "is_active": true }
+  ]
+}
+```
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/versions` : créer un brouillon
+
+```json
+{ "name": "Seuil 750", "from_version_id": "..." }
+```
+
+Les deux sont facultatifs : `from_version_id` vaut par défaut la version
+active. Répond `201` avec le brouillon complet. Les identifiants des variantes
+sont repris de la version source.
+
+---
+
+#### `GET /api/v1/admin/tables/{id}/versions/{version_id}`
+
+La version complète : champs, variantes, règles, `variants_probability`,
+`is_active`. `404 version_not_found` si la version n'appartient pas à la table.
+
+---
+
+#### `PUT /api/v1/admin/tables/{id}/versions/{version_id}` : modifier un brouillon
+
+Même corps et même validation que `PUT /api/v1/admin/tables/{id}` pour le
+contenu (`fields`, `variants`, `variants_probability`), plus un `name`
+facultatif. Le titre, la description, `matching_type` et `decision_type`
+restent sur la table. `409 version_published` sur une version publiée.
+
+---
+
+#### `DELETE /api/v1/admin/tables/{id}/versions/{version_id}`
+
+Supprime un brouillon (`tables_update`) ou une version publiée
+(`tables_publish`). `409 version_in_use` pour la version active (activez-en
+d'abord une autre) et pour une version publiée qu'une clé d'API du projet a
+appelée par son numéro dans les 30 derniers jours
+(`TABLE_VERSIONS_CALL_WINDOW_DAYS` ; une clé supprimée ne compte plus), ou sur
+laquelle un flow est figé.
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/versions/{version_id}/publish`
+
+```json
+{ "comment": "Relever le seuil" }
+```
+
+Fige le brouillon et lui attribue le numéro suivant. La version active ne
+change pas. `409 version_published` si la version est déjà publiée.
+
+---
+
+#### `PUT /api/v1/admin/tables/{id}/versions/{version_id}/split` : répartition des variantes
+
+```json
+{
+  "variants_probability": "percent",
+  "variants": [
+    { "_id": "<variante A>", "probability": 70 },
+    { "_id": "<variante B>", "probability": 30 }
+  ]
+}
+```
+
+Permis sur les brouillons et les versions publiées : la répartition est un
+réglage d'exploitation et ne crée pas de version. Les variantes omises gardent
+leur pourcentage. En mode `percent`, la somme doit faire 100 (`422`). Une
+variante inconnue répond `422 variant_not_found`. Sur une version publiée, il
+faut `tables_activate` : la version active est exécutée par les appels directs
+(la table suit immédiatement), une autre par les clés qui l'appellent avec
+`version`.
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/activate`
+
+```json
+{ "version_id": "..." }
+```
+
+La version publiée devient celle qu'exécutent les appels directs. Renvoie la
+table. `409 version_not_published` pour un brouillon. Réactiver une version
+précédente permet de revenir en arrière. Si des champs ont été renommés entre
+l'ancienne version active et celle-ci, `meta` contient `field_renames`,
+`flows_updated`, `flows_failed` et `flows_invalid`, comme pour une mise à jour
+de table.
+
+`meta.callers_without_version` liste les clés d'API qui ont appelé la table
+sans préciser de version récemment (lignes de la route `calls` ci-dessous) :
+l'activation change ce qu'elles exécutent. `meta.flows_outdated` liste les flows
+encore figés sur une autre version de la table : l'activation ne change rien
+pour eux tant qu'ils n'y sont pas amenés (voir plus bas). En mode de
+compatibilité de la mise en production A, les flows suivent leurs tables et la
+liste est vide.
+
+**Avertissement de divergence.** Publier ou activer une version qui ne descend
+pas de la version active réussit, avec un avertissement : la version ne
+contient pas les changements publiés depuis qu'elle en est partie, ou c'est un
+retour en arrière.
+
+```json
+{ "meta": { "code": 200, "warning": "version_diverges", "active_version": { "_id": "...", "number": 3 } } }
+```
+
+---
+
+#### `POST /api/v1/admin/tables/{id}/versions/{version_id}/decisions` : exécution de test
+
+```json
+{ "variant_id": "...", "data": { "credit_score": 750, "revenu_annuel": 60000 } }
+```
+
+Exécute un brouillon ou une version depuis gandalf.web, avec le corps de la
+route v2 sans `version`. Exige `decisions_make` pour une version publiée,
+comme pour l'appeler, et `tables_update` pour un brouillon. La décision est marquée
+`"test": true`, contient toujours les `rules`, et reste en dehors des analytics
+et de l'historique des décisions par défaut.
+
+---
+
+#### `GET /api/v1/admin/tables/{id}/calls`
+
+Appels récents des clés d'API du projet à la table, du plus récent au plus
+ancien, une ligne par clé et version demandée (`requested_version: null` :
+sans version, donc la version active). Seules les clés d'API sont comptées ;
+`meta.window_days` donne la fenêtre.
+
+```json
+{
+  "meta": { "code": 200, "window_days": 30 },
+  "data": [
+    { "consumer": "<client_id>", "description": "Site web", "requested_version": null, "last_call_at": "2026-10-10T16:59:42+00:00", "count": 1520 },
+    { "consumer": "<client_id>", "description": "Partenaire", "requested_version": 3, "last_call_at": "2026-10-09T08:12:03+00:00", "count": 87 }
+  ]
+}
+```
+
+---
+
+#### Flows qui utilisent une table
+
+Les flows sont versionnés eux aussi, chaque nœud figé sur une version de sa
+table : voir [DRG.fr.md](DRG.fr.md#versions).
+
+- `GET /api/v1/admin/tables/{id}/flows` liste les flows du projet qui utilisent
+  la table, avec la version de table exécutée par chaque nœud et
+  `outdated: true` quand ce n'est pas la version active.
+- `POST /api/v1/admin/tables/{id}/flows/update` les amène à la version active
+  de la table : un brouillon de chaque flow la fige, ses fils suivant les
+  renommages de champs. Corps `{ "flow_ids": [...], "publish": true, "activate": true }`,
+  tout facultatif ; `publish` exige `tables_publish`, `activate` exige
+  `tables_activate` et implique `publish`. Chaque flow est signalé `updated`,
+  `up_to_date` ou `incompatible` (avec les erreurs du graphe, laissé tel quel).
+
+---
+
+#### Exporter et importer une version
+
+`GET /api/v1/admin/tables/{id}/export?format=excel&version_id=...&variant_id=...`
+exporte un brouillon ou une version publiée, par défaut la version active, et
+une variante (Excel et CSV), par défaut la première. Le nom du fichier se
+termine par `-v<numéro>` ou `-draft`. Il n'y a pas de variante par défaut :
+`is_default` n'est plus renvoyé, et il est ignoré quand un client ou un ancien
+fichier l'envoie.
+
+`POST /api/v1/admin/tables/import` avec un classeur Excel exporté depuis une
+version :
+
+- depuis un brouillon : met ce brouillon à jour (`200`), avec le verrou
+  optimiste sur le brouillon (`409` s'il a changé depuis l'export, `force=1`
+  passe outre) ;
+- depuis une version publiée, qui est figée : crée un brouillon à partir d'elle,
+  nommé « Import Excel » (`201`) ;
+- tant que le mode de compatibilité de la mise en production A est actif, le
+  classeur de la version active met la table à jour, comme avant les versions
+  (celui d'une autre version crée toujours un brouillon).
+
+La réponse est alors le brouillon, avec `meta.imported_into = "version"`. Seul
+le contenu va dans un brouillon : le titre et la description restent ceux de
+la table.
+
+---
+
 ### Décisions (Admin)
 
 Tous les endpoints admin de décision nécessitent un token Bearer + `X-Application`.
 
 #### `GET /api/v1/admin/decisions` — Lister les décisions
 
-Paramètres de requête : `size`, `table_id`, `variant_id`.
+Paramètres de requête : `size`, `table_id`, `variant_id`, `test`. Les
+exécutions de test depuis gandalf.web sont exclues ; `test=true` les liste à la
+place.
+
+Chaque décision porte `consumer` (le `client_id` de la clé d'API qui a fait
+l'appel, `null` pour un utilisateur) et `test`. Les deux sont absents des
+décisions antérieures aux versions de table.
 
 ---
 
@@ -577,6 +805,11 @@ ou un token Bearer.
 
 #### `POST /api/v1/tables/{id}/decisions` — Évaluer une décision
 
+Obsolète : utilisez [la route v2](#post-apiv2tablesiddecisions--évaluer-une-version),
+qui sépare les paramètres d'exécution des données d'entrée. Cette route
+exécute la version active. Une fois ses dates fixées, ses réponses portent
+`Deprecation`, `Sunset` et `Link: </api/v2/tables/{id}/decisions>; rel="successor-version"`.
+
 Soumettez les valeurs de tous les champs définis dans la table. Tous les champs doivent être
 présents (utilisez `null` pour les valeurs absentes).
 
@@ -603,6 +836,7 @@ Le paramètre optionnel `variant_id` force l'évaluation d'une variante spécifi
       "_id": "507f1f77bcf86cd799439017",
       "title": "Scoring Crédit",
       "matching_type": "first",
+      "version": { "_id": "...", "number": 3 },
       "variant": { "_id": "...", "title": "Standard" }
     },
     "title": "Bon crédit",
@@ -616,6 +850,39 @@ Le paramètre optionnel `variant_id` force l'évaluation d'une variante spécifi
 ```
 
 Le tableau `rules` n'est inclus que lorsque le paramètre `show_meta` de l'application est activé.
+
+`table.version` est la version de la table exécutée par la décision (voir [VERSIONS.fr.md](VERSIONS.fr.md)) ; elle vaut `null` pour les décisions antérieures au versionnement des tables.
+
+---
+
+#### `POST /api/v2/tables/{id}/decisions` : évaluer une version
+
+```json
+{
+  "version": 3,
+  "variant_id": "507f1f77bcf86cd799439016",
+  "data": { "credit_score": 750, "revenu_annuel": 60000 }
+}
+```
+
+`version` et `variant_id` sont facultatifs ; `data` contient la valeur de
+chaque champ. La réponse est celle de la v1 : `table.version` et
+`table.variant` indiquent ce qui a été exécuté.
+
+| Requête | Version exécutée |
+| ------- | ---------------- |
+| Sans `version` | La version active |
+| `"version": 3`, la version active | La version 3 |
+| `"version": 3`, inactive | La version 3, seulement avec le droit `decisions_make_inactive` (clé d'API ou utilisateur) ; sinon `403 version_not_allowed` |
+
+Erreurs : `404 version_not_found` (aucune version publiée de ce numéro ; un
+brouillon n'en a pas), `422 variant_not_found` (variante absente de la version
+exécutée), `422` avec les erreurs sous `data.*` pour des données d'entrée
+invalides (et pour un corps sans `data`).
+
+Les flows ont la même route, `POST /api/v2/flows/{id}/decisions` avec
+`{ "version": 2, "data": { ... } }` (sans `variant_id`) ; voir
+[DRG.fr.md](DRG.fr.md#api-http).
 
 ---
 

@@ -14,12 +14,16 @@ Les tables elles-mêmes restent **inchangées** — chaque champ garde
 nœud de plusieurs flows et continuer d'être appelée directement via
 `POST /tables/{id}/decisions`.
 
+Les flows sont versionnés, et chaque nœud est figé sur une version de sa table :
+voir [Versions](#versions).
+
 ## Table des matières
 
 1. [Modèle mental](#modèle-mental)
 2. [Modèle de données](#modèle-de-données)
 3. [Le contrat `answer` unifié](#le-contrat-answer-unifié)
 4. [Cycle de vie](#cycle-de-vie)
+   - [Versions](#versions)
 5. [Règles de validation du graphe](#règles-de-validation-du-graphe)
 6. [Exécution](#exécution)
 7. [Compatibilité de types](#compatibilité-de-types)
@@ -82,8 +86,8 @@ résultats de chaque nœud.
 
   // Une entrée par table référencée.
   "nodes": [
-    { "node_id": "n_risk",    "table_id": "69b29698c33fe7db7106c697" },
-    { "node_id": "n_verdict", "table_id": "69b0a1c2c33fe7db7106c701" }
+    { "node_id": "n_risk",    "table_id": "69b29698c33fe7db7106c697", "table_version_id": "6a54…c1" },
+    { "node_id": "n_verdict", "table_id": "69b0a1c2c33fe7db7106c701", "table_version_id": "6a54…c2" }
   ],
 
   // Câblage. `from` est une entrée de flow ({input}) OU la sortie d'un nœud
@@ -116,7 +120,8 @@ qu'esquissait le champ `group` inutilisé de `Decision`.
 ```jsonc
 {
   "_id": "6a5437d895812a10c20a7630",
-  "flow": { "_id": "6a5437d8ad556857e10c1380", "title": "Credit approval" },
+  "flow": { "_id": "6a5437d8ad556857e10c1380", "title": "Credit approval",
+            "version": { "_id": "6a5437d8ad556857e10c1390", "number": 3 } },
   "application": "507f1f77bcf86cd799439011",
   "inputs": { "salary": 1500, "history": "clean" },
   "answer": { "verdict": "approved", "risk": 40 },
@@ -126,9 +131,15 @@ qu'esquissait le champ `group` inutilisé de `Decision`.
     { "node_id": "n_verdict", "table_id": "69b0…", "input": { "risk": 40 },
       "decision_id": "6a54…b2", "answer": { "final_decision": "approved" } }
   ],
-  "error": null   // { "errors": ["…"] } sur une exécution échouée/partielle
+  "error": null,  // { "errors": ["…"] } sur une exécution échouée/partielle
+  "test": false   // une exécution de test depuis gandalf.web
 }
 ```
+
+Chaque nœud de la trace porte aussi `table_version` (`{ _id, number }` de la
+version de table exécutée), et la `Decision` de chaque nœud porte
+`flow: { _id, version: { _id, number } }`. Le document du flow porte
+`active_version_id`, et chaque nœud `table_version_id` (voir [Versions](#versions)).
 
 ---
 
@@ -188,6 +199,56 @@ La validation a lieu **deux fois**, à dessein :
 
 ---
 
+## Versions
+
+Les flows sont versionnés comme les tables ([VERSIONS.fr.md](VERSIONS.fr.md),
+lot 4). Le document du flow garde son identité et pointe vers sa **version
+active** (`active_version_id`) ; une **version de flow** (`flow_versions`) porte
+le graphe : `inputs`, `outputs`, `nodes`, `edges`. Un brouillon se modifie, se
+publie (figé et numéroté), puis s'active ; l'API exécute la version active.
+
+**Chaque nœud est figé sur une version publiée de sa table**
+(`nodes[].table_version_id`). Activer une nouvelle version de table ne change
+donc rien pour un flow : il continue d'exécuter la version sur laquelle il est
+figé jusqu'à ce qu'une nouvelle version du flow en fige une autre. Un nœud
+enregistré sans version figée garde la sienne, ou prend la version active de sa
+table ; figer un nœud sur un brouillon de table est refusé.
+
+| Situation | Comportement d'un flow |
+| --------- | ---------------------- |
+| Mode de compatibilité actif (comportement de la mise en production A, `TABLE_VERSIONS_LEGACY_AUTOPUBLISH`) | Un enregistrement du flow publie et active une version quand le graphe change ; les flows suivent chaque activation des versions de leurs tables (une version qui fige la nouvelle, publiée et activée) et leurs renommages de champs |
+| Mode de compatibilité inactif (mise en production B) | Les flows restent sur leurs versions figées. Activer une version de table liste les flows restés en arrière (`meta.flows_outdated`) ; `POST /admin/tables/{id}/flows/update` les amène à la version active |
+
+**Amener des flows à la version active d'une table** : pour chaque flow dont la
+version active fige la table ailleurs, un brouillon tiré de cette version fige
+la version active de la table, et ses fils suivent les renommages de champs
+entre les deux versions de table (mêmes règles qu'une mise à jour de table, voir
+[API HTTP](#api-http)). Un flow dont le graphe ne valide plus est signalé
+`incompatible` et laissé tel quel. Les brouillons peuvent être publiés, puis
+activés, dans le même appel (`publish`, `activate`, avec les droits
+`tables_publish` et `tables_activate`).
+
+**Flows signalés** : la liste des flows porte `outdated: true` pour un flow qui
+exécute une autre version que la version active de sa table, et
+`GET /admin/tables/{id}/flows` liste les flows qui utilisent une table, avec la
+version exécutée par chaque nœud.
+
+**Garde-fous** : une version de table sur laquelle un flow ou une version de flow
+est figé ne peut pas être supprimée (`409 version_in_use`), pas plus que la
+version active d'un flow ou une version de flow qu'une clé d'API appelle encore.
+
+**Migration** (`2026_10_10_150000_FlowVersions`) : chaque flow devient sa
+version 1, publiée et active, chaque nœud figé sur la version de sa table active
+au moment de la migration (celle qu'il exécutait). Idempotente ; le retour
+arrière supprime `flow_versions`, les versions figées et `active_version_id`.
+
+**Copie et déplacement** : une copie démarre ses propres versions, ses nœuds
+figés sur les versions actives des tables cibles. Les versions d'un flow déplacé
+figeaient les tables du projet source : elles sont supprimées et le flow repart
+de la version 1 dans le projet cible.
+
+---
+
 ## Règles de validation du graphe
 
 `FlowRepository::validateGraph()` collecte **tous** les problèmes et lève une
@@ -199,6 +260,8 @@ seule `FlowValidationException` (rendue en un unique 422 avec un tableau
 | Chaque nœud a un `node_id` | `A node is missing node_id.` |
 | Les node ids sont uniques | `Duplicate node_id 'n_risk'.` |
 | Le `table_id` d'un nœud existe **dans ce projet** | `Node 'n_risk' references a table that does not exist in this project.` |
+| Le `table_version_id` d'un nœud est une version de sa table | `Node 'n_risk' is pinned to a version that is not a version of its table.` |
+| ... et une version publiée | `Node 'n_risk' is pinned to a draft: pin a published version of its table.` |
 | Une arête cible un nœud connu | `Edge #2 targets an unknown node.` |
 | Le champ cible est un vrai champ de la table du nœud | `Edge #2 targets field 'x', which is not a field of node 'n_verdict'.` |
 | Aucun champ câblé par plus d'une arête | `Field 'risk' of node 'n_verdict' is wired by more than one edge.` |
@@ -249,8 +312,14 @@ save.
      chaque champ est alimenté par son arête câblée si elle existe, sinon par une
      entrée de flow de même nom. Les entrées non liées — y compris `variant_id`,
      qui est local à la table — ne sont jamais transmises à un nœud.
-   - `Scoring::check()` évalue la table sans modification et renvoie l'enveloppe
-     unifiée (portant `answer`, `answer_types`, `_id`).
+   - le nœud exécute la version de table sur laquelle il est figé (la version
+     active de sa table s'il n'en a pas), et `buildNodeInput()` lit les champs
+     de cette version ;
+   - `Scoring::evaluate()` l'évalue et renvoie l'enveloppe unifiée (portant
+     `answer`, `answer_types`, `_id`).
+
+   Le moteur exécute la version active du flow, ou la version demandée, et sa
+   réponse porte `flow: { _id, version }`.
 3. **Assembler** — `assembleOutputs()` lit le `from_node` / `from_output` de
    chaque sortie déclarée depuis les résultats des nœuds vers `answer` /
    `answer_types`.
@@ -316,7 +385,20 @@ protégées par ACL.
 | `GET    /api/v1/admin/flows/{id}/runs` | historique paginé des exécutions | `tables_view` |
 | `POST   /api/v1/admin/flows/{id}/copyto/{project_id}` | copier le flow vers un autre projet | `tables_create` |
 | `POST   /api/v1/admin/flows/{id}/moveto/{project_id}` | déplacer le flow vers un autre projet | `tables_create`, `tables_delete` |
-| `POST   /api/v1/flows/{id}/decisions` | **exécuter le flow** | `decisions_make` |
+| `POST   /api/v1/flows/{id}/decisions` | **exécuter le flow** (version active ; obsolète) | `decisions_make` |
+| `POST   /api/v2/flows/{id}/decisions` | exécuter une version : `{ version, data }` (une autre version que la version active exige `decisions_make_inactive`) | `decisions_make` |
+| `GET    /api/v1/admin/flows/{id}/versions` | brouillons et versions publiées | `tables_view` |
+| `POST   /api/v1/admin/flows/{id}/versions` | créer un brouillon (`from_version_id`, `name`) | `tables_update` |
+| `GET/PUT/DELETE /api/v1/admin/flows/{id}/versions/{version_id}` | lire, modifier un brouillon, supprimer (une version publiée : + `tables_publish`) | `tables_view` / `tables_update` |
+| `POST   /api/v1/admin/flows/{id}/versions/{version_id}/publish` | publier un brouillon (`comment`) | `tables_publish` |
+| `POST   /api/v1/admin/flows/{id}/versions/{version_id}/decisions` | exécution de test d'un brouillon ou d'une version (`{ data }`, marquée `test`) | `decisions_make` ; `tables_update` pour un brouillon |
+| `POST   /api/v1/admin/flows/{id}/activate` | activer une version publiée (`version_id`) | `tables_activate` |
+| `GET    /api/v1/admin/flows/{id}/calls` | appels récents des clés d'API du projet | `tables_view` |
+| `GET    /api/v1/admin/tables/{id}/flows` | flows qui utilisent une table, version par nœud | `tables_view` |
+| `POST   /api/v1/admin/tables/{id}/flows/update` | amener des flows à la version active de la table | `tables_update` (+ `tables_publish`, `tables_activate`) |
+
+La liste des exécutions (`GET /admin/flows/{id}/runs`) exclut les exécutions de
+test ; `test=true` les liste à la place.
 
 Le CRUD est fourni par l'`AbstractController` Nebo15 ; les écritures passent par
 `FlowRepository::createOrUpdate`, où le graphe est validé.
@@ -327,7 +409,9 @@ stocké et n'efface jamais `nodes`/`edges`/`outputs`. C'est le graphe fusionné 
 est revalidé.
 
 **Renommage d'un champ de table** (même `_id` de champ, nouvelle `key`, via la
-mise à jour de la table) : les flows du projet qui utilisent la table suivent le
+mise à jour de la table), en mode de compatibilité (voir [Versions](#versions) ;
+sinon les renommages s'appliquent quand un flow est amené à la nouvelle version
+de table) : les flows du projet qui utilisent la table suivent le
 renommage. Les fils vers le champ visent la nouvelle clé, et un champ qui était
 alimenté implicitement par l'entrée du flow de même nom reçoit un fil explicite
 depuis cette entrée : le flow garde ses entrées et son comportement. Quand un
@@ -439,13 +523,17 @@ Une `FlowValidationException` est rendue en **HTTP 422** :
 
 | Fichier | Responsabilité |
 | ------- | -------------- |
-| `app/Models/Flow.php` | Document Flow (title, inputs, outputs, nodes, edges) |
+| `app/Models/Flow.php` | Document Flow (titre, version active, copie de son graphe) |
+| `app/Models/FlowVersion.php` | Une version du graphe d'un flow, nœuds figés sur des versions de table |
+| `app/Services/FlowVersioning.php` | Version active, versions figées, mode de compatibilité (`syncFromFlow`, `followTable`), publication |
+| `app/Repositories/FlowVersionsRepository.php` | Brouillons, publication, activation, garde-fous, `updateToActive()` |
+| `app/Http/Controllers/FlowVersionsController.php` | Routes des versions de flow |
 | `app/Models/FlowRun.php` | Une exécution enregistrée, reliant ses décisions |
 | `app/Repositories/FlowRepository.php` | CRUD, `validateGraph()`, `getRuns()`, compatibilité de types |
 | `app/Services/FlowEngine.php` | `run()` — exécution topologique, câblage, persistance |
 | `app/Services/GraphSort.php` | Tri topologique / détection de cycle partagés (Kahn) |
 | `app/Http/Controllers/FlowsController.php` | CRUD admin + `runs()` |
-| `app/Http/Controllers/ConsumerController.php` | `flowCheck()` — l'endpoint d'exécution |
+| `app/Http/Controllers/ConsumerController.php` | `flowCheck()` et `flowCheckV2()` : les endpoints d'exécution |
 | `app/Exceptions/FlowValidationException.php` | Porte `errors[]` + `flow_run_id` optionnel |
 | `app/Exceptions/Handler.php` | Rend le 422 |
 | `app/Models/Decision.php` | Enveloppe unifiée `answer`/`answer_types`/`decision_kind` |

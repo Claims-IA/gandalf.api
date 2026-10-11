@@ -498,4 +498,49 @@ class TablesImportExportCest
         $I->seeResponseCodeIs(200);
         unset($table);
     }
+
+    /**
+     * Table versions, batch 2b (VERSIONS.md): a workbook exported from a draft
+     * updates that draft, not the table; a stale one is a conflict.
+     */
+    public function aDraftWorkbookUpdatesTheDraft(ApiTester $I)
+    {
+        $table = $this->createTable($I);
+        $I->sendPOST("api/v1/admin/tables/{$table->_id}/versions", ['name' => 'Excel draft']);
+        $draft = $I->getResponseFields()->data;
+
+        $I->sendGET(sprintf(self::EXPORT_URL, $table->_id) . '&version_id=' . $draft->_id);
+        $I->seeResponseCodeIs(200);
+        $path = codecept_output_dir() . uniqid('export_') . '.xlsx';
+        $I->grabResponseToFile($path);
+        $spreadsheet = IOFactory::load($path);
+        $spreadsheet->getSheetByName('Rules')->setCellValueExplicit('B5', '>= 30', DataType::TYPE_STRING);
+        (new XlsxWriter($spreadsheet))->save($path);
+
+        $this->importFile($I, $path);
+        $I->seeResponseCodeIs(200);
+        $I->seeResponseContains('"imported_into":"version"');
+        $imported = $I->getResponseFields()->data;
+        $I->assertEquals($draft->_id, $imported->_id);
+        $I->assertEquals('30', $imported->variants[0]->rules[0]->conditions[0]->value);
+
+        $I->sendGET("api/v1/admin/tables/{$table->_id}");
+        $I->assertEquals('21', $I->getResponseFields()->data->variants[0]->rules[0]->conditions[0]->value, 'The table did not change');
+
+        $this->importFile($I, $path);
+        $I->seeResponseCodeIs(409);
+        unlink($path);
+    }
+
+    public function thereIsNoDefaultVariant(ApiTester $I)
+    {
+        $payload = $this->tablePayload();
+        $payload['variants'][0]['is_default'] = true;
+        $table = $this->createTable($I, $payload);
+        $I->dontSeeResponseContains('is_default');
+
+        $I->sendGET("api/v1/admin/tables/{$table->_id}/export?format=json");
+        $I->dontSeeResponseContains('is_default');
+        $I->seeResponseContains('"table"');
+    }
 }

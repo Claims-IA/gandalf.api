@@ -8,8 +8,9 @@
  *
  * Workbook structure:
  *   "Rules"  — visible grid: 1 title row, 3 header rows, then one rule per row.
- *   "_meta"  — veryHidden sheet holding table/variant identity and the
- *              optimistic-lock token (exported_at = Table.updated_at).
+ *   "_meta"  — veryHidden sheet holding table/version/variant identity and
+ *              the optimistic-lock token (exported_at = updated_at of the
+ *              exported content: the table, or the version).
  *   "_help"  — visible cheat-sheet of the condition-cell grammar (ignored on read).
  *
  * "Rules" sheet map:
@@ -74,5 +75,9 @@ class ExcelLayout
         // Content hash of the table at export time — closes the 1-second
         // resolution window of the updated_at optimistic-lock token.
         'content_hash' => 12,
+        // Table versions (VERSIONS.md, batch 2b): the version exported, blank
+        // in files exported before. A draft has no number.
+        'version_id' => 13,
+        'version_number' => 14,
     ];
 }

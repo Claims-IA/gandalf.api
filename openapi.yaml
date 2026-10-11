@@ -56,6 +56,10 @@ tags:
     description: Project (application) lifecycle — delete and export
   - name: Tables
     description: Decision table CRUD, analytics, export, and import
+  - name: Table versions
+    description: >
+      Drafts, publication, activation and variant split of a table's versions
+      (see VERSIONS.md).
   - name: Categories
     description: >
       Per-application labels (name + colour) used to group and classify tables
@@ -111,6 +115,16 @@ components:
         type: string
         pattern: '^[0-9a-f]{24}$'
         example: "507f1f77bcf86cd799439011"
+
+    PathVersionId:
+      name: version_id
+      in: path
+      required: true
+      description: MongoDB ObjectID of a version of the table.
+      schema:
+        type: string
+        pattern: '^[0-9a-f]{24}$'
+        example: "507f1f77bcf86cd799439030"
 
     QuerySize:
       name: size
@@ -236,6 +250,13 @@ components:
             list (see `GET /api/v1/admin/categories`). Purely organisational —
             groups and colours the flow in listings. Null means uncategorised.
           example: "cat_9f3a1c7b2d4e5f60"
+        active_version_id:
+          type: string
+          nullable: true
+          readOnly: true
+          description: >
+            Published flow version the API runs (VERSIONS.md, batch 4); the
+            graph below is its copy.
         inputs:
           type: array
           description: The flow's public input contract.
@@ -272,14 +293,7 @@ components:
         nodes:
           type: array
           items:
-            type: object
-            properties:
-              node_id:
-                type: string
-                example: "n_final"
-              table_id:
-                type: string
-                example: "69b29698c33fe7db7106c697"
+            $ref: '#/components/schemas/FlowNode'
         edges:
           type: array
           description: >
@@ -324,6 +338,109 @@ components:
                   field:
                     type: string
 
+    VersionRef:
+      type: object
+      nullable: true
+      properties:
+        _id:
+          type: string
+        number:
+          type: integer
+          nullable: true
+
+    FlowVersionSummary:
+      type: object
+      description: A flow version without its graph (VERSIONS.md, batch 4).
+      properties:
+        _id:
+          type: string
+        flow_id:
+          type: string
+        status:
+          type: string
+          enum: [draft, published]
+        number:
+          type: integer
+          nullable: true
+        name:
+          type: string
+        comment:
+          type: string
+        origin_version_id:
+          type: string
+          nullable: true
+        autopublished:
+          type: boolean
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_active:
+          type: boolean
+
+    FlowVersion:
+      description: A flow version with its graph; each node pinned to a table version.
+      allOf:
+        - $ref: '#/components/schemas/FlowVersionSummary'
+        - type: object
+          properties:
+            inputs:
+              type: array
+              items:
+                type: object
+            outputs:
+              type: array
+              items:
+                type: object
+            nodes:
+              type: array
+              items:
+                $ref: '#/components/schemas/FlowNode'
+            edges:
+              type: array
+              items:
+                type: object
+
+    FlowNode:
+      type: object
+      properties:
+        node_id:
+          type: string
+          example: "n_final"
+        table_id:
+          type: string
+          example: "69b29698c33fe7db7106c697"
+        table_version_id:
+          type: string
+          nullable: true
+          description: >
+            Published version of the table the node runs (VERSIONS.md, batch 4).
+            Sent without it, a node keeps its pin or takes its table's active
+            version. Null for a table without versions.
+
+    TableFlow:
+      type: object
+      description: A flow using a table, with the table version each of its nodes runs.
+      properties:
+        _id:
+          type: string
+        title:
+          type: string
+        active_version:
+          $ref: '#/components/schemas/VersionRef'
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id:
+                type: string
+              table_version:
+                $ref: '#/components/schemas/VersionRef'
+        outdated:
+          type: boolean
+          description: A node runs a table version other than the active one.
+
     FlowListItem:
       type: object
       description: >
@@ -339,6 +456,12 @@ components:
           example: "Credit approval"
         description:
           type: string
+        active_version_id:
+          type: string
+          nullable: true
+        outdated:
+          type: boolean
+          description: A node runs a table version other than its table's active one.
 
     FlowResult:
       type: object
@@ -347,6 +470,14 @@ components:
         flow_run_id:
           type: string
           example: "6a5437d895812a10c20a7630"
+        flow:
+          type: object
+          description: The flow and the version run.
+          properties:
+            _id:
+              type: string
+            version:
+              $ref: '#/components/schemas/VersionRef'
         answer:
           type: object
           description: The flow's declared outputs, by name.
@@ -373,6 +504,8 @@ components:
           type: string
         table_id:
           type: string
+        table_version:
+          $ref: '#/components/schemas/VersionRef'
         input:
           type: object
           additionalProperties: true
@@ -395,6 +528,11 @@ components:
               type: string
             title:
               type: string
+            version:
+              $ref: '#/components/schemas/VersionRef'
+        test:
+          type: boolean
+          description: A test run from gandalf.web.
         inputs:
           type: object
           additionalProperties: true
@@ -861,14 +999,6 @@ components:
             Weight percentage used when `variants_probability` is `percent`.
             All variant probabilities should sum to 100.
           example: 70
-        is_default:
-          type: boolean
-          description: >
-            Marks this variant as the table's default. Exactly one variant per
-            table carries `is_default: true` — when none is set, the first
-            variant is auto-promoted. The default variant is the one exported
-            under the `table` key and used for CSV/Excel export.
-          example: true
         created_at:
           type: string
           format: date-time
@@ -908,10 +1038,6 @@ components:
         description:
           type: string
           example: "Standard scoring variant"
-        is_default:
-          type: boolean
-          description: Whether this variant is the table's default variant.
-          example: true
 
     # ── Table ────────────────────────────────────────────────────────────────
     Table:
@@ -920,6 +1046,14 @@ components:
         _id:
           type: string
           example: "507f1f77bcf86cd799439017"
+        active_version_id:
+          type: string
+          nullable: true
+          readOnly: true
+          description: >
+            Published table version run by default (see VERSIONS.md). Null for
+            a table saved before table versioning and not saved since.
+          example: "507f1f77bcf86cd799439030"
         title:
           type: string
           example: "Credit Scoring"
@@ -1011,15 +1145,15 @@ components:
         Like `Table` but with `_id` and system-managed fields stripped (timestamps,
         `created_by`/`updated_by`) so a fresh document is always created on import.
 
-        **Variant layout.** The default variant is exported under the top-level
+        **Variant layout.** The first variant is exported under the top-level
         `table` key (a single variant object), while every other variant is listed
-        in the `variants` array. On import, the object under `table` is treated as
-        the default variant (`is_default: true`) and merged ahead of `variants`.
+        in the `variants` array. On import, the object under `table` is placed
+        ahead of `variants`. There is no default variant (VERSIONS.md, batch 2b):
+        an `is_default` key in an older file is ignored.
 
-        **Backward compatibility.** The legacy flat format — where *all* variants
-        (including the default) live in the `variants` array and there is no `table`
-        key — is still accepted on import. In that case the first variant is taken
-        as the default.
+        **Backward compatibility.** The legacy flat format, where *all* variants
+        live in the `variants` array and there is no `table` key, is still
+        accepted on import.
       properties:
         title:
           type: string
@@ -1045,17 +1179,15 @@ components:
             $ref: '#/components/schemas/Field'
         table:
           description: >
-            The default variant, exported as a single object. On import this
-            variant is flagged `is_default: true`. Omitted only in the legacy flat
-            format (see schema description).
+            The first variant, exported as a single object. Omitted only in the
+            legacy flat format (see schema description).
           allOf:
             - $ref: '#/components/schemas/Variant'
         variants:
           type: array
           description: >
-            The non-default variants. In the legacy flat format this array instead
-            holds every variant, including the default one (which is then taken as
-            the first element).
+            The other variants. In the legacy flat format this array instead
+            holds every variant.
           items:
             $ref: '#/components/schemas/Variant'
       required:
@@ -1223,6 +1355,248 @@ components:
         - fields
         - variants
 
+    # ── Table version ───────────────────────────────────────────────────────
+    TableVersionSummary:
+      type: object
+      description: >
+        A table version without its content, as listed by
+        `GET /api/v1/admin/tables/{id}/versions` (see VERSIONS.md).
+      properties:
+        _id:
+          type: string
+          example: "507f1f77bcf86cd799439030"
+        table_id:
+          type: string
+          example: "507f1f77bcf86cd799439017"
+        status:
+          type: string
+          enum: [draft, published]
+          example: "published"
+        number:
+          type: integer
+          nullable: true
+          description: Assigned at publication, unique per table, with no gaps. Null for a draft.
+          example: 2
+        name:
+          type: string
+          example: "Threshold 750"
+        comment:
+          type: string
+          description: Publication comment.
+          example: "Raise the threshold"
+        origin_version_id:
+          type: string
+          nullable: true
+          description: Version or draft this one was created from.
+          example: "507f1f77bcf86cd799439029"
+        autopublished:
+          type: boolean
+          description: Published by the compatibility mode or the migration, not by a person.
+          example: false
+        variants_probability:
+          type: string
+          enum: [first, random, percent]
+          example: "first"
+        created_by:
+          type: string
+          nullable: true
+        published_by:
+          type: string
+          nullable: true
+        published_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-10-10T16:59:42+00:00"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        is_active:
+          type: boolean
+          description: Whether this is the table's active version.
+          example: true
+
+    TableVersion:
+      description: A table version with its content.
+      allOf:
+        - $ref: '#/components/schemas/TableVersionSummary'
+        - type: object
+          properties:
+            fields:
+              type: array
+              items:
+                $ref: '#/components/schemas/Field'
+            variants:
+              type: array
+              items:
+                $ref: '#/components/schemas/Variant'
+
+    TableVersionInput:
+      type: object
+      description: >
+        Content of a draft. Same rules as a table update (`TableCreateUpdate`),
+        validated against the table's `matching_type` and `decision_type`.
+        Conditions follow renamed fields.
+      properties:
+        name:
+          type: string
+          maxLength: 128
+          example: "Threshold 750"
+        variants_probability:
+          type: string
+          enum: [first, random, percent]
+          example: "first"
+        fields:
+          $ref: '#/components/schemas/TableCreateUpdate/properties/fields'
+        variants:
+          $ref: '#/components/schemas/TableCreateUpdate/properties/variants'
+      required:
+        - fields
+        - variants
+
+    VariantSplit:
+      type: object
+      description: >
+        New split of a version's variants. Variants left out keep their
+        percentage; in `percent` mode the percentages must add up to 100.
+      properties:
+        variants_probability:
+          type: string
+          enum: [first, random, percent]
+          example: "percent"
+        variants:
+          type: array
+          items:
+            type: object
+            properties:
+              _id:
+                type: string
+                example: "507f1f77bcf86cd799439018"
+              probability:
+                type: integer
+                minimum: 0
+                maximum: 100
+                example: 70
+            required:
+              - _id
+              - probability
+      required:
+        - variants_probability
+        - variants
+
+    VersionDivergenceMeta:
+      type: object
+      description: >
+        Response meta. `warning` and `active_version` are present when the
+        version does not descend from the table's active version: it lacks the
+        changes published since it was branched off, or it is a rollback.
+      properties:
+        code:
+          type: integer
+          example: 200
+        warning:
+          type: string
+          enum: [version_diverges]
+        active_version:
+          type: object
+          properties:
+            _id:
+              type: string
+            number:
+              type: integer
+              example: 3
+
+    DecisionRequestV2:
+      type: object
+      description: Body of the decision route v2 and of a test run (without `version`).
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: Published version number to run; the active version when absent.
+          example: 3
+        variant_id:
+          type: string
+          pattern: '^[0-9a-f]{24}$'
+          description: Force a variant of the version run.
+        data:
+          type: object
+          description: >
+            Input values: one key per table field, all present (`null` for
+            absent values).
+          additionalProperties: true
+      required:
+        - data
+
+    VersionCall:
+      type: object
+      description: Recent calls of one API key to a table, for one requested version.
+      properties:
+        consumer:
+          type: string
+          description: client_id of the API key.
+        description:
+          type: string
+          description: The key's description.
+          example: "Website"
+        requested_version:
+          type: integer
+          nullable: true
+          description: Version number the calls named; null for calls without a version (the active version).
+          example: 3
+        last_call_at:
+          type: string
+          format: date-time
+          example: "2026-10-10T16:59:42+00:00"
+        count:
+          type: integer
+          example: 87
+
+    ActivationMeta:
+      allOf:
+        - $ref: '#/components/schemas/VersionDivergenceMeta'
+        - type: object
+          properties:
+            callers_without_version:
+              type: array
+              description: >
+                API keys that called the table without a version within the
+                window: the activation changes what they run.
+              items:
+                $ref: '#/components/schemas/VersionCall'
+            field_renames:
+              type: object
+              description: Old key to new key, when fields were renamed between the two versions.
+              additionalProperties:
+                type: string
+            flows_updated:
+              type: array
+              items:
+                type: string
+            flows_failed:
+              type: array
+              items:
+                type: string
+            flows_invalid:
+              type: array
+              items:
+                type: string
+
+    ImportMeta:
+      type: object
+      properties:
+        code:
+          type: integer
+        imported_into:
+          type: string
+          enum: [table, version]
+          description: >
+            Round-trip Excel imports: whether the table or a version (a draft)
+            was written. Absent on imports that create a table from another format.
+
     # ── Decision ─────────────────────────────────────────────────────────────
     DecisionTable:
       type: object
@@ -1239,6 +1613,19 @@ components:
         matching_type:
           type: string
           example: "first"
+        version:
+          type: object
+          nullable: true
+          description: >
+            Table version the decision ran (see VERSIONS.md). Null for
+            decisions made before table versioning.
+          properties:
+            _id:
+              type: string
+              example: "507f1f77bcf86cd799439030"
+            number:
+              type: integer
+              example: 3
         variant:
           type: object
           properties:
@@ -1309,6 +1696,18 @@ components:
             - type: string
             - type: number
           example: "approved"
+        consumer:
+          type: string
+          nullable: true
+          description: >
+            client_id of the API key that made the call; null for a user (OAuth
+            token). Absent on decisions made before table versions.
+        test:
+          type: boolean
+          description: >
+            A test run from gandalf.web (VERSIONS.md). Absent on decisions made
+            before table versions.
+          example: false
         meta:
           type: object
           description: >
@@ -2798,13 +3197,23 @@ paths:
     get:
       tags: [Flows]
       summary: List a flow's run history
-      description: Paginated executions of the flow, most recent first. Requires `tables_view`.
+      description: >
+        Paginated executions of the flow, most recent first. Test runs from
+        gandalf.web are left out; `test=true` lists them instead. Requires
+        `tables_view`.
       operationId: listFlowRuns
       security:
         - BearerAuth: []
       parameters:
         - $ref: '#/components/parameters/XApplication'
         - $ref: '#/components/parameters/PathId'
+        - name: test
+          in: query
+          required: false
+          description: true lists the test runs from gandalf.web instead of the others.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Run history.
@@ -2826,10 +3235,14 @@ paths:
     post:
       tags: [Flows]
       summary: Run a flow
+      deprecated: true
       description: >
-        Executes the flow against the supplied inputs and returns the assembled
-        outputs. Nodes run in topological order; each node's decision is
-        persisted and linked by a FlowRun. Requires `decisions_make`.
+        Executes the flow's active version against the supplied inputs and
+        returns the assembled outputs. Nodes run in topological order, each on
+        the table version it is pinned to; each node's decision is persisted
+        and linked by a FlowRun. Requires `decisions_make`. Deprecated in favour
+        of `POST /api/v2/flows/{id}/decisions` (same headers as the table v1
+        route).
       operationId: runFlow
       security:
         - BearerAuth: []
@@ -2882,6 +3295,462 @@ paths:
                       flow_run_id:
                         type: string
                         description: Id of the FlowRun that recorded this failed execution.
+
+  /api/v2/flows/{id}/decisions:
+    post:
+      tags: [Flows]
+      summary: Run a version of a flow
+      description: >
+        Route v2 (VERSIONS.md, batch 4): `{ version, data }`. Without `version`
+        the active version runs; another published version needs the
+        `decisions_make_inactive` scope (API key or user), otherwise
+        `403 version_not_allowed`. Calls of API keys are counted per requested
+        version (`GET /api/v1/admin/flows/{id}/calls`).
+      operationId: runFlowV2
+      security:
+        - BearerAuth: []
+        - BasicAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version:
+                  type: integer
+                  minimum: 1
+                data:
+                  type: object
+                  additionalProperties: true
+              required:
+                - data
+      responses:
+        "200":
+          description: Flow result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowResult'
+        "403":
+          description: Caller without `decisions_make`, or `version_not_allowed`.
+        "404":
+          description: Flow not found, or `version_not_found`.
+        "422":
+          description: Invalid body, or a run-time flow error (see `POST /api/v1/flows/{id}/decisions`).
+
+  /api/v1/admin/flows/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Flows]
+      summary: List a flow's versions
+      description: Drafts (last edited first), then published versions (newest first), without their graph. Requires `tables_view`.
+      operationId: listFlowVersions
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: The flow's versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FlowVersionSummary'
+    post:
+      tags: [Flows]
+      summary: Create a flow draft
+      description: >
+        A draft holding the graph of `from_version_id` (by default the active
+        version), pins kept. Requires `tables_update`.
+      operationId: createFlowVersion
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from_version_id:
+                  type: string
+                  pattern: '^[0-9a-f]{24}$'
+                name:
+                  type: string
+                  maxLength: 128
+      responses:
+        "201":
+          description: The new draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowVersion'
+        "404":
+          description: Flow not found, or `version_not_found`.
+
+  /api/v1/admin/flows/{id}/versions/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+      - $ref: '#/components/parameters/PathVersionId'
+    get:
+      tags: [Flows]
+      summary: Get a flow version
+      operationId: getFlowVersion
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: The version with its graph.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowVersion'
+        "404":
+          description: Flow not found, or `version_not_found`.
+    put:
+      tags: [Flows]
+      summary: Edit a flow draft
+      description: >
+        The keys sent (`inputs`, `outputs`, `nodes`, `edges`) replace the
+        draft's, plus an optional `name`. A node may name its pinned table
+        version (`table_version_id`, a published version of its table); without
+        it, the node keeps its pin or takes its table's active version. The
+        graph is validated as a flow's. Requires `tables_update`.
+      operationId: updateFlowVersion
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                inputs:
+                  type: array
+                  items:
+                    type: object
+                outputs:
+                  type: array
+                  items:
+                    type: object
+                nodes:
+                  type: array
+                  items:
+                    type: object
+                edges:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        "200":
+          description: The edited draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowVersion'
+        "409":
+          description: "`version_published`: the version is published."
+        "422":
+          description: Invalid graph (`flow_validation`), e.g. a node pinned to a table draft.
+    delete:
+      tags: [Flows]
+      summary: Delete a flow version
+      description: >
+        A draft (`tables_update`) or a published version (`tables_publish`).
+        Not the active version, nor a version an API key of the project called
+        by its number within the window.
+      operationId: deleteFlowVersion
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Version deleted.
+        "403":
+          description: A published version, without `tables_publish`.
+        "409":
+          description: "`version_in_use`."
+
+  /api/v1/admin/flows/{id}/versions/{version_id}/publish:
+    post:
+      tags: [Flows]
+      summary: Publish a flow draft
+      description: Freezes and numbers the draft; the active version does not change. Requires `tables_publish`.
+      operationId: publishFlowVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+                  maxLength: 512
+      responses:
+        "200":
+          description: The published version, with a divergence warning when it does not descend from the active one.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    $ref: '#/components/schemas/VersionDivergenceMeta'
+                  data:
+                    $ref: '#/components/schemas/FlowVersion'
+        "409":
+          description: "`version_published`."
+
+  /api/v1/admin/flows/{id}/versions/{version_id}/decisions:
+    post:
+      tags: [Flows]
+      summary: Test run of a flow draft or version
+      description: >
+        Runs a draft or a version from gandalf.web with `{ data }`. The run and
+        its decisions are flagged `test`; the rules are always returned.
+        Requires `decisions_make` for a published version, and `tables_update`
+        for a draft.
+      operationId: runFlowVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data:
+                  type: object
+                  additionalProperties: true
+              required:
+                - data
+      responses:
+        "200":
+          description: Flow result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/FlowResult'
+
+  /api/v1/admin/flows/{id}/activate:
+    post:
+      tags: [Flows]
+      summary: Activate a flow version
+      description: >
+        The published version becomes the one the API runs; its graph is copied
+        onto the flow. Requires `tables_activate`.
+      operationId: activateFlowVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version_id:
+                  type: string
+                  pattern: '^[0-9a-f]{24}$'
+              required:
+                - version_id
+      responses:
+        "200":
+          description: >
+            The flow. `meta` carries the divergence warning and
+            `callers_without_version`.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/Flow'
+        "409":
+          description: "`version_not_published`."
+
+  /api/v1/admin/flows/{id}/calls:
+    get:
+      tags: [Flows]
+      summary: Recent calls of the project's API keys to a flow
+      operationId: listFlowCalls
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: One row per key and requested version, latest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VersionCall'
+
+  /api/v1/admin/tables/{id}/flows:
+    get:
+      tags: [Table versions]
+      summary: Flows using a table
+      description: >
+        The project's flows with a node on the table, the table version each
+        node runs, and `outdated` when it is not the active one. Requires
+        `tables_view`.
+      operationId: listTableFlows
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: Flows using the table.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableFlow'
+
+  /api/v1/admin/tables/{id}/flows/update:
+    post:
+      tags: [Table versions]
+      summary: Bring flows to a table's active version
+      description: >
+        For each flow (all, or `flow_ids`) whose active version pins the table
+        elsewhere: a draft pinning the active table version, edges following
+        the field renames. `publish` (`tables_publish`) publishes the drafts,
+        `activate` (`tables_activate`, implies `publish`) activates them. A flow
+        whose graph no longer validates is reported `incompatible`. Requires
+        `tables_update`.
+      operationId: updateTableFlows
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                flow_ids:
+                  type: array
+                  items:
+                    type: string
+                    pattern: '^[0-9a-f]{24}$'
+                publish:
+                  type: boolean
+                activate:
+                  type: boolean
+      responses:
+        "200":
+          description: One row per flow.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        _id:
+                          type: string
+                        title:
+                          type: string
+                        status:
+                          type: string
+                          enum: [updated, up_to_date, incompatible]
+                        version:
+                          type: object
+                          nullable: true
+                          properties:
+                            _id:
+                              type: string
+                            number:
+                              type: integer
+                              nullable: true
+                            status:
+                              type: string
+                        errors:
+                          type: array
+                          items:
+                            type: string
+        "403":
+          description: "`publish` without `tables_publish`, or `activate` without `tables_activate`."
 
   # ── Categories ───────────────────────────────────────────────────────────────
   /api/v1/admin/categories:
@@ -3237,8 +4106,13 @@ paths:
         | Format | `?format=` | Content-Type | Notes |
         |--------|-----------|--------------|-------|
         | JSON   | `json` (default) | `application/json` | Full export — all variants, all rules. Can be re-imported as-is (creates a new table). |
-        | CSV    | `csv` | `text/csv` | Default variant only, legacy 3-section format (create-only re-import). |
-        | Excel  | `excel` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | **Round-trip workbook** — one variant per file (`?variant_id=` selects it, default variant when omitted). Re-importing UPDATES the original table. |
+        | CSV    | `csv` | `text/csv` | One variant (`?variant_id=`, first variant when omitted), legacy 3-section format (create-only re-import). |
+        | Excel  | `excel` | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` | **Round-trip workbook**: one variant per file (`?variant_id=` selects it, first variant when omitted). Re-importing updates its origin (see the import route). |
+
+        **Versions** (VERSIONS.md): `?version_id=` exports a draft or a published
+        version of the table, the active version by default. The file name then
+        ends with `-v<number>` or `-draft`. While the release A compatibility mode
+        is on, the active version is exported from the table, which holds its copy.
 
         ### Excel round-trip workbook (format `gandalf-xlsx-v2`)
 
@@ -3248,8 +4122,9 @@ paths:
           titles, then one rule per row. Hidden column A carries the rule ids (blank =
           new rule, removed row = deleted rule). Add a field by inserting a column and
           filling rows 2–4; remove a field by deleting its column.
-        - `_meta` — hidden: table/variant ids, `exported_at` optimistic-lock token,
-          matching_type, decision_type, default_decision.
+        - `_meta` — hidden: table/version/variant ids, version number,
+          `exported_at` and `content_hash` optimistic-lock tokens (of the exported
+          table or version), matching_type, decision_type, default_decision.
         - `_help` — grammar cheat-sheet.
 
         Condition cells use a human-readable grammar:
@@ -3291,8 +4166,17 @@ paths:
           in: query
           required: false
           description: >
-            Excel only — MongoDB ObjectID of the variant to export.
-            Defaults to the table's default variant.
+            Excel and CSV: MongoDB ObjectID of the variant to export.
+            Defaults to the first variant.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{24}$'
+        - name: version_id
+          in: query
+          required: false
+          description: >
+            MongoDB ObjectID of the draft or published version to export.
+            Defaults to the active version.
           schema:
             type: string
             pattern: '^[0-9a-f]{24}$'
@@ -3313,9 +4197,9 @@ paths:
                 type: string
                 format: binary
         "404":
-          description: Table or variant not found.
+          description: Table, variant or version (`version_not_found`) not found.
         "422":
-          description: Invalid `variant_id` format.
+          description: Invalid `variant_id` or `version_id` format.
 
   # ── Import ────────────────────────────────────────────────────────────────────
   /api/v1/admin/tables/import:
@@ -3341,6 +4225,20 @@ paths:
         - an optimistic lock compares the file's `exported_at` with the table's
           `updated_at`: `409` when the table changed since export, `force=1` overrides;
         - the payload runs through the exact same validation as `POST /tables`.
+
+        **Versions** (VERSIONS.md, batch 2b). A workbook exported from a version
+        updates that version instead of the table:
+        - from a **draft**: the draft is updated in place (`200`), with the
+          optimistic lock on the draft;
+        - from a **published version**, which is frozen: a new draft is created
+          from it (`201`, named "Import Excel");
+        - while the release A compatibility mode is on, the active version's
+          workbook updates the table as before (another version's workbook
+          still creates a draft).
+        The response is then the draft, with `meta.imported_into = "version"`
+        (`"table"` otherwise). Only the content goes into a draft: the title and
+        description stay the table's, the content is validated against the
+        table's types. Workbooks exported before versions update the table.
 
         **All other files** (JSON, legacy 3-section CSV/Excel, or round-trip files
         sent with `mode=create`) create a new table; existing tables are never
@@ -3389,31 +4287,41 @@ paths:
                     overwrite even if the table changed since the export.
       responses:
         "200":
-          description: Round-trip import — existing table updated in place.
+          description: >
+            Round-trip import: the table, or the draft the file was exported
+            from (`meta.imported_into = "version"`), updated in place.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   meta:
-                    type: object
+                    $ref: '#/components/schemas/ImportMeta'
                   data:
-                    $ref: '#/components/schemas/Table'
+                    oneOf:
+                      - $ref: '#/components/schemas/Table'
+                      - $ref: '#/components/schemas/TableVersion'
         "201":
-          description: Table imported and created successfully.
+          description: >
+            Table imported and created, or a new draft created from the
+            published version the file was exported from
+            (`meta.imported_into = "version"`).
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   meta:
-                    type: object
+                    $ref: '#/components/schemas/ImportMeta'
                   data:
-                    $ref: '#/components/schemas/Table'
+                    oneOf:
+                      - $ref: '#/components/schemas/Table'
+                      - $ref: '#/components/schemas/TableVersion'
         "404":
           description: >
             Round-trip update — the embedded table id does not exist in the
-            current project (deleted, or exported from another project).
+            current project (deleted, or exported from another project), or the
+            embedded version was deleted (`version_not_found`).
         "409":
           description: >
             Round-trip update — the table changed on the server since the file
@@ -3734,6 +4642,380 @@ paths:
         "422":
           description: Source and target projects are the same.
 
+  # ── Table versions ──────────────────────────────────────────────────────────
+  /api/v1/admin/tables/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+
+    get:
+      tags: [Table versions]
+      summary: List a table's versions
+      description: >
+        Drafts (last edited first), then published versions (newest first),
+        without their content. Requires `tables_view`.
+      operationId: listTableVersions
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: The table's versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableVersionSummary'
+        "404":
+          description: Table not found.
+
+    post:
+      tags: [Table versions]
+      summary: Create a draft
+      description: >
+        Creates a draft holding the content of `from_version_id` (a version or
+        another draft of the table), by default the active version. Variant ids
+        are kept. Several drafts can coexist. Requires `tables_update`.
+      operationId: createTableVersion
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from_version_id:
+                  type: string
+                  pattern: '^[0-9a-f]{24}$'
+                name:
+                  type: string
+                  maxLength: 128
+                  example: "Threshold 750"
+      responses:
+        "201":
+          description: The new draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "404":
+          description: Table not found, or `version_not_found` for `from_version_id`.
+        "422":
+          description: Validation error.
+
+  /api/v1/admin/tables/{id}/versions/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/XApplication'
+      - $ref: '#/components/parameters/PathId'
+      - $ref: '#/components/parameters/PathVersionId'
+
+    get:
+      tags: [Table versions]
+      summary: Get a table version
+      description: The version with its content. Requires `tables_view`.
+      operationId: getTableVersion
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: The version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "404":
+          description: Table not found, or `version_not_found`.
+
+    put:
+      tags: [Table versions]
+      summary: Edit a draft
+      description: >
+        Replaces a draft's content and, optionally, its name. A published
+        version is frozen, except its split (see the `split` route). Requires
+        `tables_update`.
+      operationId: updateTableVersion
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TableVersionInput'
+      responses:
+        "200":
+          description: The edited draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "404":
+          description: Table not found, or `version_not_found`.
+        "409":
+          description: "`version_published`: the version is published."
+        "422":
+          description: Validation error.
+
+    delete:
+      tags: [Table versions]
+      summary: Delete a table version
+      description: >
+        Deletes a draft (`tables_update`) or a published version
+        (`tables_publish`). The active version cannot be deleted: activate
+        another one first.
+      operationId: deleteTableVersion
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Version deleted.
+        "403":
+          description: A published version, without the `tables_publish` scope.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "409":
+          description: >
+            `version_in_use`: the version is the active one, or an API key of
+            the project called it by its number within the window
+            (`TABLE_VERSIONS_CALL_WINDOW_DAYS`).
+
+  /api/v1/admin/tables/{id}/versions/{version_id}/publish:
+    post:
+      tags: [Table versions]
+      summary: Publish a draft
+      description: >
+        Freezes the draft and gives it the next number. The active version
+        does not change. Requires `tables_publish`.
+      operationId: publishTableVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment:
+                  type: string
+                  maxLength: 512
+                  example: "Raise the threshold"
+      responses:
+        "200":
+          description: The published version, with a divergence warning when it does not descend from the active version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    $ref: '#/components/schemas/VersionDivergenceMeta'
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "403":
+          description: Missing `tables_publish` scope.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "409":
+          description: "`version_published`: already published."
+
+  /api/v1/admin/tables/{id}/versions/{version_id}/split:
+    put:
+      tags: [Table versions]
+      summary: Change a version's variant split
+      description: >
+        Changes the split mode and percentages of a draft or a published
+        version, without creating a version. Requires `tables_update` for a
+        draft and `tables_activate` for a published version (the active one,
+        whose change the table follows at once, or one that keys call with
+        `version`).
+      operationId: updateTableVersionSplit
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VariantSplit'
+      responses:
+        "200":
+          description: The version with its new split.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/TableVersion'
+        "403":
+          description: The active version, without the `tables_activate` scope.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "422":
+          description: Validation error (percentages not adding up to 100), or `variant_not_found`.
+
+  /api/v1/admin/tables/{id}/activate:
+    post:
+      tags: [Table versions]
+      summary: Activate a table version
+      description: >
+        The published version becomes the one direct calls run; reactivating
+        an earlier version rolls back. Until release B the table document holds
+        a copy of the active version's content. When fields were renamed
+        between the previous active version and this one, the project's flows
+        follow, and `meta` reports `field_renames`, `flows_updated`,
+        `flows_failed` and `flows_invalid`, as for a table update. Requires
+        `tables_activate`.
+      operationId: activateTableVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                version_id:
+                  type: string
+                  pattern: '^[0-9a-f]{24}$'
+              required:
+                - version_id
+      responses:
+        "200":
+          description: The table, now running the version.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    $ref: '#/components/schemas/ActivationMeta'
+                  data:
+                    $ref: '#/components/schemas/Table'
+        "403":
+          description: Missing `tables_activate` scope.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "409":
+          description: "`version_not_published`: the version is a draft."
+        "422":
+          description: Validation error.
+
+  /api/v1/admin/tables/{id}/versions/{version_id}/decisions:
+    post:
+      tags: [Table versions]
+      summary: Test run of a draft or a version
+      description: >
+        Runs a draft or a version from gandalf.web, with the body of the route
+        v2 without `version`. The decision is flagged `test`, always carries
+        the rules, and is left out of analytics and of the default decision
+        history. Requires `decisions_make` for a published version, and
+        `tables_update` for a draft.
+      operationId: runTableVersion
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+        - $ref: '#/components/parameters/PathVersionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequestV2'
+      responses:
+        "200":
+          description: Test decision evaluated and persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/DecisionConsumer'
+        "404":
+          description: Table not found, or `version_not_found`.
+        "422":
+          description: Invalid input values (errors under `data.*`), or `variant_not_found`.
+
+  /api/v1/admin/tables/{id}/calls:
+    get:
+      tags: [Table versions]
+      summary: Recent calls of the project's API keys
+      description: >
+        One row per API key and requested version, latest first, for the keys
+        of the project that called the table within the window
+        (`TABLE_VERSIONS_CALL_WINDOW_DAYS`, 30 days by default). Calls with an
+        OAuth token are not counted. Requires `tables_view`.
+      operationId: listTableCalls
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      responses:
+        "200":
+          description: Recent calls.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                    properties:
+                      code:
+                        type: integer
+                      window_days:
+                        type: integer
+                        example: 30
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/VersionCall'
+        "404":
+          description: Table not found.
+
   # ── Decisions (Admin) ────────────────────────────────────────────────────────
   /api/v1/admin/decisions:
     get:
@@ -3743,7 +5025,8 @@ paths:
         Returns a paginated list of all decision records for the current application,
         ordered by creation date (newest first).
 
-        Supports optional filtering by `table_id` and `variant_id`.
+        Supports optional filtering by `table_id` and `variant_id`. Test runs from
+        gandalf.web are left out; `test=true` lists them instead.
       operationId: listDecisions
       security:
         - BearerAuth: []
@@ -3764,6 +5047,13 @@ paths:
           schema:
             type: string
             pattern: '^[0-9a-f]{24}$'
+        - name: test
+          in: query
+          required: false
+          description: true lists the test runs from gandalf.web instead of production decisions.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
           description: Paginated decision list.
@@ -3862,8 +5152,15 @@ paths:
     post:
       tags: [Decisions (Consumer)]
       summary: Evaluate a decision table
+      deprecated: true
       description: |
         Submits field values to a decision table and returns the computed result.
+
+        **Deprecated** in favour of `POST /api/v2/tables/{id}/decisions`. This
+        route runs the table's active version. Once the dates are set
+        (`DECISIONS_V1_DEPRECATED_AT`, `DECISIONS_V1_SUNSET`), responses carry
+        the `Deprecation`, `Sunset` and `Link` (`rel="successor-version"`)
+        headers.
 
         The engine:
         1. Validates submitted values against the table's field schema.
@@ -3951,6 +5248,9 @@ paths:
                         _id: "507f1f77bcf86cd799439017"
                         title: "Credit Scoring"
                         matching_type: "first"
+                        version:
+                          _id: "507f1f77bcf86cd799439030"
+                          number: 3
                         variant:
                           _id: "507f1f77bcf86cd799439016"
                           title: "Default"
@@ -3971,6 +5271,70 @@ paths:
             Submitted field values are invalid or missing (e.g. a `date` value
             that is not an ISO 8601 date: "The :attribute must be an ISO 8601 date
             (YYYY-MM-DD).").
+
+  /api/v2/tables/{id}/decisions:
+    post:
+      tags: [Decisions (Consumer)]
+      summary: Evaluate a version of a decision table
+      description: |
+        Route v2 (VERSIONS.md): the execution parameters (`version`,
+        `variant_id`) are apart from the input values (`data`), so no table
+        field can collide with them. Same callers, evaluation and response as
+        `POST /api/v1/tables/{id}/decisions`.
+
+        - Without `version`, the active version runs.
+        - With `version`, that published version runs. A version other than the
+          active one needs the `decisions_make_inactive` scope (API key or
+          user), otherwise `403 version_not_allowed`. A draft has no number and
+          cannot be called.
+        - A `variant_id` the version lacks is `422 variant_not_found`.
+
+        Calls of API keys are counted per requested version (see
+        `GET /api/v1/admin/tables/{id}/calls`).
+      operationId: tableCheckV2
+      security:
+        - ConsumerAuth: []
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/XApplication'
+        - $ref: '#/components/parameters/PathId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionRequestV2'
+            examples:
+              pinned:
+                summary: Run published version 3
+                value:
+                  version: 3
+                  data:
+                    credit_score: 750
+                    annual_income: 60000
+      responses:
+        "200":
+          description: Decision evaluated and persisted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    $ref: '#/components/schemas/DecisionConsumer'
+        "403":
+          description: >
+            Application without an active admin, caller without
+            `decisions_make`, or `version_not_allowed`: an inactive version
+            without `decisions_make_inactive`.
+        "404":
+          description: Table not found, or `version_not_found`.
+        "422":
+          description: >
+            Invalid input values (errors under `data.*`), a body without
+            `data`, an invalid `version`, or `variant_not_found`.
 
   /api/v1/decisions/{id}:
     get:

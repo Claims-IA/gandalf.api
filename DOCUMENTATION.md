@@ -101,8 +101,9 @@ Controllers handle HTTP request parsing, input validation, and response formatti
 | `Controller`          | Base class; thin wrapper over Lumen's routing controller                             |
 | `UsersController`     | User registration, verification, password reset, profile update, invitation dispatch |
 | `TablesController`    | CRUD for decision tables plus analytics endpoint                                     |
+| `TableVersionsController` | Table versions: drafts, publication, activation, variant split, test runs, calls per key ([VERSIONS.md](VERSIONS.md)) |
 | `DecisionsController` | Admin read-only access to decision records and metadata updates                      |
-| `ConsumerController`  | Consumer-facing decision evaluation and result retrieval                             |
+| `ConsumerController`  | Consumer-facing decision evaluation (routes v1 and v2) and result retrieval          |
 | `ChangelogController` | Table audit history list, diff, and rollback                                         |
 | `ProjectsController`  | Application deletion (superadmins), data export, collaborators                       |
 | `ApplicationsController` | Replaces the package routes to create (superadmins) and list applications, and to update an API key within the caller's scopes ([ADMIN.md](ADMIN.md)) |
@@ -115,12 +116,13 @@ All models extend `Base` (which extends Jenssegers MongoDB Eloquent). Embedded d
 | Class           | MongoDB Collection         | Role                                                    |
 | --------------- | -------------------------- | ------------------------------------------------------- |
 | `User`          | `users`                    | Platform user with OAuth tokens and email verification  |
-| `Table`         | `tables`                   | Decision table with variants, fields, and rules         |
+| `Table`         | `tables`                   | Decision table: identity, types, active version, and a copy of its active version's content (release A, see [VERSIONS.md](VERSIONS.md)) |
+| `TableVersion`  | `table_versions`           | One version of a table's content (fields, variants, split): draft, or published and numbered |
 | `Decision`      | `decisions`                | Immutable audit record of a single evaluation           |
-| `Field`         | embedded in Table/Decision | Input field definition (key, type, source, preset)      |
+| `Field`         | embedded in Table/TableVersion/Decision | Input field definition (key, type, source, preset) |
 | `Rule`          | embedded in Variant        | Ordered rule with conditions and outcome value          |
 | `Condition`     | embedded in Rule           | Single field comparison (field\_key, operator, value)   |
-| `Variant`       | embedded in Table          | A/B test variant containing rules and default decision  |
+| `Variant`       | embedded in Table/TableVersion | A/B test variant containing rules and default decision |
 | `Preset`        | embedded in Field          | Pre-processing condition applied before rule evaluation |
 | `Invitation`    | `invitations`              | Pending invitation to join an application               |
 | `AdminLogEntry` | `admin_log`                | One superadmin action ([ADMIN.md](ADMIN.md#admin-log))  |
@@ -134,6 +136,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | --------------------- | -------------- | --------------------------------------------------------------------------- |
 | `UsersRepository`     | User           | `createOrUpdate()` — handles email verification token flow and fires events |
 | `TablesRepository`    | Table          | `createOrUpdate()`, `readListWithFilters()`, `analyzeTableDecisions()`      |
+| `TableVersionsRepository` | TableVersion | `createDraft()`, `updateDraft()`, `publish()`, `activate()`, `updateSplit()`, `delete()`, `divergence()` |
 | `DecisionsRepository` | Decision       | `getDecisions()`, `getConsumerDecision()`, `updateMeta()`                   |
 
 ### Services (`app/Services/`)
@@ -143,6 +146,9 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | `Scoring`         | Core decision engine — evaluates rules, accumulates results, persists decisions |
 | `ConditionsTypes` | Defines all comparison operators as closures; evaluates conditions at runtime   |
 | `DateValue`       | Parses `date` values (ISO dates, relative `today-30d`) into day numbers         |
+| `TableVersioning` | Resolves a table's active version, publishes versions and copies the active one onto the table; in release A, publishes and activates a version when a table save changes its content |
+| `VersionCalls`    | Counts the calls of API keys per table or flow and requested version (`version_calls`), for the activation screen and the deletion guard |
+| `FlowVersioning`  | Flow versions: active version, nodes pinned to table versions, compatibility mode (flows follow their tables); see [DRG.md](DRG.md#versions) |
 | `Mail`            | Postmark email integration (verification, password reset, invitations)          |
 | `Intercom`        | Intercom CRM integration (user profile sync, decision events, secure code)      |
 | `Mixpanel`        | Mixpanel analytics integration (user track events, decision counters)           |
@@ -208,7 +214,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | Class                 | Model      | Active Hooks                                                                                        |
 | --------------------- | ---------- | --------------------------------------------------------------------------------------------------- |
 | `UserObserver`        | User       | `creating` (auto-username, activate), `created` (send verification email), `saving` (hash password) |
-| `TableObserver`       | Table      | `saved` (write changelog snapshot)                                                                  |
+| `TableObserver`       | Table      | `saved` (sync versions through `TableVersioning`, then write changelog snapshot), `deleted` (delete versions) |
 | `InvitationsObserver` | Invitation | `created` (send invitation email)                                                                   |
 
 ### Console Commands (`app/Console/Commands/`)
@@ -273,6 +279,8 @@ Abstract MongoDB Eloquent model.
 
 ### `App\Models\Table`
 
+The content methods below come from the `HasTableContent` trait, shared with `TableVersion`. `active_version_id` points to the published `TableVersion` run by default.
+
 | Method                                  | Description                                                                |
 | --------------------------------------- | -------------------------------------------------------------------------- |
 | `fields()`                              | Embedded-many relation to `Field` models                                   |
@@ -285,6 +293,22 @@ Abstract MongoDB Eloquent model.
 
 ---
 
+### `App\Models\TableVersion`
+
+One version of a table's content (`table_versions`), with the same content methods as `Table` (`HasTableContent`). See [VERSIONS.md](VERSIONS.md).
+
+| Attribute / method   | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| `table_id`           | Owning table                                                                |
+| `status`             | `draft` or `published`                                                      |
+| `number`             | Assigned at publication, unique per table (`table_versions_number` index)   |
+| `origin_version_id`  | Version this one comes from                                                 |
+| `autopublished`      | Published by the release A compatibility mode or the migration              |
+| `isPublished()`      | Whether the version is published                                            |
+| `toSummaryArray()`   | The version without its content (`fields`, `variants`), for lists           |
+
+---
+
 ### `App\Models\Decision`
 
 | Method              | Description                                                      |
@@ -293,7 +317,10 @@ Abstract MongoDB Eloquent model.
 | `fields()`          | Embedded-many relation to `Field` snapshots                      |
 | `toConsumerArray()` | Returns consumer-safe decision with ISO-8601 timestamps          |
 | `toArray()`         | Overrides parent to cast MongoDB ObjectIDs in `table` to strings |
-| `getTableArray()`   | Returns the `table` sub-document with ObjectIDs as strings       |
+| `getTableArray()`   | Returns the `table` sub-document with ObjectIDs as strings (table, version, variant) |
+
+Since batch 3 a decision also stores `consumer` (`client_id` of the calling API
+key, null for a user) and `test` (test run from gandalf.web).
 
 ---
 
@@ -320,11 +347,29 @@ Abstract MongoDB Eloquent model.
 
 | Method                                                 | Description                                                    |
 | ------------------------------------------------------ | -------------------------------------------------------------- |
-| `check($id, $values, $appId, $showMeta)`               | Full decision evaluation pipeline; returns consumer-safe array |
+| `check($id, $values, $appId, $showMeta)`               | Route v1 and flow nodes: evaluates the table's active version, `variant_id` among the values |
+| `evaluateRequest(Table, $version, $body, $appId, $showMeta, $test)` | Route v2 and test runs: body `{ variant_id, data }`, errors under `data.*`, `422 variant_not_found` |
+| `evaluate(Table, $version, $values, $appId, $showMeta, $options)` | Full decision evaluation pipeline on a version (or the table as stored); records the calling key and the test flag; returns consumer-safe array |
+| `prefixRules($rules, $key)`                            | Nests validation rules under a key (`data.age`)                |
 | `checkCondition(Condition, $value, $fieldType = null)` | Sets `condition->matched` via ConditionsTypes                  |
 | `prepareFieldPreset(Field, $value)`                    | Applies preset transform with per-run caching                  |
-| `createValidationRules(Table)`                         | Builds Lumen validation rules from table field definitions     |
+| `createValidationRules(Table\|TableVersion)`           | Builds Lumen validation rules from the field definitions       |
 | `getValidationRuleByType($type)`                       | Maps field type string to Lumen rule name (`date` → `isoDate`) |
+
+---
+
+### `App\Services\TableVersioning`
+
+| Method                         | Description                                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `activeVersion(Table)`         | The table's active `TableVersion`, or null while it has none                                        |
+| `syncFromTable(Table)`         | After a save: versions follow the table's applications; in compatibility mode, a content change publishes and activates a version |
+| `deleteForTable(Table)`        | Deletes a deleted table's versions                                                                  |
+| `contentHash(array)`           | Content fingerprint: audit keys ignored, ids as strings, object keys sorted, model defaults applied |
+| `legacyAutoPublish()`          | Whether the release A compatibility mode is on (`TABLE_VERSIONS_LEGACY_AUTOPUBLISH`)                |
+| `publish(TableVersion, $comment, $autopublished)` | Freezes a version with the table's next number; retries when a concurrent publication took it |
+| `copyIntoTable(Table, TableVersion)` | Makes the version active and copies its content onto the table (release A)                  |
+| `copyContent($from, $to)`      | Copies fields, variants and split between a table and a version                                     |
 
 ---
 
@@ -399,7 +444,29 @@ to a day number (days since 1970-01-01).
 | ----------------------------------------------- | ----------------------------------------------------------------------- |
 | `readListWithFilters(array $filters)`           | Paginates tables with optional title/description/matching\_type filters |
 | `createOrUpdate($values, $id = null)`           | Creates or updates a table with full field and variant replacement      |
+| `writeContent($model, $values, $detectRenames)` | Writes fields and variants on a table or a draft, with rename detection; returns the renames |
+| `withRenamedConditionsOn($model, $values)`      | Points the payload's conditions at renamed fields, before validation    |
 | `analyzeTableDecisions($table_id, $variant_id)` | Aggregates decision history to calculate rule/condition hit rates       |
+
+---
+
+### `App\Repositories\TableVersionsRepository`
+
+Lifecycle of a table's versions (see [VERSIONS.md](VERSIONS.md)). Scope checks
+that depend on the version (deleting a published version, changing the active
+version's split) are in `TableVersionsController`.
+
+| Method                                          | Description                                                             |
+| ----------------------------------------------- | ----------------------------------------------------------------------- |
+| `listFor(Table)`                                | Versions without content: drafts (last edited first), then published (newest first) |
+| `find(Table, $versionId)`                       | A version of the table, or `404 version_not_found`                      |
+| `createDraft(Table, $fromVersionId, $name)`     | Draft holding a version's content, by default the active version's     |
+| `updateDraft(TableVersion, array $values)`      | Replaces a draft's content; `409 version_published` on a published one  |
+| `publish(TableVersion, $comment)`               | Publishes a draft                                                       |
+| `activate(Table, TableVersion)`                 | Activates a published version; flows follow field renames; returns the response meta |
+| `updateSplit(Table, TableVersion, $mode, array $variants)` | Changes a version's split without a new version; the table follows for the active one |
+| `delete(Table, TableVersion)`                   | Deletes a version; `409 version_in_use` for the active one              |
+| `divergence(Table, TableVersion)`               | `version_diverges` warning meta when the version does not descend from the active one |
 
 ---
 
@@ -491,6 +558,11 @@ to a day number (days since 1970-01-01).
 
 ## Decision Engine Flow
 
+The route v2 (`POST /api/v2/tables/{id}/decisions`, body
+`{ version, variant_id, data }`) and test runs follow the same steps through
+`Scoring::evaluateRequest()`, on the version they name (see
+[VERSIONS.md](VERSIONS.md)). Below, the route v1.
+
 	POST /api/v1/tables/{id}/decisions
 	  Body: { field_key_1: value, field_key_2: value, ..., variant_id?: id }
 	
@@ -500,7 +572,9 @@ to a day number (days since 1970-01-01).
 	
 	2. Scoring::check($id, $values, $appId, $showMeta)
 	
-	   a. Load table from MongoDB via TablesRepository::read($id)
+	   a. Load table from MongoDB via TablesRepository::read($id), then its active
+	      version (TableVersioning::activeVersion): steps b to e use the version's
+	      fields and variants. A table without one yet runs as stored.
 	
 	   b. Validate submitted values against the table's field schema
 	      - Each field becomes: "field_key" => "present|{type}"
@@ -537,7 +611,7 @@ to a day number (days since 1970-01-01).
 	   e. If no rule matched (or score is 0): use variant.default_decision
 	
 	   f. Build scoring_data snapshot:
-	      { table, application, applications, title, description,
+	      { table (with version: { _id, number }, null without one), application, applications, title, description,
 	        default_decision, fields, rules (with per-condition matched flags),
 	        request, final_decision }
 	
@@ -612,6 +686,10 @@ The Console Kernel schedules three recurring tasks via Laravel's task scheduler.
 | `MIXPANEL_ENABLED`    | false          | Enable Mixpanel integration                     |
 | `BUGSNAG_ENABLED`     | —              | Enable Bugsnag error reporting                  |
 | `DECISION_TIMEZONE`   | `APP_TIMEZONE` | Timezone of "today" in relative date conditions |
+| `TABLE_VERSIONS_LEGACY_AUTOPUBLISH` | true | Release A compatibility mode: a table save that changes its content publishes and activates a version ([VERSIONS.md](VERSIONS.md)) |
+| `TABLE_VERSIONS_CALL_WINDOW_DAYS` | 30 | Days an API key's last call keeps it counted as calling a version (deletion guard, keys listed at activation) |
+| `DECISIONS_V1_DEPRECATED_AT` | (empty) | Date sent in the `Deprecation` header of the route v1; empty: no header |
+| `DECISIONS_V1_SUNSET` | (empty) | Date sent in the `Sunset` header of the route v1; empty: no header |
 
 [1]:	#project-overview
 [2]:	#architecture-diagram
