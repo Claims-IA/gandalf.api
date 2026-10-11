@@ -26,7 +26,6 @@ return [
             'consumers_manage',
             'users_manage',
             'project_update',
-            'project_delete',
             'decisions_view',
         ],
         'consumers' => [
@@ -105,7 +104,9 @@ return [
             '~^\/api\/v1\/projects\/collaborators\/account$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_manage'],
-            '~^\/api\/v1\/projects$~' => ['project_delete'],
+            // Deleting an application is reserved to superadmins: the
+            // 'superadmin' route middleware checks it (ADMIN.md).
+            '~^\/api\/v1\/projects$~' => [],
             '~^\/api\/v1\/admin\/tables\/(.+)$~' => ['tables_delete'],
         ],
     ],

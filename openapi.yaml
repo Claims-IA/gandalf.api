@@ -525,6 +525,60 @@ components:
             HMAC-based Intercom identity verification code. Only present in
             `GET /api/v1/users/current` responses when Intercom is enabled.
           example: "abc123def456..."
+        superadmin:
+          type: boolean
+          description: >
+            Present and true for a superadmin (Claims IA, see ADMIN.md), absent
+            otherwise. Set only by `php artisan gandalf:superadmin`, never
+            through the API.
+          example: true
+
+    AdminLogEntry:
+      type: object
+      description: One action of a superadmin (ADMIN.md).
+      properties:
+        _id:
+          type: string
+        user_id:
+          type: string
+          nullable: true
+          description: The superadmin; null for a command.
+        email:
+          type: string
+          nullable: true
+        action:
+          type: string
+          enum: [request, superadmin.grant, superadmin.revoke]
+        method:
+          type: string
+          nullable: true
+          example: DELETE
+        path:
+          type: string
+          nullable: true
+          example: /api/v1/projects
+        application_id:
+          type: string
+          nullable: true
+          description: The application of `X-Application`, if any.
+        status:
+          type: integer
+          nullable: true
+          description: HTTP status of the response.
+          example: 200
+        ip:
+          type: string
+          nullable: true
+        details:
+          type: object
+          description: >
+            What the controller noted: `application_id` and `title` of a
+            created application, `title` of a deleted one; for a command,
+            `user_id` and `email` of the account concerned.
+          additionalProperties: true
+        created_at:
+          type: string
+          example: "2026-10-11 09:30:00"
 
     UserListItem:
       type: object
@@ -2094,12 +2148,75 @@ paths:
 
   # ── Projects ─────────────────────────────────────────────────────────────────
   /api/v1/projects:
+    get:
+      tags: [Projects]
+      summary: List projects
+      description: |
+        The caller's applications. A superadmin (ADMIN.md) gets every
+        application.
+      operationId: listProjects
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Applications, each with its members (`users`).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+
+    post:
+      tags: [Projects]
+      summary: Create project (superadmin)
+      description: |
+        Reserved to superadmins (ADMIN.md). The superadmin does not become a
+        member: the application starts with `users: []`. Its admin is named by
+        inviting them with the `admin` role (`POST /api/v1/invite` with the new
+        `X-Application`).
+      operationId: createProject
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                  example: "Client A"
+                description:
+                  type: string
+                settings:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "201":
+          description: Application created, without members.
+        "401":
+          description: No user token (an API key never creates an application).
+        "403":
+          description: The caller is not a superadmin.
+        "422":
+          description: Validation error.
+
     delete:
       tags: [Projects]
-      summary: Delete project
+      summary: Delete project (superadmin)
       description: |
-        Permanently deletes the application and **all** of its associated
-        decision tables. This is a hard delete with no recovery path.
+        Reserved to superadmins (ADMIN.md). Permanently deletes the application
+        and **all** of its associated decision tables. This is a hard delete
+        with no recovery path.
 
         **Warning:** This action is irreversible.
       operationId: deleteProject
@@ -2118,6 +2235,61 @@ paths:
                   meta:
                     type: object
                   data: {}
+        "403":
+          description: The caller is not a superadmin.
+
+  /api/v1/superadmin/log:
+    get:
+      tags: [Projects]
+      summary: Superadmin log
+      description: |
+        Reserved to superadmins (ADMIN.md). Every API request made by a
+        superadmin, reads included, and every `gandalf:superadmin` grant or
+        revocation, most recent first.
+      operationId: superadminLog
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: application_id
+          in: query
+          schema:
+            type: string
+        - name: user_id
+          in: query
+          schema:
+            type: string
+        - name: size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Log entries, paginated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  meta:
+                    type: object
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdminLogEntry'
+                  paging:
+                    $ref: '#/components/schemas/Paging'
+        "401":
+          description: No user token.
+        "403":
+          description: The caller is not a superadmin.
 
   /api/v1/projects/export:
     get:

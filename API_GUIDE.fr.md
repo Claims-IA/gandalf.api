@@ -366,6 +366,8 @@ projet peut inviter avec le rôle `admin` (`403` sinon).
 ```
 
 > La `scope` demandée doit être un **sous-ensemble** de la scope de l'utilisateur invitant.
+> Un superadmin agit comme un admin qui a tous les droits dans toutes les
+> applications : il peut donc inviter le premier admin d'une application.
 > Toute tentative d'escalade de privilèges retourne HTTP 422.
 
 Si l'invité possède déjà un compte, il est ajouté immédiatement à l'application.
@@ -375,11 +377,41 @@ Sinon, il est ajouté automatiquement lors de son inscription avec la même adre
 
 ### Projets
 
-Tous les endpoints de projet nécessitent un token Bearer + `X-Application`.
+Les endpoints de projet nécessitent un token Bearer, et `X-Application` sauf
+pour lister ou créer des applications. Créer et supprimer une application est
+réservé aux superadmins (comptes Claims IA) : voir [ADMIN.fr.md](ADMIN.fr.md).
+
+#### `GET /api/v1/projects`
+
+Les applications de l'appelant ; toutes les applications pour un superadmin.
+
+---
+
+#### `POST /api/v1/projects`
+
+Superadmin seulement (`403 access_denied` sinon). Crée une application ; le
+superadmin n'en devient pas membre (`"users": []`). Son admin est ensuite nommé
+en l'invitant avec le rôle `admin` (`POST /api/v1/invite` avec le nouvel
+`X-Application`).
+
+```json
+{ "title": "Client A", "description": "Scoring crédit", "settings": { "show_meta": true } }
+```
+
+---
 
 #### `DELETE /api/v1/projects`
 
-Supprime définitivement l'application et **toutes** ses tables de décision. **Irréversible.**
+Superadmin seulement. Supprime définitivement l'application et **toutes** ses tables de décision. **Irréversible.**
+
+---
+
+#### `GET /api/v1/superadmin/log`
+
+Superadmin seulement. Le journal d'administration : chaque requête d'un
+superadmin, la plus récente d'abord. Filtres `application_id`, `user_id` ;
+`size` (1 à 200, 50 par défaut) et `page`. Les champs d'une entrée sont décrits
+dans [ADMIN.fr.md](ADMIN.fr.md#journal-dadministration).
 
 ---
 

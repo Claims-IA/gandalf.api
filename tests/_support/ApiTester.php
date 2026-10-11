@@ -811,6 +811,11 @@ class ApiTester extends \Codeception\Actor
         return $project;
     }
 
+    /**
+     * An application whose admin, holding every user scope, is the logged in
+     * user. Only a superadmin creates applications through the API (ADMIN.md):
+     * the helper writes it directly, as POST /projects did before.
+     */
     public function createProject($new = false, array $data = [])
     {
         if (!$this->project || $new) {
@@ -820,13 +825,41 @@ class ApiTester extends \Codeception\Actor
                 'title' => $faker->streetName,
                 'description' => $faker->text('150'),
             ], $data);
-            $this->sendPOST('api/v1/projects', $project);
-            $project = json_decode($this->grabResponse());
-            $this->assertProject('$.data', 201);
-            $this->project = $project->data;
+            $scopes = (require __DIR__ . '/../../config/applicationable.php')['scopes']['users'];
+            $bulk = new MongoDB\Driver\BulkWrite;
+            $id = $bulk->insert($project + [
+                'users' => [[
+                    '_id' => new MongoDB\BSON\ObjectID,
+                    'user_id' => new MongoDB\BSON\ObjectID($this->user->_id),
+                    'role' => 'admin',
+                    'scope' => $scopes,
+                ]],
+                'consumers' => [],
+            ]);
+            $this->getMongo()->executeBulkWrite('gandalf_test.applications', $bulk);
+            // The shape GET /projects/current answers.
+            $this->project = json_decode(json_encode(['_id' => (string) $id] + $project + [
+                'users' => [[
+                    'user_id' => $this->user->_id,
+                    'role' => 'admin',
+                    'scope' => $scopes,
+                    'username' => $this->user->username,
+                    'email' => $this->user->email,
+                ]],
+            ]));
         }
 
         return $this->project;
+    }
+
+    /**
+     * Make the logged in user a superadmin, as `php artisan gandalf:superadmin` does.
+     */
+    public function makeSuperadmin($user)
+    {
+        $bulk = new MongoDB\Driver\BulkWrite;
+        $bulk->update(['_id' => new MongoDB\BSON\ObjectID($user->_id)], ['$set' => ['superadmin' => true]]);
+        $this->getMongo()->executeBulkWrite('gandalf_test.users', $bulk);
     }
 
     public function createUser($new = false, $email = '', $verify = true)

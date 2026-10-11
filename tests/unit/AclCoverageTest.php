@@ -49,6 +49,9 @@ class AclCoverageTest extends \Codeception\TestCase\Test
         'POST /api/v1/projects/users/admin' => ['users_manage'],
         'PUT /api/v1/projects' => ['project_update'],
         'GET /api/v1/projects/export' => ['project_update'],
+        'PUT /api/v1/projects/consumers' => ['consumers_manage'],
+        // Superadmin only: the 'superadmin' route middleware (SuperadminTest).
+        'DELETE /api/v1/projects' => [],
     ];
 
     public static function setUpBeforeClass(): void
@@ -183,12 +186,12 @@ class AclCoverageTest extends \Codeception\TestCase\Test
     public function testTheRoutedPairIsCheckedNotTheRequestObject()
     {
         // Symfony rewrites the request URI with X-Original-URL once read: the
-        // request object says "/", the router dispatched DELETE /api/v1/projects.
-        $request = Request::create('/api/v1/projects', 'DELETE', [], [], [], ['HTTP_X_ORIGINAL_URL' => '/']);
+        // request object says "/", the router dispatched PUT /api/v1/projects.
+        $request = Request::create('/api/v1/projects', 'PUT', [], [], [], ['HTTP_X_ORIGINAL_URL' => '/']);
         $request->getRequestUri();
 
-        $this->assertFalse($this->passes('DELETE', '/api/v1/projects', ['tables_view'], true, $request));
-        $this->assertTrue($this->passes('DELETE', '/api/v1/projects', ['project_delete'], true, $request));
+        $this->assertFalse($this->passes('PUT', '/api/v1/projects', ['tables_view'], true, $request));
+        $this->assertTrue($this->passes('PUT', '/api/v1/projects', ['project_update'], true, $request));
     }
 
     public function testHeadIsCheckedAsGet()

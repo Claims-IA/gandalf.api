@@ -89,6 +89,8 @@ $app->singleton(
 $middlewares = [
     App\Http\Middleware\JsonMiddleware::class,
     App\Http\Middleware\NewRelicMiddleware::class,
+    // Records the superadmins' requests once answered (ADMIN.md)
+    App\Http\Middleware\SuperadminAuditMiddleware::class,
 ];
 if (env('INTERCOM_ENABLED', false)) {
     $middlewares[] = \Nebo15\LumenIntercom\Middleware\TerminableMiddleware::class;

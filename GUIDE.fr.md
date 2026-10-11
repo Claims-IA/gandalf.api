@@ -170,13 +170,16 @@ Un utilisateur peut appartenir à plusieurs applications avec des rôles différ
 
 #### Rôles et permissions
 
-| Rôle         | Droits                                                               |
-|--------------|----------------------------------------------------------------------|
-| **Admin**    | Gestion complète : tables, variantes, règles, utilisateurs du projet |
-| **Manager**  | Gestion des tables et règles, lecture des décisions                  |
-| **Consumer** | Exécution des tables (appel au moteur de décision) uniquement        |
+| Rôle           | Droits                                                                                  |
+|----------------|-----------------------------------------------------------------------------------------|
+| **Superadmin** | Réservé à Claims IA : crée et supprime les applications, nomme leurs admins, agit dans toutes les applications (actions journalisées) |
+| **Admin**      | Gestion complète de son application : tables, variantes, règles, utilisateurs, clés d'API, sans pouvoir donner plus de droits qu'il n'en a |
+| **Manager**    | Gestion des tables et règles, lecture des décisions                                     |
+| **Consumer**   | Exécution des tables (appel au moteur de décision) uniquement                           |
 
 Les rôles sont attribués lors de l'invitation d'un utilisateur à une application.
+Seul un superadmin crée ou supprime une application : voir
+[ADMIN.fr.md](ADMIN.fr.md).
 
 ---
 

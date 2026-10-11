@@ -13,7 +13,8 @@
  *   - 422 when the target application is the source application (no-op move);
  *   - 404 when the target application does not exist;
  *   - 403 when the caller is not a member of the TARGET application, or has no
- *     tables_create scope there.
+ *     tables_create scope there. A superadmin is an admin of every application
+ *     (User::memberOf).
  *
  * The source table/flow itself is already scoped to the current application by
  * AbstractRepository::read (via the Applicationable contract), so ownership of
@@ -63,9 +64,9 @@ trait CopyMoveGuard
             );
         }
 
-        // The caller must also be a member of the target application to write into it.
-        $callerId = $this->request->user()->getId();
-        $targetUser = $targetApp->getUser($callerId);
+        // The caller must also be a member of the target application to write
+        // into it (a superadmin acts in every application, ADMIN.md).
+        $targetUser = $this->request->user()->memberOf($targetApp);
         if (!$targetUser) {
             return $this->response->json(
                 ['message' => 'You are not a member of the target application.'],
