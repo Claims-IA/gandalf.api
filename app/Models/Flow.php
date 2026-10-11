@@ -11,10 +11,15 @@
  * Structure:
  *   - inputs[]  — the flow's public input contract: { key, type }.
  *   - outputs[] — the flow's public output contract: { name, from_node, from_output }.
- *   - nodes[]   — { node_id, table_id }, one per referenced table.
+ *   - nodes[]   — { node_id, table_id, table_version_id }, one per referenced
+ *                 table, pinned to a version of it (VERSIONS.md, batch 4).
  *   - edges[]   — { from, into } wiring, where `from` is either an input
  *                 ({ input }) or an upstream node output ({ node, output }),
  *                 and `into` is a downstream field ({ node, field }).
+ *
+ * The graph lives in the flow's versions (FlowVersion); the flow document holds
+ * its identity, its active version (`active_version_id`) and, until release B
+ * ends it, a copy of the active version's graph, like a table.
  *
  * Graph validation (acyclicity, references, type compatibility) lives in the
  * FlowRepository / FlowsController, not here. The Applicationable trait scopes
@@ -65,6 +70,7 @@ class Flow extends Base implements ListableInterface, Applicationable
         'title',
         'description',
         'category_id',
+        'active_version_id',
         'inputs',
         'outputs',
         'nodes',

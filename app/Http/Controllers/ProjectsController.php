@@ -13,9 +13,12 @@
 namespace App\Http\Controllers;
 
 use App\Models\Table;
+use App\Models\TableVersion;
+use App\Models\FlowVersion;
 use App\Models\User;
 use App\Models\Invitation;
 use App\Services\DbTransfer;
+use App\Services\VersionCalls;
 use App\Services\Mail;
 use App\Exceptions\IdNotFoundException;
 use MongoDB\BSON\ObjectID;
@@ -54,8 +57,13 @@ class ProjectsController extends AbstractController
      */
     public function deleteProject(Application $application)
     {
-        // Remove all decision tables that belong to this application first
+        // Remove all decision tables that belong to this application first, with
+        // their versions and the calls of its API keys (a query delete fires no
+        // TableObserver::deleted)
         Table::where(['applications' => ['$in' => [$application->_id]]])->delete();
+        TableVersion::where(['applications' => ['$in' => [$application->_id]]])->delete();
+        FlowVersion::where(['applications' => ['$in' => [$application->_id]]])->delete();
+        (new VersionCalls)->deleteForApplication($application->_id);
         // Then delete the application document itself
         $application->delete();
 

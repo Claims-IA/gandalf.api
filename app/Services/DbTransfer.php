@@ -3,11 +3,13 @@
  * DbTransfer
  *
  * Handles the export of an application's data from MongoDB to a downloadable
- * archive file. Uses the mongoexport CLI tool to dump the tables, decisions, and
- * changelogs collections filtered by application ID, then packages the resulting
- * JSON files into a .tar.gz archive stored in public/dump/. The archive is named
- * with a UTC timestamp and a random token to prevent enumeration. The public URL
- * for the archive is returned to the caller.
+ * archive file. Uses the mongoexport CLI tool to dump the tables, table_versions,
+ * flows, flow_versions, flow_runs, version_calls, decisions, and changelogs
+ * collections filtered by application ID, then
+ * packages the resulting JSON files into a .tar.gz archive stored in
+ * public/dump/. The archive is named with a UTC timestamp and a random token
+ * to prevent enumeration. The public URL for the archive is returned to the
+ * caller.
  *
  * @package App\Services
  */
@@ -36,6 +38,11 @@ class DbTransfer
         // Define each collection and its application-scoped mongoexport query filter
         $collections = [
             'tables' => "'{applications: \"{$appId}\"}'",
+            'table_versions' => "'{applications: \"{$appId}\"}'",
+            'flows' => "'{applications: \"{$appId}\"}'",
+            'flow_versions' => "'{applications: \"{$appId}\"}'",
+            'flow_runs' => "'{applications: \"{$appId}\"}'",
+            'version_calls' => "'{applications: \"{$appId}\"}'",
             'decisions' => "'{applications: \"{$appId}\"}'",
             // Changelogs use a nested field path for the application ID
             'changelogs' => "'{\"model.attributes.applications\": \"{$appId}\"}'",

@@ -104,8 +104,9 @@ Les contrôleurs gèrent l'analyse des requêtes HTTP, la validation des entrée
 | `Controller`          | Classe de base ; simple wrapper du contrôleur de routage Lumen                                  |
 | `UsersController`     | Inscription, vérification, réinitialisation de mot de passe, mise à jour du profil, invitations |
 | `TablesController`    | CRUD des tables de décision et endpoint d'analyse                                               |
+| `TableVersionsController` | Versions de table : brouillons, publication, activation, répartition des variantes, exécutions de test, appels par clé ([VERSIONS.fr.md](VERSIONS.fr.md)) |
 | `DecisionsController` | Accès administrateur en lecture seule aux décisions et mise à jour des métadonnées              |
-| `ConsumerController`  | Évaluation des décisions et récupération des résultats côté consommateur                        |
+| `ConsumerController`  | Évaluation des décisions (routes v1 et v2) et récupération des résultats côté consommateur      |
 | `ChangelogController` | Liste de l'historique d'audit, diff et rollback                                                 |
 | `ProjectsController`  | Suppression d'application et export des données                                                 |
 
@@ -116,12 +117,13 @@ Tous les modèles étendent `Base` (qui étend Jenssegers MongoDB Eloquent). Les
 | Classe          | Collection MongoDB           | Rôle                                                                 |
 | --------------- | ---------------------------- | -------------------------------------------------------------------- |
 | `User`          | `users`                      | Utilisateur de la plateforme avec tokens OAuth et vérification email |
-| `Table`         | `tables`                     | Table de décision avec variantes, champs et règles                   |
+| `Table`         | `tables`                     | Table de décision : identité, types, version active, et copie du contenu de sa version active (mise en production A, voir [VERSIONS.fr.md](VERSIONS.fr.md)) |
+| `TableVersion`  | `table_versions`             | Une version du contenu d'une table (champs, variantes, répartition) : brouillon, ou publiée et numérotée |
 | `Decision`      | `decisions`                  | Enregistrement d'audit immuable d'une évaluation                     |
-| `Field`         | embarqué dans Table/Decision | Définition d'un champ d'entrée (clé, type, source, preset)           |
+| `Field`         | embarqué dans Table/TableVersion/Decision | Définition d'un champ d'entrée (clé, type, source, preset) |
 | `Rule`          | embarqué dans Variant        | Règle ordonnée avec conditions et valeur de résultat                 |
 | `Condition`     | embarqué dans Rule           | Comparaison d'un seul champ (field\\\_key, opérateur, valeur)        |
-| `Variant`       | embarqué dans Table          | Variante A/B contenant des règles et une décision par défaut         |
+| `Variant`       | embarqué dans Table/TableVersion | Variante A/B contenant des règles et une décision par défaut |
 | `Preset`        | embarqué dans Field          | Condition de pré-traitement appliquée avant l'évaluation des règles  |
 | `Invitation`    | `invitations`                | Invitation en attente pour rejoindre une application                 |
 | `ConditionType` | `condition_types`            | Espace réservé (types de conditions gérés dans le code)              |
@@ -134,6 +136,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | --------------------- | ------------- | ----------------------------------------------------------------------------------- |
 | `UsersRepository`     | User          | `createOrUpdate()` — gère le flux de vérification email et déclenche des événements |
 | `TablesRepository`    | Table         | `createOrUpdate()`, `readListWithFilters()`, `analyzeTableDecisions()`              |
+| `TableVersionsRepository` | TableVersion | `createDraft()`, `updateDraft()`, `publish()`, `activate()`, `updateSplit()`, `delete()`, `divergence()` |
 | `DecisionsRepository` | Decision      | `getDecisions()`, `getConsumerDecision()`, `updateMeta()`                           |
 
 ### Services (`app/Services/`)
@@ -143,6 +146,9 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `Scoring`         | Cœur du moteur de décision — évalue les règles, accumule les résultats, persiste les décisions          |
 | `ConditionsTypes` | Définit tous les opérateurs de comparaison sous forme de closures ; évalue les conditions à l'exécution |
 | `DateValue`       | Analyse les valeurs `date` (dates ISO, relatives `today-30d`) en numéros de jour                        |
+| `TableVersioning` | Retrouve la version active d'une table, publie les versions et recopie la version active sur la table ; pendant la mise en production A, publie et active une version quand un enregistrement change le contenu d'une table |
+| `VersionCalls`    | Compte les appels des clés d'API par table ou flow et version demandée (`version_calls`), pour l'écran d'activation et le garde-fou de suppression |
+| `FlowVersioning`  | Versions de flows : version active, nœuds figés sur des versions de table, mode de compatibilité (les flows suivent leurs tables) ; voir [DRG.fr.md](DRG.fr.md#versions) |
 | `Mail`            | Intégration email Postmark (vérification, réinitialisation de mot de passe, invitations)                |
 | `Intercom`        | Intégration CRM Intercom (synchronisation des profils, événements de décision, code sécurisé)           |
 | `Mixpanel`        | Intégration analytics Mixpanel (événements utilisateur, compteurs de décisions)                         |
@@ -207,7 +213,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `UserObserver`        | User       | `creating` (username auto, activation),            |
 |                       |            | `created` (envoi email de vérification),           |
 |                       |            | `saving` (hash du mot de passe)                    |
-| `TableObserver`       | Table      | `saved` (écriture d'un snapshot dans le changelog) |
+| `TableObserver`       | Table      | `saved` (synchronisation des versions par `TableVersioning`, puis snapshot dans le changelog), `deleted` (suppression des versions) |
 | `InvitationsObserver` | Invitation | `created` (envoi de l'email d'invitation)          |
 
 ### Commandes console (`app/Console/Commands/`)
@@ -268,6 +274,8 @@ Modèle MongoDB Eloquent abstrait.
 
 ### `App\Models\Table`
 
+Les méthodes de contenu ci-dessous viennent du trait `HasTableContent`, partagé avec `TableVersion`. `active_version_id` désigne la `TableVersion` publiée exécutée par défaut.
+
 | Méthode                                 | Description                                                                         |
 | --------------------------------------- | ----------------------------------------------------------------------------------- |
 | `fields()`                              | Relation embedded-many vers les modèles `Field`                                     |
@@ -280,6 +288,22 @@ Modèle MongoDB Eloquent abstrait.
 
 ---
 
+### `App\Models\TableVersion`
+
+Une version du contenu d'une table (`table_versions`), avec les mêmes méthodes de contenu que `Table` (`HasTableContent`). Voir [VERSIONS.fr.md](VERSIONS.fr.md).
+
+| Attribut / méthode   | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| `table_id`           | Table propriétaire                                                          |
+| `status`             | `draft` ou `published`                                                      |
+| `number`             | Attribué à la publication, unique par table (index `table_versions_number`) |
+| `origin_version_id`  | Version d'où vient celle-ci                                                 |
+| `autopublished`      | Publiée par le mode de compatibilité de la mise en production A ou par la migration |
+| `isPublished()`      | Indique si la version est publiée                                           |
+| `toSummaryArray()`   | La version sans son contenu (`fields`, `variants`), pour les listes         |
+
+---
+
 ### `App\Models\Decision`
 
 | Méthode             | Description                                                                      |
@@ -288,7 +312,11 @@ Modèle MongoDB Eloquent abstrait.
 | `fields()`          | Relation embedded-many vers les snapshots de `Field`                             |
 | `toConsumerArray()` | Retourne la décision adaptée aux consommateurs avec des timestamps ISO-8601      |
 | `toArray()`         | Surcharge le parent pour convertir les ObjectIDs MongoDB dans `table` en chaînes |
-| `getTableArray()`   | Retourne le sous-document `table` avec les ObjectIDs en chaînes                  |
+| `getTableArray()`   | Retourne le sous-document `table` avec les ObjectIDs en chaînes (table, version, variante) |
+
+Depuis le lot 3, une décision enregistre aussi `consumer` (`client_id` de la clé
+d'API appelante, null pour un utilisateur) et `test` (exécution de test depuis
+gandalf.web).
 
 ---
 
@@ -315,11 +343,29 @@ Modèle MongoDB Eloquent abstrait.
 
 | Méthode                                                | Description                                                                       |
 | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `check($id, $values, $appId, $showMeta)`               | Pipeline complet d'évaluation ; retourne un tableau adapté aux consommateurs      |
+| `check($id, $values, $appId, $showMeta)`               | Route v1 et nœuds de flow : évalue la version active de la table, `variant_id` parmi les valeurs |
+| `evaluateRequest(Table, $version, $body, $appId, $showMeta, $test)` | Route v2 et exécutions de test : corps `{ variant_id, data }`, erreurs sous `data.*`, `422 variant_not_found` |
+| `evaluate(Table, $version, $values, $appId, $showMeta, $options)` | Pipeline complet d'évaluation d'une version (ou de la table telle qu'enregistrée) ; enregistre la clé appelante et le marqueur de test ; retourne un tableau adapté aux consommateurs |
+| `prefixRules($rules, $key)`                            | Place les règles de validation sous une clé (`data.age`)                          |
 | `checkCondition(Condition, $value, $fieldType = null)` | Définit `condition->matched` via ConditionsTypes                                  |
 | `prepareFieldPreset(Field, $value)`                    | Applique la transformation de preset avec mise en cache par exécution             |
-| `createValidationRules(Table)`                         | Construit les règles de validation Lumen à partir des champs de la table          |
+| `createValidationRules(Table\|TableVersion)`           | Construit les règles de validation Lumen à partir des champs                      |
 | `getValidationRuleByType($type)`                       | Mappe une chaîne de type de champ vers un nom de règle Lumen (`date` → `isoDate`) |
+
+---
+
+### `App\Services\TableVersioning`
+
+| Méthode                        | Description                                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `activeVersion(Table)`         | La `TableVersion` active de la table, ou null tant qu'elle n'en a pas                               |
+| `syncFromTable(Table)`         | Après un enregistrement : les versions suivent les applications de la table ; en mode de compatibilité, un changement de contenu publie et active une version |
+| `deleteForTable(Table)`        | Supprime les versions d'une table supprimée                                                         |
+| `contentHash(array)`           | Empreinte du contenu : champs d'audit ignorés, identifiants en chaînes, clés triées, valeurs par défaut des modèles appliquées |
+| `legacyAutoPublish()`          | Indique si le mode de compatibilité est actif (`TABLE_VERSIONS_LEGACY_AUTOPUBLISH`)                 |
+| `publish(TableVersion, $comment, $autopublished)` | Fige une version avec le numéro suivant de la table ; réessaie si une publication concurrente l'a pris |
+| `copyIntoTable(Table, TableVersion)` | Rend la version active et recopie son contenu sur la table (mise en production A)           |
+| `copyContent($from, $to)`      | Copie champs, variantes et répartition entre une table et une version                               |
 
 ---
 
@@ -400,7 +446,30 @@ numéro de jour (jours depuis le 1970-01-01).
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `readListWithFilters(array $filters)`           | Pagine les tables avec des filtres optionnels (titre/description/matching\\\_type)              |
 | `createOrUpdate($values, $id = null)`           | Crée ou met à jour une table avec remplacement complet des champs et variantes                  |
+| `writeContent($model, $values, $detectRenames)` | Écrit champs et variantes sur une table ou un brouillon, avec détection des renommages ; renvoie les renommages |
+| `withRenamedConditionsOn($model, $values)`      | Fait pointer les conditions du corps de requête vers les champs renommés, avant validation       |
 | `analyzeTableDecisions($table_id, $variant_id)` | Agrège l'historique des décisions pour calculer les taux de déclenchement des règles/conditions |
+
+---
+
+### `App\Repositories\TableVersionsRepository`
+
+Cycle de vie des versions d'une table (voir [VERSIONS.fr.md](VERSIONS.fr.md)).
+Les vérifications de droits qui dépendent de la version (suppression d'une
+version publiée, répartition de la version active) sont dans
+`TableVersionsController`.
+
+| Méthode                                         | Description                                                             |
+| ----------------------------------------------- | ----------------------------------------------------------------------- |
+| `listFor(Table)`                                | Versions sans contenu : brouillons (dernier modifié en premier), puis publiées (la plus récente en premier) |
+| `find(Table, $versionId)`                       | Une version de la table, ou `404 version_not_found`                     |
+| `createDraft(Table, $fromVersionId, $name)`     | Brouillon reprenant le contenu d'une version, par défaut la version active |
+| `updateDraft(TableVersion, array $values)`      | Remplace le contenu d'un brouillon ; `409 version_published` sur une version publiée |
+| `publish(TableVersion, $comment)`               | Publie un brouillon                                                     |
+| `activate(Table, TableVersion)`                 | Active une version publiée ; les flows suivent les renommages de champs ; renvoie la meta de la réponse |
+| `updateSplit(Table, TableVersion, $mode, array $variants)` | Change la répartition d'une version sans nouvelle version ; la table suit pour la version active |
+| `delete(Table, TableVersion)`                   | Supprime une version ; `409 version_in_use` pour la version active      |
+| `divergence(Table, TableVersion)`               | Meta d'avertissement `version_diverges` quand la version ne descend pas de la version active |
 
 ---
 
@@ -492,6 +561,11 @@ numéro de jour (jours depuis le 1970-01-01).
 
 ## Flux du moteur de décision
 
+La route v2 (`POST /api/v2/tables/{id}/decisions`, corps
+`{ version, variant_id, data }`) et les exécutions de test suivent les mêmes
+étapes via `Scoring::evaluateRequest()`, sur la version qu'elles désignent
+(voir [VERSIONS.fr.md](VERSIONS.fr.md)). Ci-dessous, la route v1.
+
 	POST /api/v1/tables/{id}/decisions
 	  Corps : { field_key_1: valeur, field_key_2: valeur, ..., variant_id?: id }
 	
@@ -501,7 +575,10 @@ numéro de jour (jours depuis le 1970-01-01).
 	
 	2. Scoring::check($id, $values, $appId, $showMeta)
 	
-	   a. Charger la table depuis MongoDB via TablesRepository::read($id)
+	   a. Charger la table depuis MongoDB via TablesRepository::read($id), puis sa
+	      version active (TableVersioning::activeVersion) : les étapes b à e utilisent
+	      les champs et les variantes de la version. Une table qui n'en a pas encore
+	      s'exécute telle qu'elle est stockée.
 	
 	   b. Valider les valeurs soumises par rapport au schéma de champs de la table
 	      - Chaque champ devient : "field_key" => "present|{type}"
@@ -538,7 +615,7 @@ numéro de jour (jours depuis le 1970-01-01).
 	   e. Si aucune règle n'a correspondu (ou score = 0) : utiliser variant.default_decision
 	
 	   f. Construire le snapshot scoring_data :
-	      { table, application, applications, title, description,
+	      { table (avec version : { _id, number }, null sans version), application, applications, title, description,
 	        default_decision, fields, rules (avec flags matched par condition),
 	        request, final_decision }
 	
@@ -613,6 +690,10 @@ Le Kernel Console planifie trois tâches récurrentes via le planificateur de La
 | `MIXPANEL_ENABLED`    | false          | Active l'intégration Mixpanel                                     |
 | `BUGSNAG_ENABLED`     | —              | Active le suivi d'erreurs Bugsnag                                 |
 | `DECISION_TIMEZONE`   | `APP_TIMEZONE` | Fuseau horaire de "today" dans les conditions de date relatives   |
+| `TABLE_VERSIONS_LEGACY_AUTOPUBLISH` | true | Mode de compatibilité de la mise en production A : un enregistrement qui change le contenu d'une table publie et active une version ([VERSIONS.fr.md](VERSIONS.fr.md)) |
+| `TABLE_VERSIONS_CALL_WINDOW_DAYS` | 30 | Nombre de jours pendant lesquels le dernier appel d'une clé d'API la fait compter comme appelante d'une version (garde-fou de suppression, clés listées à l'activation) |
+| `DECISIONS_V1_DEPRECATED_AT` | (vide) | Date envoyée dans l'en-tête `Deprecation` de la route v1 ; vide : pas d'en-tête |
+| `DECISIONS_V1_SUNSET` | (vide) | Date envoyée dans l'en-tête `Sunset` de la route v1 ; vide : pas d'en-tête |
 
 [1]:	#présentation-du-projet
 [2]:	#diagramme-darchitecture

@@ -13,12 +13,16 @@
  *
  * Excel format is the round-trip workbook built by Excel\ExcelTableWriter:
  * one variant per file, human-readable condition grammar, hidden _meta sheet
- * carrying table/variant ids and the optimistic-lock token. Re-importing an
- * Excel export updates the original table.
+ * carrying table/version/variant ids and the optimistic-lock token.
+ * Re-importing an Excel export updates the original table, or the version it
+ * comes from (TableImportService).
  *
- * The default variant (is_default = true) is exported for CSV (and for Excel
- * when no variant id is given). JSON exports all variants: the default variant
- * under the "table" key, and the others under the "variants" key.
+ * Each format exports the table's content or one of its versions'
+ * (VERSIONS.md, batch 2b): `$content` is the table or the version, the
+ * identity (title, types) always the table's. There is no default variant:
+ * CSV and Excel export the variant asked for, the first one otherwise. JSON
+ * exports all variants: the first under the "table" key, the others under the
+ * "variants" key.
  *
  * @package App\Services
  */
@@ -28,6 +32,7 @@ namespace App\Services;
 use App\Exceptions\VariantNotFound;
 use App\Models\Rule;
 use App\Models\Table;
+use App\Models\TableVersion;
 use App\Services\Excel\ExcelTableWriter;
 
 class TableExportService
@@ -44,49 +49,46 @@ class TableExportService
      * _id fields and runtime analytics fields are stripped so the output
      * can be re-imported to create a fresh table.
      *
-     * @param  Table  $table
+     * @param  Table                   $table
+     * @param  Table|TableVersion|null $content  The version to export; the table by default.
      * @return string  JSON string
      */
-    public function toJson(Table $table): string
+    public function toJson(Table $table, Table|TableVersion|null $content = null): string
     {
         $data = $table->toArray();
+        if ($content instanceof TableVersion) {
+            $version = $content->toArray();
+            $data['fields'] = $version['fields'] ?? [];
+            $data['variants'] = $version['variants'] ?? [];
+            $data['variants_probability'] = $version['variants_probability'] ?? '';
+        }
         $data = $this->stripIds($data);
-        unset($data['applications']);
+        unset($data['applications'], $data['active_version_id']);
 
-        // Split variants: default variant → "table" key; others → "variants" key
-        $defaultVariant = null;
-        $otherVariants  = [];
-        foreach ($data['variants'] ?? [] as $variant) {
-            if (!empty($variant['is_default'])) {
-                $defaultVariant = $variant;
-            } else {
-                $otherVariants[] = $variant;
-            }
-        }
-
-        // Fallback: if no variant is flagged, treat the first one as default
-        if ($defaultVariant === null && !empty($data['variants'])) {
-            $defaultVariant = array_shift($data['variants']);
-            $otherVariants  = array_values($data['variants']);
-        }
-
+        // Split variants: first variant → "table" key; others → "variants" key
+        $variants = array_values($data['variants'] ?? []);
         unset($data['variants']);
-        $data['table']    = $defaultVariant;
-        $data['variants'] = $otherVariants;
+        $data['table']    = array_shift($variants);
+        $data['variants'] = $variants;
 
         return json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
     /**
-     * Serialize the table to a CSV string (first variant only).
+     * Serialize one variant of the table, or of one of its versions, to a CSV
+     * string.
      *
-     * @param  Table  $table
+     * @param  Table                   $table
+     * @param  Table|TableVersion|null $content    The version to export; the table by default.
+     * @param  string|null             $variantId  Variant to export; null = first variant.
      * @return string  CSV content
+     * @throws VariantNotFound  When $variantId does not exist in the content.
      */
-    public function toCsv(Table $table): string
+    public function toCsv(Table $table, Table|TableVersion|null $content = null, ?string $variantId = null): string
     {
-        $fieldKeys = $this->buildFieldKeys($table);
-        $variant   = $this->getDefaultVariant($table);
+        $content   = $content ?: $table;
+        $fieldKeys = $this->buildFieldKeys($content);
+        $variant   = $this->findVariant($content, $variantId);
 
         $lines = [];
 
@@ -102,7 +104,7 @@ class TableExportService
         // FIELDS section
         $lines[] = ['## FIELDS'];
         $lines[] = ['key', 'title', 'type'];
-        foreach ($table->fields()->get() as $field) {
+        foreach ($content->fields()->get() as $field) {
             $lines[] = [$field->key, $field->title, $field->type];
         }
         $lines[] = [];
@@ -130,30 +132,30 @@ class TableExportService
     }
 
     /**
-     * Serialize one variant of the table to a round-trip XLSX file and return
-     * the temporary file path. The caller is responsible for streaming the
-     * file and deleting it afterward.
+     * Serialize one variant of the table, or of one of its versions, to a
+     * round-trip XLSX file and return the temporary file path. The caller is
+     * responsible for streaming the file and deleting it afterward.
      *
-     * The workbook embeds the table/variant ids and the table's updated_at
-     * timestamp (hidden _meta sheet) so that re-importing the file updates the
-     * original table with optimistic-lock protection.
+     * The workbook embeds the table/version/variant ids and the exported
+     * content's updated_at timestamp (hidden _meta sheet) so that re-importing
+     * the file updates its origin with optimistic-lock protection.
      *
-     * @param  Table       $table
-     * @param  string|null $variantId  Variant to export; null = default variant.
+     * @param  Table                   $table
+     * @param  string|null             $variantId  Variant to export; null = first variant.
+     * @param  TableVersion|null       $version    The version exported, recorded in _meta.
+     * @param  Table|TableVersion|null $content    Where the content comes from; the table by default.
      * @return string  Absolute path to the generated .xlsx temp file
-     * @throws VariantNotFound  When $variantId does not exist on the table.
+     * @throws VariantNotFound  When $variantId does not exist in the content.
      */
-    public function toExcel(Table $table, ?string $variantId = null): string
-    {
-        $variant = $variantId === null
-            ? $this->getDefaultVariant($table)
-            : $this->getVariantById($table, $variantId);
+    public function toExcel(
+        Table $table,
+        ?string $variantId = null,
+        ?TableVersion $version = null,
+        Table|TableVersion|null $content = null
+    ): string {
+        $content = $content ?: $table;
 
-        if (!$variant) {
-            throw new VariantNotFound();
-        }
-
-        return $this->excelWriter->write($table, $variant);
+        return $this->excelWriter->write($table, $this->findVariant($content, $variantId), $version, $content);
     }
 
     // -------------------------------------------------------------------------
@@ -161,32 +163,19 @@ class TableExportService
     // -------------------------------------------------------------------------
 
     /**
-     * Return the default variant (is_default = true), falling back to the first one.
-     */
-    private function getDefaultVariant(Table $table)
-    {
-        $variants = $table->variants()->get();
-        foreach ($variants as $variant) {
-            if ($variant->is_default) {
-                return $variant;
-            }
-        }
-        return count($variants) > 0 ? $variants[0] : null;
-    }
-
-    /**
-     * Return the variant with the given _id, or null when it does not exist.
+     * The variant with the given _id, or the first one when no id is given.
      *
-     * @return \App\Models\Variant|null
+     * @return \App\Models\Variant
+     * @throws VariantNotFound  When the variant does not exist (404).
      */
-    private function getVariantById(Table $table, string $variantId)
+    private function findVariant(Table|TableVersion $content, ?string $variantId)
     {
-        foreach ($table->variants()->get() as $variant) {
-            if ((string) $variant->_id === $variantId) {
+        foreach ($content->variants()->get() as $variant) {
+            if ($variantId === null || (string) $variant->_id === $variantId) {
                 return $variant;
             }
         }
-        return null;
+        throw new VariantNotFound();
     }
 
     /**
@@ -194,10 +183,10 @@ class TableExportService
      *
      * @return string[]
      */
-    private function buildFieldKeys(Table $table): array
+    private function buildFieldKeys(Table|TableVersion $content): array
     {
         $keys = [];
-        foreach ($table->fields()->get() as $field) {
+        foreach ($content->fields()->get() as $field) {
             $keys[] = $field->key;
         }
         return $keys;
@@ -257,9 +246,9 @@ class TableExportService
 
         if (isset($data['variants']) && is_array($data['variants'])) {
             foreach ($data['variants'] as &$variant) {
-                // Strip identity and system-managed fields; keep is_default (portable)
+                // Strip identity and system-managed fields
                 unset($variant['_id'], $variant['created_at'], $variant['created_by'],
-                      $variant['updated_at'], $variant['updated_by']);
+                      $variant['updated_at'], $variant['updated_by'], $variant['is_default']);
                 if (isset($variant['rules']) && is_array($variant['rules'])) {
                     foreach ($variant['rules'] as &$rule) {
                         unset($rule['_id'], $rule['probability'], $rule['requests']);

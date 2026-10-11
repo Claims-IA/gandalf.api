@@ -108,20 +108,45 @@ class TablesRepository extends AbstractRepository
             ApplicationableHelper::addApplication($model);
         }
         $model->fill($values);
-        // A field sent with its stored _id but another key is a rename. Orphan
-        // conditions still using the old key follow it (the editor renames them
-        // itself; this covers API clients), and so do the application's flows
-        // using this table, once the table is saved.
+        // The application's flows using this table follow its field renames,
+        // once the table is saved.
         $this->lastFieldRenames = [];
-        list($values, $renames) = $id ? $this->applyFieldRenames($model, $values) : [$values, []];
-        // Enforce the table invariant: every variant shares the SAME set of
-        // fields (columns), so each rule must carry exactly one condition per
-        // field, in field order. Realign before persisting so a client that
-        // sends drifted conditions (extra/missing/reordered) can never store an
-        // inconsistent table. Skip only when we cannot determine the field set
-        // (fields neither provided nor already stored) — normalising against an
-        // empty field set would wrongly wipe every condition. In practice the
-        // API always sends fields ('required'); this guards programmatic calls.
+        $renames = $this->writeContent($model, $values, (bool) $id);
+        $model->save();
+
+        if ($renames) {
+            $this->lastFieldRenames = ['field_renames' => (object) $renames]
+                + (new FlowRepository())->followFieldRenames((string) $model->_id, $renames);
+        }
+
+        return $model;
+    }
+
+    /**
+     * Write a content payload (fields, variants) to a model holding table
+     * content: a Table, or a TableVersion draft. Does not save the model.
+     *
+     * A field sent with its stored _id but another key is a rename: orphan
+     * conditions still using the old key follow it (the editor renames them
+     * itself; this covers API clients).
+     *
+     * Enforces the table invariant: every variant shares the SAME set of fields
+     * (columns), so each rule must carry exactly one condition per field, in
+     * field order. Realign before persisting so a client that sends drifted
+     * conditions (extra/missing/reordered) can never store an inconsistent
+     * table. Skip only when we cannot determine the field set (fields neither
+     * provided nor already stored): normalising against an empty field set
+     * would wrongly wipe every condition. In practice the API always sends
+     * fields ('required'); this guards programmatic calls.
+     *
+     * @param  \App\Models\Table|\App\Models\TableVersion $model
+     * @param  array $values         Content payload.
+     * @param  bool  $detectRenames  False for a model created by this payload.
+     * @return array  Field renames (old key => new key)
+     */
+    public function writeContent($model, array $values, $detectRenames = true)
+    {
+        list($values, $renames) = $detectRenames ? $this->applyFieldRenames($model, $values) : [$values, []];
         if (isset($values['variants'])) {
             $fields = isset($values['fields']) ? $values['fields'] : $this->existingFields($model);
             if (!empty($fields)) {
@@ -136,14 +161,8 @@ class TablesRepository extends AbstractRepository
         if (isset($values['variants'])) {
             $model->setVariants($values['variants']);
         }
-        $model->save();
 
-        if ($renames) {
-            $this->lastFieldRenames = ['field_renames' => (object) $renames]
-                + (new FlowRepository())->followFieldRenames((string) $model->_id, $renames);
-        }
-
-        return $model;
+        return $renames;
     }
 
     /**
@@ -336,7 +355,23 @@ class TablesRepository extends AbstractRepository
             return $values;
         }
 
-        return $this->applyFieldRenames($this->read($id), $values)[0];
+        return $this->withRenamedConditionsOn($this->read($id), $values);
+    }
+
+    /**
+     * withRenamedConditions for a model already loaded: a Table, or a
+     * TableVersion draft (see TableVersionsController::update).
+     * @param  \App\Models\Table|\App\Models\TableVersion $model
+     * @param  array $values  Update payload.
+     * @return array
+     */
+    public function withRenamedConditionsOn($model, array $values)
+    {
+        if (!isset($values['fields'], $values['variants']) || !is_array($values['fields']) || !is_array($values['variants'])) {
+            return $values;
+        }
+
+        return $this->applyFieldRenames($model, $values)[0];
     }
 
     /**
@@ -547,17 +582,29 @@ class TablesRepository extends AbstractRepository
     public function analyzeTableDecisions($table_id, $variant_id)
     {
         $table = $this->read($table_id);
-        // Use the raw MongoDB driver for this heavy read to avoid Eloquent's per-row hydration overhead
-        $mongo = new Manager(sprintf("mongodb://%s:%d", env('DB_HOST'), env('DB_PORT')));
-        $query = new Query(
-            [
+        $filter = [
             'table._id' => new ObjectID($table_id),
             'table.variant._id' => new ObjectId($variant_id),
             'applications' => ApplicationableHelper::getApplicationId(),
+            // Test runs from gandalf.web are not production traffic (VERSIONS.md)
+            'test' => ['$ne' => true],
             // Only include decisions made after the table was last updated (older decisions
             // may reference rules that no longer exist in the current table definition)
-            'created_at' => ['$gte' => new UTCDatetime($table->updated_at->timestamp * 1000)]
-            ],
+            'created_at' => ['$gte' => new UTCDatetime($table->updated_at->timestamp * 1000)],
+        ];
+        // The analytics annotate the active content: decisions of another
+        // version (route v2 with `version`) keep their rule and condition ids
+        // but not their meaning. Decisions made before versions have none.
+        if ($table->active_version_id) {
+            $filter['$or'] = [
+                ['table.version._id' => new ObjectID((string) $table->active_version_id)],
+                ['table.version' => null],
+            ];
+        }
+        // Use the raw MongoDB driver for this heavy read to avoid Eloquent's per-row hydration overhead
+        $mongo = new Manager(sprintf("mongodb://%s:%d", env('DB_HOST'), env('DB_PORT')));
+        $query = new Query(
+            $filter,
             // Project only the 'rules' field to minimise data transfer from MongoDB
             ['projection' => ['rules' => 1]]
         );

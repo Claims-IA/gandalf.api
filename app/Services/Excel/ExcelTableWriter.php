@@ -2,8 +2,11 @@
 /**
  * ExcelTableWriter
  *
- * Builds the round-trip Excel workbook for one variant of a decision table.
- * See ExcelLayout for the physical layout contract shared with the reader.
+ * Builds the round-trip Excel workbook for one variant of a decision table,
+ * from the table itself or from one of its versions (VERSIONS.md): the
+ * content (fields, rules) comes from the version, the identity (title,
+ * types) from the table. See ExcelLayout for the physical layout contract
+ * shared with the reader.
  *
  * Guardrails baked into the workbook:
  *  - every value cell is written as an explicit string (no formula/date coercion),
@@ -23,6 +26,7 @@ namespace App\Services\Excel;
 
 use App\Exceptions\ExcelImportException;
 use App\Models\Table;
+use App\Models\TableVersion;
 use App\Models\Variant;
 use App\Validators\TableRulesProvider;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
@@ -51,13 +55,17 @@ class ExcelTableWriter
      * the generated temporary .xlsx file. The caller is responsible for
      * streaming and deleting the file.
      *
-     * @param  Table   $table
-     * @param  Variant $variant
+     * @param  Table             $table
+     * @param  Variant           $variant  A variant of $content.
+     * @param  TableVersion|null $version  The version exported, recorded in _meta.
+     * @param  Table|TableVersion|null $content  Where fields and rules come from:
+     *                                           the version, or the table (default).
      * @return string  Absolute path to the .xlsx temp file
      */
-    public function write(Table $table, Variant $variant): string
+    public function write(Table $table, Variant $variant, ?TableVersion $version = null, Table|TableVersion|null $content = null): string
     {
-        $fields = $table->fields()->get();
+        $content = $content ?: $table;
+        $fields = $content->fields()->get();
 
         // A field key colliding with a sentinel header would make the workbook
         // ambiguous on re-import (the reader consumes DECISION/RULE_* markers
@@ -82,7 +90,7 @@ class ExcelTableWriter
 
         $metaSheet = $spreadsheet->createSheet();
         $metaSheet->setTitle(ExcelLayout::SHEET_META);
-        $this->writeMetaSheet($metaSheet, $table, $variant);
+        $this->writeMetaSheet($metaSheet, $table, $variant, $version, $content);
         $metaSheet->setSheetState(Worksheet::SHEETSTATE_VERYHIDDEN);
 
         $helpSheet = $spreadsheet->createSheet();
@@ -293,17 +301,26 @@ class ExcelTableWriter
     // _meta sheet
     // -------------------------------------------------------------------------
 
-    private function writeMetaSheet(Worksheet $sheet, Table $table, Variant $variant): void
-    {
-        $updatedAt = $table->updated_at;
+    private function writeMetaSheet(
+        Worksheet $sheet,
+        Table $table,
+        Variant $variant,
+        ?TableVersion $version,
+        Table|TableVersion $content
+    ): void {
+        // The lock token is the exported content's: re-importing checks that
+        // the table, or the version, did not change since.
+        $updatedAt = $content->updated_at;
         $exportedAt = $updatedAt ? $updatedAt->toIso8601String() : '';
 
         $values = [
             'format_version' => ExcelLayout::FORMAT_VERSION,
             'table_id' => (string) $table->_id,
             'variant_id' => (string) $variant->_id,
+            'version_id' => $version ? (string) $version->getId() : '',
+            'version_number' => $version && $version->isPublished() ? (string) $version->number : '',
             'exported_at' => $exportedAt,
-            'content_hash' => TableMergeService::contentHash($table),
+            'content_hash' => TableMergeService::contentHash($content),
             'matching_type' => (string) ($table->matching_type ?? 'first'),
             'decision_type' => (string) ($table->decision_type ?? 'string'),
             'variant_title' => (string) ($variant->title ?? ''),

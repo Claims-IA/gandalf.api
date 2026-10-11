@@ -51,6 +51,13 @@ class Decision extends Base implements Applicationable
         'rules',
         'default_decision',
         'final_decision',
+        // VERSIONS.md, batch 3: client_id of the calling API key (null for a
+        // user), and test runs from gandalf.web (absent on older decisions)
+        'consumer',
+        'test',
+        // Batch 4: { _id, version: { _id, number } } for a decision made by a
+        // node of a flow run
+        'flow',
         self::CREATED_AT,
         self::UPDATED_AT,
     ];
@@ -66,6 +73,9 @@ class Decision extends Base implements Applicationable
         'rules',
         'default_decision',
         'final_decision',
+        'consumer',
+        'test',
+        'flow',
         'applications',
     ];
 
@@ -208,6 +218,10 @@ class Decision extends Base implements Applicationable
         $data = $this->getAttribute('table');
         $data['_id'] = strval($data['_id']);
         $data['variant']['_id'] = strval($data['variant']['_id']);
+        // Decisions made before table versioning have no version.
+        if (!empty($data['version']['_id'])) {
+            $data['version']['_id'] = strval($data['version']['_id']);
+        }
 
         return $data;
     }

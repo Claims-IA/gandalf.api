@@ -118,6 +118,7 @@ class ExcelTableReader
         $result->formatVersion = $values['format_version'] ?? '';
         $result->tableId = $this->normalizeId($values['table_id'] ?? '');
         $result->variantId = $this->normalizeId($values['variant_id'] ?? '');
+        $result->versionId = $this->normalizeId($values['version_id'] ?? '');
         $result->exportedAt = $this->normalizeExportedAt(
             $sheet,
             $values['exported_at'] ?? '',

@@ -947,6 +947,34 @@ class TablesCest
         $I->assertResponseDataFields(['author' => $user->username]);
     }
 
+    /**
+     * Release A of table versioning (VERSIONS.md): a save that changes the
+     * content publishes and activates a version, a save that does not changes
+     * nothing, and each decision records the version it ran.
+     */
+    public function versionsFollowTheContent(ApiTester $I)
+    {
+        $I->createAndLoginUser();
+        $I->createProjectAndSetHeader();
+        $table = $I->createTable();
+        $I->assertTrue(!empty($table->active_version_id), 'A new table has an active version');
+        $version1 = $table->active_version_id;
+        $I->assertEquals(1, $I->makeDecision($table->_id)->table->version->number);
+
+        $data = $I->getTableData();
+        $data['title'] = 'Renamed, same content';
+        $I->sendPUT('api/v1/admin/tables/' . $table->_id, $data);
+        $I->assertTable();
+        $I->assertEquals($version1, $I->getResponseFields()->data->active_version_id);
+        $I->assertEquals(1, $I->makeDecision($table->_id)->table->version->number);
+
+        $data['variants'][0]['default_decision'] = 'Changed default';
+        $I->sendPUT('api/v1/admin/tables/' . $table->_id, $data);
+        $I->assertTable();
+        $I->assertNotEquals($version1, $I->getResponseFields()->data->active_version_id);
+        $I->assertEquals(2, $I->makeDecision($table->_id)->table->version->number);
+    }
+
     public function copy(ApiTester $I)
     {
         $I->createAndLoginUser();
