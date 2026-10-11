@@ -170,15 +170,24 @@ Un utilisateur peut appartenir à plusieurs applications avec des rôles différ
 
 #### Rôles et permissions
 
-| Rôle           | Droits                                                                                  |
-|----------------|-----------------------------------------------------------------------------------------|
-| **Superadmin** | Réservé à Claims IA : crée et supprime les applications, nomme leurs admins, agit dans toutes les applications (actions journalisées) |
-| **Admin**      | Gestion complète de son application : tables, variantes, règles, utilisateurs, clés d'API, sans pouvoir donner plus de droits qu'il n'en a |
-| **Manager**    | Gestion des tables et règles, lecture des décisions                                     |
-| **Consumer**   | Exécution des tables (appel au moteur de décision) uniquement                           |
+Ce qu'un membre peut faire dans une application dépend de ses **droits**
+(scopes, voir plus bas). Son **rôle** est un texte libre enregistré pour chaque
+application : seule la valeur `admin` a un effet.
 
-Les rôles sont attribués lors de l'invitation d'un utilisateur à une application.
-Seul un superadmin crée ou supprime une application : voir
+| Rôle | Ce que c'est | En plus de ses droits |
+|------|--------------|-----------------------|
+| **Superadmin** | Pas un rôle d'application : un indicateur du compte, réservé à Claims IA, posé par `php artisan gandalf:superadmin` | Crée et supprime les applications ; agit comme un admin qui a tous les droits dans toutes les applications (actions journalisées) |
+| **Admin** (`admin`) | Un membre dont le rôle vaut `admin` | Nomme et gère les admins, confirme les comptes, gère les invitations, supprime des comptes, copie et déplace entre applications ; une application n'exécute des décisions que si elle a un admin actif |
+| **Membre** (toute autre valeur) | `member` (interface actuelle), `manager` (ancienne interface), `user` (jeu de démonstration)… | Rien : ces valeurs n'ont aucun effet |
+
+Les clés d'API (consumers) ne sont pas des membres : elles ont leurs propres
+droits (`decisions_make`, `decisions_view`, `decisions_make_inactive`).
+
+Le rôle est donné à l'invitation (seul un admin invite avec le rôle `admin`),
+ou par `POST /api/v1/projects/users/admin`, par lequel un admin nomme un autre
+admin. L'ajout direct d'un compte (`POST /api/v1/projects/users`) et la
+modification d'un membre (`PUT /api/v1/projects/users`) refusent le rôle
+`admin`. Seul un superadmin crée ou supprime une application : voir
 [ADMIN.fr.md](ADMIN.fr.md).
 
 Deux droits encadrent la mise en production des versions de table :
@@ -840,7 +849,7 @@ Content-Type: application/json
 
 {
   "email": "collaborateur@example.com",
-  "role": "manager",
+  "role": "member",
   "scope": ["tables_view", "tables_create", "tables_update"]
 }
 ```
@@ -852,7 +861,7 @@ Content-Type: application/json
   "meta": { "code": 200 },
   "data": {
     "email": "collaborateur@example.com",
-    "role": "manager",
+    "role": "member",
     "scope": ["tables_view", "tables_create", "tables_update"],
     "project": {
       "id": "{APP_ID}",

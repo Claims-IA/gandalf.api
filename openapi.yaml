@@ -1830,7 +1830,8 @@ components:
           example: "colleague@example.com"
         role:
           type: string
-          example: "manager"
+          description: Free text; only `admin` has an effect, any other value is a plain member.
+          example: "member"
         scope:
           type: array
           items:
@@ -2519,7 +2520,8 @@ paths:
                   example: "colleague@example.com"
                 role:
                   type: string
-                  example: "manager"
+                  description: Free text; only `admin` has an effect (an admin only), any other value is a plain member.
+                  example: "member"
                 scope:
                   type: array
                   items:

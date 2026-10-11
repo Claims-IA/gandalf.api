@@ -362,10 +362,14 @@ projet peut inviter avec le rôle `admin` (`403` sinon).
 ```json
 {
   "email": "collegue@example.com",
-  "role": "manager",
-  "scope": ["tables_read", "decisions_read"]
+  "role": "member",
+  "scope": ["tables_view", "decisions_view"]
 }
 ```
+
+`role` est un texte libre : seule la valeur `admin` a un effet. Toute autre
+valeur (`member`, envoyée par gandalf.web, ou `manager`, envoyée par l'ancienne
+interface) fait un simple membre.
 
 > La `scope` demandée doit être un **sous-ensemble** de la scope de l'utilisateur invitant.
 > Un superadmin agit comme un admin qui a tous les droits dans toutes les
