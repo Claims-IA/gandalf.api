@@ -7,8 +7,9 @@
  * is sent. terminate() receives the final response, error responses included,
  * so a refused or failed request is recorded with its status.
  *
- * Only requests carrying a bearer token are looked at: a superadmin acts with
- * a user token, never with an API key (Basic authentication).
+ * Only requests carrying a user token are looked at, in the Authorization
+ * header (Bearer) or in the access_token parameter the OAuth server also
+ * accepts: a superadmin never acts with an API key (Basic authentication).
  *
  * @package App\Http\Middleware
  */
@@ -57,7 +58,7 @@ class SuperadminAuditMiddleware
      */
     public function terminate($request, $response)
     {
-        if (stripos((string) $request->header('Authorization'), 'Bearer ') !== 0) {
+        if (!self::carriesUserToken($request)) {
             return;
         }
         try {
@@ -74,5 +75,20 @@ class SuperadminAuditMiddleware
         } catch (\Exception $e) {
             app(ExceptionHandler::class)->report($e);
         }
+    }
+
+    /**
+     * Whether the request carries a user token where the OAuth server reads
+     * one: the Authorization header, or the access_token parameter (query or
+     * body).
+     *
+     * @param  Request $request
+     * @return bool
+     */
+    private static function carriesUserToken($request)
+    {
+        return stripos((string) $request->header('Authorization'), 'Bearer ') === 0
+            || (string) $request->query('access_token', '') !== ''
+            || (string) $request->input('access_token', '') !== '';
     }
 }

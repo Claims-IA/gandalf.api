@@ -177,14 +177,15 @@ class SuperadminTest extends \Codeception\TestCase\Test
         );
     }
 
-    private function audit($caller, $authorization, $status = 200)
+    private function audit($caller, $authorization, $status = 200, $uri = '/api/v1/projects')
     {
         $log = new MemoryAdminLog;
         $log->note(['title' => 'Created']);
-        $request = Request::create('/api/v1/projects', 'DELETE', [], [], [], [
-            'HTTP_AUTHORIZATION' => $authorization,
-            'REMOTE_ADDR' => '10.0.0.1',
-        ]);
+        $server = ['REMOTE_ADDR' => '10.0.0.1'];
+        if ($authorization !== null) {
+            $server['HTTP_AUTHORIZATION'] = $authorization;
+        }
+        $request = Request::create($uri, 'DELETE', [], [], [], $server);
         $application = new Application;
         $application->setAttribute('_id', self::APPLICATION_ID);
         app()->instance(Application::class, $application);
@@ -211,6 +212,13 @@ class SuperadminTest extends \Codeception\TestCase\Test
             'ip' => '10.0.0.1',
             'details' => ['title' => 'Created'],
         ], $entries[0]);
+    }
+
+    public function testATokenInTheAccessTokenParameterIsRecordedToo()
+    {
+        // The OAuth server also reads the token there: the log must not miss it.
+        $this->assertCount(1, $this->audit($this->user(true), null, 200, '/api/v1/projects?access_token=token'));
+        $this->assertSame([], $this->audit($this->user(true), null));
     }
 
     public function testOtherRequestsAreNotRecorded()

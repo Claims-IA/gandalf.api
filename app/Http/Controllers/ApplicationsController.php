@@ -18,6 +18,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\User;
 use App\Services\AdminLog;
 use Nebo15\LumenApplicationable\Controllers\ApplicationController;
 use Nebo15\LumenApplicationable\Models\Application;
@@ -55,7 +56,61 @@ class ApplicationsController extends ApplicationController
             return parent::projectsList();
         }
 
-        return $this->response->json(Application::orderBy('title')->get()->toArray());
+        return $this->response->json(self::listOf(Application::orderBy('title')->get()));
+    }
+
+    /**
+     * Applications as Application::toArray() gives them, but with the members'
+     * accounts read in one query (toArray() reads one per member, and fails on
+     * a member whose account is gone: username and email are then null).
+     *
+     * @param  iterable $applications
+     * @return array
+     */
+    private static function listOf($applications)
+    {
+        $members = [];
+        $userIds = [];
+        foreach ($applications as $application) {
+            $members[(string) $application->getKey()] = (array) ($application->getAttributes()['users'] ?? []);
+            foreach ($members[(string) $application->getKey()] as $member) {
+                if (!empty($member['user_id'])) {
+                    $userIds[(string) $member['user_id']] = true;
+                }
+            }
+        }
+        $accounts = [];
+        if ($userIds) {
+            foreach (User::whereIn('_id', array_keys($userIds))->get(['_id', 'username', 'email']) as $account) {
+                $accounts[(string) $account->getId()] = $account;
+            }
+        }
+
+        $list = [];
+        foreach ($applications as $application) {
+            $users = [];
+            foreach ($members[(string) $application->getKey()] as $member) {
+                $userId = (string) ($member['user_id'] ?? '');
+                $account = $accounts[$userId] ?? null;
+                $users[] = [
+                    '_id' => isset($member['_id']) ? (string) $member['_id'] : null,
+                    'user_id' => $userId,
+                    'role' => $member['role'] ?? null,
+                    'scope' => array_values((array) ($member['scope'] ?? [])),
+                    'username' => $account ? $account->username : null,
+                    'email' => $account ? $account->email : null,
+                ];
+            }
+            $list[] = [
+                '_id' => (string) $application->getKey(),
+                'title' => $application->title,
+                'description' => $application->description,
+                'settings' => $application->settings,
+                'users' => $users,
+            ];
+        }
+
+        return $list;
     }
 
     /**
