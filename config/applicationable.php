@@ -108,6 +108,7 @@ return [
             '~^\/api\/v2\/tables\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v2\/flows\/(.+)\/decisions$~' => ['decisions_make'],
             '~^\/api\/v1\/projects\/collaborators\/confirm$~' => ['users_manage'],
+            '~^\/api\/v1\/projects\/collaborators\/account$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/collaborators\/invitation\/resend$~' => ['users_manage'],
             '~^\/api\/v1\/invite$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['users_manage'],

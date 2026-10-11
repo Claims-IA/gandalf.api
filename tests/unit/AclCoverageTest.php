@@ -70,6 +70,7 @@ class AclCoverageTest extends \Codeception\TestCase\Test
         'POST /api/v1/admin/flows/{id:[0-9a-z]{24}}/activate' => ['tables_activate'],
         'GET /api/v1/admin/flows/{id:[0-9a-z]{24}}/calls' => ['tables_view'],
         'POST /api/v1/invite' => ['users_manage'],
+        'POST /api/v1/projects/collaborators/account' => ['users_manage'],
         'POST /api/v1/projects/users/admin' => ['users_manage'],
         'PUT /api/v1/projects' => ['project_update'],
         'GET /api/v1/projects/export' => ['project_update'],

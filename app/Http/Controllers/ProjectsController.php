@@ -17,6 +17,7 @@ use App\Models\TableVersion;
 use App\Models\FlowVersion;
 use App\Models\User;
 use App\Models\Invitation;
+use App\Services\Accounts;
 use App\Services\AdminLog;
 use App\Services\DbTransfer;
 use App\Services\VersionCalls;
@@ -43,6 +44,12 @@ class ProjectsController extends AbstractController
         ],
         'deleteAccount' => [
             'user_id' => 'required|string',
+        ],
+        // scope: completed in createAccount() with the caller's own scopes
+        'createAccount' => [
+            'email' => 'required|email|unique:users,email|unique:users,temporary_email',
+            'username' => 'sometimes|required|between:2,32|username|unique:users,username',
+            'role' => 'required|string',
         ],
     ];
 
@@ -174,14 +181,15 @@ class ProjectsController extends AbstractController
      *      randomly generated temporary password, activate it, add the user to the
      *      project with the invitation's role/scope, and remove the invitation.
      *      The temporary password is returned to the admin and, when email delivery
-     *      is enabled, also emailed to the invitee.
+     *      is enabled, also emailed to the invitee, who must replace it at their
+     *      first sign-in. `email_sent` says whether the email went out.
      *
      * @param  Application $application  The current application (X-Application header).
-     * @param  Mail        $mail
+     * @param  Accounts    $accounts
      * @return \Illuminate\Http\JsonResponse
      * @throws IdNotFoundException  When no matching user or invitation is found.
      */
-    public function confirmCollaborator(Application $application, Mail $mail)
+    public function confirmCollaborator(Application $application, Accounts $accounts)
     {
         // Authorisation: only a project admin may confirm another collaborator.
         if (!$this->requireAdmin()) {
@@ -210,13 +218,7 @@ class ProjectsController extends AbstractController
         // Case 1 — existing user: activate it the same way verifyEmail() does.
         if ($user) {
             if (!$user->isActive()) {
-                if ($user->temporary_email) {
-                    $user->email = $user->temporary_email;
-                    $user->temporary_email = null;
-                }
-                $user->active = true;
-                $user->removeVerifyEmailToken();
-                $user->save();
+                $user->confirmAccount()->save();
             }
 
             // The email may also have a pending invitation for THIS project (the
@@ -266,17 +268,15 @@ class ProjectsController extends AbstractController
             );
         }
 
-        // Generate a readable, unambiguous temporary password (CSPRNG) that the
-        // invitee must change after first login. Avoids look-alike characters.
-        $temporaryPassword = $this->generateTemporaryPassword();
+        // A temporary password the invitee must replace at their first sign-in
+        $temporaryPassword = $accounts->temporaryPassword();
 
         $newUser = new User();
         $newUser->fill([
-            // Derive a unique, length-valid username from the email local part.
-            'username' => $this->uniqueUsernameFromEmail($email),
+            'username' => $accounts->usernameFromEmail($email),
             'email'    => $email,
-            'password' => $temporaryPassword,
         ]);
+        $newUser->setTemporaryPassword($temporaryPassword);
         // Created already-confirmed: this is an explicit admin confirmation.
         $newUser->active = true;
         $newUser->save();
@@ -293,16 +293,89 @@ class ProjectsController extends AbstractController
         // The invitation has been fulfilled.
         $invitation->delete();
 
-        // Deliver the temporary password by email when email sending is enabled;
-        // it is always returned so the admin can pass it on manually.
-        $mail->sendTemporaryPassword($email, $temporaryPassword, $newUser->username);
+        // Also emailed when sending works; always returned so the admin can
+        // pass it on.
+        $emailSent = $accounts->mailTemporaryPassword($newUser, $temporaryPassword);
 
         return $this->response->json([
             'user_id'            => (string) $newUser->_id,
+            'username'           => $newUser->username,
             'email'              => $email,
             'status'             => 'active',
             'temporary_password' => $temporaryPassword,
+            'email_sent'         => $emailSent,
         ]);
+    }
+
+    /**
+     * Create an account directly in the current project (admin only).
+     *
+     * The account is created active, with a temporary password, and joins the
+     * project with the given role and scopes, at once: no invitation, no email
+     * to click. The temporary password is returned once, emailed too when
+     * sending works (`email_sent`), and must be replaced at the first sign-in.
+     *
+     * Same rules as an invitation: the scopes are among the caller's and
+     * include the required ones. Only an admin creates an account, as only an
+     * admin confirms one. An email already used by an account is refused (422):
+     * that account is added with POST /projects/users instead. A pending
+     * invitation of this email to this project is consumed.
+     *
+     * @param  Application $application
+     * @param  Accounts    $accounts
+     * @param  AdminLog    $log  Names the account when a superadmin creates it.
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function createAccount(Application $application, Accounts $accounts, AdminLog $log)
+    {
+        if (!$this->requireAdmin()) {
+            return $this->response->json(
+                ['message' => 'Only a project admin can create accounts.'],
+                403
+            );
+        }
+        $currentUser = $this->request->user()->getApplicationUser();
+        $this->validationRules['createAccount']['scope'] =
+            'required|array|required_scopes|in:' . join(',', $currentUser->scope);
+        $this->validateRoute();
+
+        $email = $this->request->input('email');
+        $role = strtolower((string) $this->request->input('role')) === 'admin'
+            ? 'admin'
+            : $this->request->input('role');
+        $temporaryPassword = $accounts->temporaryPassword();
+
+        $user = new User();
+        $user->fill([
+            'username' => $this->request->input('username') ?: $accounts->usernameFromEmail($email),
+            'email'    => $email,
+        ]);
+        $user->setTemporaryPassword($temporaryPassword);
+        $user->active = true;
+        $user->save();
+
+        $application->setUser([
+            'user_id' => (string) $user->_id,
+            'role'    => $role,
+            'scope'   => $this->request->input('scope'),
+        ])->save();
+
+        $invitation = $this->findInvitation($application, $email);
+        if ($invitation) {
+            $invitation->delete();
+        }
+
+        $log->note(['user_id' => (string) $user->_id, 'email' => $email, 'username' => $user->username]);
+        $emailSent = $accounts->mailTemporaryPassword($user, $temporaryPassword);
+
+        return $this->response->json([
+            'user_id'            => (string) $user->_id,
+            'username'           => $user->username,
+            'email'              => $email,
+            'status'             => 'active',
+            'temporary_password' => $temporaryPassword,
+            'email_sent'         => $emailSent,
+        ], 201);
     }
 
     /**
@@ -473,58 +546,5 @@ class ProjectsController extends AbstractController
         return Invitation::where('email', $email)->get()->filter(function ($inv) use ($appId) {
             return isset($inv->project['_id']) && (string) $inv->project['_id'] === $appId;
         })->first();
-    }
-
-    /**
-     * Derive a unique, length-valid username from an email address.
-     *
-     * The application enforces usernames of 2-32 characters and requires them to
-     * be unique. The email local part alone satisfies neither guarantee, so pad
-     * short parts, truncate long ones, and append a numeric suffix on collision.
-     *
-     * @param  string $email
-     * @return string
-     */
-    private function uniqueUsernameFromEmail($email)
-    {
-        $base = strstr($email, '@', true) ?: 'user';
-        // Keep only characters the username validator accepts; fall back to 'user'.
-        $base = preg_replace('/[^A-Za-z0-9._-]/', '', $base);
-        if (strlen($base) < 2) {
-            $base = str_pad($base, 2, 'x');
-        }
-        $base = substr($base, 0, 32);
-
-        $candidate = $base;
-        $suffix = 1;
-        while (User::where('username', $candidate)->first()) {
-            $suffix++;
-            // Keep the whole thing within 32 chars while appending the suffix.
-            $candidate = substr($base, 0, 32 - strlen((string) $suffix)) . $suffix;
-        }
-
-        return $candidate;
-    }
-
-    /**
-     * Generate a readable temporary password using a CSPRNG.
-     *
-     * Uses an alphabet stripped of look-alike characters (0/O, 1/l/I) so the
-     * password can be dictated or copied without ambiguity, while random_int
-     * keeps the selection cryptographically secure.
-     *
-     * @param  int $length
-     * @return string
-     */
-    private function generateTemporaryPassword($length = 12)
-    {
-        $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
-        $max = strlen($alphabet) - 1;
-        $password = '';
-        for ($i = 0; $i < $length; $i++) {
-            $password .= $alphabet[random_int(0, $max)];
-        }
-
-        return $password;
     }
 }
