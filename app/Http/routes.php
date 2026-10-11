@@ -53,6 +53,38 @@ $app->make('oauth.routes')->makeRestRoutes();
 // Register application management routes (create, list consumers, manage users)
 $app->make('Applicationable.routes')->makeRoutes();
 
+// Two-level administration (ADMIN.md). Registered after the package routes, so
+// these replace them (Lumen keys routes by method and path):
+// - only a superadmin creates an application, without becoming a member;
+// - a superadmin lists every application;
+// - updating an API key gives it only scopes the caller holds.
+$app->group(
+    [
+        'prefix' => 'api/v1',
+        'namespace' => 'App\Http\Controllers',
+    ],
+    function ($app) {
+        /** @var Laravel\Lumen\Application $app */
+        $app->post('/projects', [
+            'uses' => 'ApplicationsController@create',
+            'middleware' => ['oauth', 'superadmin', 'applicationable.acl'],
+        ]);
+        $app->get('/projects', [
+            'uses' => 'ApplicationsController@projectsList',
+            'middleware' => ['oauth', 'applicationable.acl'],
+        ]);
+        $app->put('/projects/consumers', [
+            'uses' => 'ApplicationsController@updateConsumer',
+            'middleware' => ['applicationable', 'oauth', 'applicationable.acl'],
+        ]);
+        // The superadmin log, most recent first
+        $app->get('/superadmin/log', [
+            'uses' => 'SuperadminController@log',
+            'middleware' => ['oauth', 'superadmin'],
+        ]);
+    }
+);
+
 // Public user-management routes — require only a valid OAuth client credential
 // (no user token needed) so that unauthenticated users can register and recover passwords
 $app->group(
@@ -98,10 +130,10 @@ $app->group(
 );
 
 // Project management routes — require OAuth token and application context
-// DELETE removes the application and all associated tables
+// DELETE removes the application and all associated tables: superadmin only (ADMIN.md)
 $app->delete('api/v1/projects', [
     'uses' => 'App\Http\Controllers\ProjectsController@deleteProject',
-    'middleware' => ['oauth', 'applicationable', 'applicationable.acl'],
+    'middleware' => ['oauth', 'superadmin', 'applicationable', 'applicationable.acl'],
 ]);
 // GET triggers a mongoexport of the application's data and returns a download URL
 $app->get('api/v1/projects/export', [

@@ -27,6 +27,7 @@ class Kernel extends ConsoleKernel
         Commands\SendStatistic::class,
         Commands\DeleteExpiredTokens::class,
         Commands\DeleteExpiredProjectDumps::class,
+        Commands\Superadmin::class,
     ];
 
     /**

@@ -10,16 +10,23 @@ class ProjectsCest
 
     public function create(ApiTester $I)
     {
-        $I->createAndLoginUser();
+        $user = $I->createAndLoginUser();
         $faker = $I->getFaker();
         $project = [
             'title' => $faker->streetName,
             'description' => $faker->text('150'),
         ];
+        // Only a superadmin creates an application (ADMIN.md).
+        $I->sendPOST('api/v1/projects', $project);
+        $I->seeResponseCodeIs(403);
+
+        $I->makeSuperadmin($user);
         $I->sendPOST('api/v1/projects', $project);
         $project = json_decode($I->grabResponse());
         $I->assertProject('$.data', 201);
         $project_id = $project->data->_id;
+        // The superadmin acts in it without being a member.
+        $I->assertSame([], $project->data->users);
 
         $I->setHeader('X-Application', $project_id);
         $I->sendPOST('api/v1/projects/consumers', ['description' => $faker->text('20'), 'scope' => ['decisions_make']]);
@@ -96,7 +103,12 @@ class ProjectsCest
         $I->loginUser($second_user);
         $I->sendDELETE('api/v1/projects');
         $I->seeResponseCodeIs(403);
+        // The application admin no longer deletes it: a superadmin does (ADMIN.md).
         $I->loginUser($user);
+        $I->sendDELETE('api/v1/projects');
+        $I->seeResponseCodeIs(403);
+        $I->makeSuperadmin($second_user);
+        $I->loginUser($second_user);
         $I->sendDELETE('api/v1/projects');
         $I->seeResponseCodeIs(200);
         $I->sendGET('api/v1/admin/tables' . $table->_id);

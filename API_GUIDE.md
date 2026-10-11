@@ -357,16 +357,47 @@ admin can invite with the `admin` role (`403` otherwise).
 ```
 
 > The requested `scope` must be a **subset** of the inviting user's own scope.
+> A superadmin acts as an admin holding every scope in every application, so
+> they can invite an application's first admin.
 
 ---
 
 ### Projects
 
-All project endpoints require Bearer token + `X-Application`.
+Project endpoints require a Bearer token, and `X-Application` except to list or
+create applications. Creating and deleting an application is reserved to
+superadmins (Claims IA accounts): see [ADMIN.md](ADMIN.md).
+
+#### `GET /api/v1/projects`
+
+The caller's applications; every application for a superadmin.
+
+---
+
+#### `POST /api/v1/projects`
+
+Superadmin only (`403 access_denied` otherwise). Creates an application; the
+superadmin does not become a member (`"users": []`). Its admin is then named by
+inviting them with the `admin` role (`POST /api/v1/invite` with the new
+`X-Application`).
+
+```json
+{ "title": "Client A", "description": "Credit scoring", "settings": { "show_meta": true } }
+```
+
+---
 
 #### `DELETE /api/v1/projects`
 
-Permanently deletes the application and **all** its decision tables. **Irreversible.**
+Superadmin only. Permanently deletes the application and **all** its decision tables. **Irreversible.**
+
+---
+
+#### `GET /api/v1/superadmin/log`
+
+Superadmin only. The admin log: every request made by a superadmin, most recent
+first. Filters `application_id` (its creation included), `user_id`; `size` (1 to 200, default 50) and
+`page`. Entry fields are described in [ADMIN.md](ADMIN.md#admin-log).
 
 ---
 

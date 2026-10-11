@@ -17,6 +17,7 @@ use App\Models\TableVersion;
 use App\Models\FlowVersion;
 use App\Models\User;
 use App\Models\Invitation;
+use App\Services\AdminLog;
 use App\Services\DbTransfer;
 use App\Services\VersionCalls;
 use App\Services\Mail;
@@ -47,6 +48,7 @@ class ProjectsController extends AbstractController
 
     /**
      * Permanently delete the application and all of its decision tables.
+     * Reserved to superadmins (route middleware 'superadmin', ADMIN.md).
      *
      * Uses a MongoDB $in query to delete every Table document associated with
      * the application before removing the application document itself. This is
@@ -57,6 +59,7 @@ class ProjectsController extends AbstractController
      */
     public function deleteProject(Application $application)
     {
+        app(AdminLog::class)->note(['title' => $application->title]);
         // Remove all decision tables that belong to this application first, with
         // their versions and the calls of its API keys (a query delete fires no
         // TableObserver::deleted)
@@ -368,7 +371,7 @@ class ProjectsController extends AbstractController
      * Destructive and irreversible. Guarded on several conditions:
      *   - the caller must be a project admin;
      *   - the caller cannot delete their own account;
-     *   - the target must exist;
+     *   - the target must exist, and must not be a superadmin;
      *   - the target must NOT be a member of any application other than the
      *     current one (409). This prevents orphaning the account elsewhere.
      *
@@ -402,6 +405,15 @@ class ProjectsController extends AbstractController
         $user = User::find($userId);
         if (!$user) {
             throw new IdNotFoundException('No account found for this id.');
+        }
+
+        // An application admin may be a client's user: a superadmin's account
+        // is never theirs to delete (ADMIN.md).
+        if ($user->isSuperadmin()) {
+            return $this->response->json(
+                ['message' => 'A superadmin account cannot be deleted here.'],
+                403
+            );
         }
 
         // Refuse if the account belongs to any OTHER application than this one.

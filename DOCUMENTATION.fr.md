@@ -108,7 +108,9 @@ Les contrôleurs gèrent l'analyse des requêtes HTTP, la validation des entrée
 | `DecisionsController` | Accès administrateur en lecture seule aux décisions et mise à jour des métadonnées              |
 | `ConsumerController`  | Évaluation des décisions (routes v1 et v2) et récupération des résultats côté consommateur      |
 | `ChangelogController` | Liste de l'historique d'audit, diff et rollback                                                 |
-| `ProjectsController`  | Suppression d'application et export des données                                                 |
+| `ProjectsController`  | Suppression d'application (superadmins), export des données, collaborateurs                     |
+| `ApplicationsController` | Remplace les routes du paquet pour créer (superadmins) et lister les applications, et pour modifier une clé d'API dans la limite des droits de l'appelant ([ADMIN.fr.md](ADMIN.fr.md)) |
+| `SuperadminController` | Journal d'administration (`GET /api/v1/superadmin/log`)                                        |
 
 ### Modèles (`app/Models/`)
 
@@ -126,6 +128,7 @@ Tous les modèles étendent `Base` (qui étend Jenssegers MongoDB Eloquent). Les
 | `Variant`       | embarqué dans Table/TableVersion | Variante A/B contenant des règles et une décision par défaut |
 | `Preset`        | embarqué dans Field          | Condition de pré-traitement appliquée avant l'évaluation des règles  |
 | `Invitation`    | `invitations`                | Invitation en attente pour rejoindre une application                 |
+| `AdminLogEntry` | `admin_log`                  | Une action d'un superadmin ([ADMIN.fr.md](ADMIN.fr.md#journal-dadministration)) |
 | `ConditionType` | `condition_types`            | Espace réservé (types de conditions gérés dans le code)              |
 
 ### Dépôts (`app/Repositories/`)
@@ -155,6 +158,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `Hasher`          | Génération de tokens cryptographiquement forts et adaptés aux URL                                       |
 | `DbTransfer`      | Export de données via mongoexport vers une archive .tar.gz                                              |
 | `BaseEvents`      | Classe abstraite de base pour Intercom/Mixpanel ; fournit un helper de détection IP                     |
+| `AdminLog`        | Écrit le journal d'administration ; `note()` ajoute les détails d'un contrôleur à la requête en cours |
 
 ### Fournisseurs de services (`app/Providers/`)
 
@@ -182,6 +186,8 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `JsonMiddleware`           | Définit `Accept: application/json` et `Content-Type: application/json` sur chaque requête                                                                                 |
 | `NewRelicMiddleware`       | Nomme chaque transaction New Relic sous la forme `URI (METHOD)` pour la visibilité APM                                                                                    |
 | `ApplicationAclMiddleware` | Lié à l'alias de route `applicationable.acl` à la place du middleware du paquet : scopes vérifiés sur la méthode et le chemin routés, réservé aux membres par défaut |
+| `SuperadminMiddleware`     | Alias de route `superadmin` : seul un superadmin passe (créer et supprimer une application, lire le journal) |
+| `SuperadminAuditMiddleware` | Middleware global de fin de requête : enregistre chaque requête d'un superadmin une fois traitée ([ADMIN.fr.md](ADMIN.fr.md#journal-dadministration)) |
 
 ### Exceptions (`app/Exceptions/`)
 
@@ -223,6 +229,7 @@ Les dépôts encapsulent toute la logique de requête MongoDB. Ils étendent `Ab
 | `SendStatistic`             | `send:statistic` | Chaque minute | Envoie le nombre de décisions par minute à CachetHQ                  |
 | `DeleteExpiredTokens`       | `tokens:delete`  | Toutes les h  | Supprime les tokens OAuth et email expirés des documents utilisateur |
 | `DeleteExpiredProjectDumps` | `dump:delete`    | 2× par jour   | Supprime les archives d'export de plus de 24 heures                  |
+| `Superadmin`                | `gandalf:superadmin` | À la demande  | Attribue (`<email>`), retire (`--remove`) ou liste (`--list`) les superadmins |
 
 ---
 
@@ -269,6 +276,9 @@ Modèle MongoDB Eloquent abstrait.
 | `removeVerifyEmailToken()`         | Supprime l'entrée `verify_email` de `tokens`                                       |
 | `findByToken($token, $type, ...)`  | Recherche générique de token avec vérification d'expiration                        |
 | `isActive()`                       | Retourne `$this->active`                                                           |
+| `isSuperadmin()`                   | Indique si l'utilisateur a l'indicateur superadmin (posé seulement par `gandalf:superadmin`) |
+| `memberOf($application)`           | Entrée de membre dans une application ; pour un superadmin, une entrée admin avec tous les droits utilisateur |
+| `getAndSetApplicationUser()`       | Résout l'entrée de l'application courante avec `memberOf()`                      |
 
 ---
 

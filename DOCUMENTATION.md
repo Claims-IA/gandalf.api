@@ -105,7 +105,9 @@ Controllers handle HTTP request parsing, input validation, and response formatti
 | `DecisionsController` | Admin read-only access to decision records and metadata updates                      |
 | `ConsumerController`  | Consumer-facing decision evaluation (routes v1 and v2) and result retrieval          |
 | `ChangelogController` | Table audit history list, diff, and rollback                                         |
-| `ProjectsController`  | Application deletion and data export                                                 |
+| `ProjectsController`  | Application deletion (superadmins), data export, collaborators                       |
+| `ApplicationsController` | Replaces the package routes to create (superadmins) and list applications, and to update an API key within the caller's scopes ([ADMIN.md](ADMIN.md)) |
+| `SuperadminController` | Superadmin log (`GET /api/v1/superadmin/log`)                                        |
 
 ### Models (`app/Models/`)
 
@@ -123,6 +125,7 @@ All models extend `Base` (which extends Jenssegers MongoDB Eloquent). Embedded d
 | `Variant`       | embedded in Table/TableVersion | A/B test variant containing rules and default decision |
 | `Preset`        | embedded in Field          | Pre-processing condition applied before rule evaluation |
 | `Invitation`    | `invitations`              | Pending invitation to join an application               |
+| `AdminLogEntry` | `admin_log`                | One superadmin action ([ADMIN.md](ADMIN.md#admin-log))  |
 | `ConditionType` | `condition_types`          | Placeholder (condition types managed in code)           |
 
 ### Repositories (`app/Repositories/`)
@@ -152,6 +155,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | `Hasher`          | Cryptographically strong URL-safe token generation                              |
 | `DbTransfer`      | mongoexport-based data export to .tar.gz archive                                |
 | `BaseEvents`      | Abstract base for Intercom/Mixpanel; provides IP detection helper               |
+| `AdminLog`        | Writes the superadmin log; `note()` adds a controller's details to the current request |
 
 ### Providers (`app/Providers/`)
 
@@ -179,6 +183,8 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | `JsonMiddleware`           | Sets `Accept: application/json` and `Content-Type: application/json` on every request                                                                    |
 | `NewRelicMiddleware`       | Names each New Relic transaction as `URI (METHOD)` for per-endpoint APM visibility                                                                       |
 | `ApplicationAclMiddleware` | Bound to the `applicationable.acl` route alias in place of the package middleware: scope checks on the routed method and path, members only by default |
+| `SuperadminMiddleware`     | Route alias `superadmin`: only a superadmin goes through (create and delete an application, read the log) |
+| `SuperadminAuditMiddleware` | Global terminable middleware: records every request of a superadmin once answered ([ADMIN.md](ADMIN.md#admin-log)) |
 
 ### Exceptions (`app/Exceptions/`)
 
@@ -218,6 +224,7 @@ Repositories encapsulate all MongoDB query logic. They extend `AbstractRepositor
 | `SendStatistic`             | `send:statistic` | Every minute | Push decisions-per-minute count to CachetHQ               |
 | `DeleteExpiredTokens`       | `tokens:delete`  | Hourly       | Remove expired OAuth and email tokens from user documents |
 | `DeleteExpiredProjectDumps` | `dump:delete`    | Twice daily  | Delete export archives older than 24 hours                |
+| `Superadmin`                | `gandalf:superadmin` | On demand    | Grant (`<email>`), revoke (`--remove`) or list (`--list`) superadmins |
 
 ---
 
@@ -264,6 +271,9 @@ Abstract MongoDB Eloquent model.
 | `removeVerifyEmailToken()`         | Deletes the verify\_email entry from `tokens`                           |
 | `findByToken($token, $type, ...)`  | Generic token lookup with expiry check                                  |
 | `isActive()`                       | Returns `$this->active`                                                 |
+| `isSuperadmin()`                   | Whether the user holds the superadmin flag (set only by `gandalf:superadmin`) |
+| `memberOf($application)`           | Member entry in an application; for a superadmin, an admin entry with every user scope |
+| `getAndSetApplicationUser()`       | Resolves the entry of the current application through `memberOf()`      |
 
 ---
 

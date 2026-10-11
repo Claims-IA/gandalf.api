@@ -199,8 +199,7 @@ The `2026_10_10_130000_TableVersionScopes` migration grants `tables_publish`,
 applications; other members get them from an admin.
 
 Two-level administration (application admin, superadmin reserved to Claims IA)
-is a separate track: batch 7, on its own branch `feature/two-level-admin`
-(ADMIN.md there).
+is a separate track: batch 7, documented in [ADMIN.md](ADMIN.md).
 
 ---
 
@@ -504,15 +503,15 @@ This document moves each section from "planned" to "in place" as batches ship.
 
 | Batch | Content | Depends on | Status |
 | ----- | ------- | ---------- | ------ |
-| 0 | Technical framing (this document) | | done, to review |
-| 1 | API: table version foundations, migration, compatibility mode | 0 | done, to review |
-| 2 | API: drafts, publication, activation, split, scopes | 1 | done, to review |
-| 2b | API: Excel import and export per version, removal of `is_default` | 2 | done, to review |
-| 3 | API: v2 route, test runs, calls per key and the matching deletion guard, v1 deprecation | 2 | done, to review |
-| 4 | API: flow versions, pinned nodes, bulk update of compatible flows | 1 | done, to review |
-| 5 | gandalf.web: table versions | 2, 3 | done, to review (gandalf.web, branch `feature/table-versions`) |
-| 6 | gandalf.web: flow versions | 4, 5 | done, to review (gandalf.web, branch `feature/table-versions`) |
-| 7 | Two-level administration (independent) | | done, to review (branch `feature/two-level-admin` in gandalf.api and gandalf.web, documented in its ADMIN.md) |
+| 0 | Technical framing (this document) | | done |
+| 1 | API: table version foundations, migration, compatibility mode | 0 | done |
+| 2 | API: drafts, publication, activation, split, scopes | 1 | done |
+| 2b | API: Excel import and export per version, removal of `is_default` | 2 | done |
+| 3 | API: v2 route, test runs, calls per key and the matching deletion guard, v1 deprecation | 2 | done |
+| 4 | API: flow versions, pinned nodes, bulk update of compatible flows | 1 | done |
+| 5 | gandalf.web: table versions | 2, 3 | done (gandalf.web) |
+| 6 | gandalf.web: flow versions | 4, 5 | done (gandalf.web) |
+| 7 | Two-level administration (independent) | | done ([ADMIN.md](ADMIN.md)) |
 
 Release A: batches 1 to 3. Release B: batches 4 to 6.
 

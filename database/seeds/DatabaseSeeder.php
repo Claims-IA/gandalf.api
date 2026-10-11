@@ -3,7 +3,7 @@
  * DatabaseSeeder
  *
  * Seeds the MongoDB database with demo data for local development and testing.
- * Creates two users (admin and demo), a sample application with appropriate scope
+ * Creates two users (admin, a superadmin, and demo), a sample application with appropriate scope
  * assignments, an OAuth2 client, and a "PSP Scoring" decision table with six rules
  * covering common payment fraud signals (IP blacklist, delivery zone, country
  * restriction, card brand, trusted banks, and turnover limits). All records use
@@ -54,6 +54,8 @@ class DatabaseSeeder extends Seeder
             'email' => 'admin@gndf.io',
             'password' => '$2y$10$8SyDk0r9BYrqHxmG5j9zLOZx8a5fHt9HhsyLt38wtb/iwxAW1dE2q',
             'active' => true,
+            // Lets a local environment create applications (ADMIN.md)
+            'superadmin' => true,
             "accessTokens" => [
                 [
                     "_id" => new ObjectID,
@@ -128,7 +130,6 @@ class DatabaseSeeder extends Seeder
                         'consumers_manage',
                         'users_manage',
                         'project_update',
-                        'project_delete',
                         'decisions_view',
                     ],
                 ],

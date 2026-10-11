@@ -26,7 +26,6 @@ return [
             'consumers_manage',
             'users_manage',
             'project_update',
-            'project_delete',
             'decisions_view',
             // Table versions (VERSIONS.md): publishing and going to production
             // are separate rights.
@@ -140,7 +139,9 @@ return [
             '~^\/api\/v1\/projects\/collaborators\/account$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/users$~' => ['users_manage'],
             '~^\/api\/v1\/projects\/consumers~' => ['consumers_manage'],
-            '~^\/api\/v1\/projects$~' => ['project_delete'],
+            // Deleting an application is reserved to superadmins: the
+            // 'superadmin' route middleware checks it (ADMIN.md).
+            '~^\/api\/v1\/projects$~' => [],
             // Deleting a draft is editing; deleting a published version also needs
             // tables_publish, checked in TableVersionsController::delete. Before the
             // generic rule.

@@ -9,6 +9,11 @@
  * can be associated with multiple applications. Provides built-in token management
  * for email verification and password reset flows, each with a 1-hour TTL.
  *
+ * A superadmin (`superadmin: true`, reserved to Claims IA, see ADMIN.md) acts
+ * as an admin holding every user scope in every application, member or not.
+ * The flag is set only by the `gandalf:superadmin` command: it is neither
+ * fillable nor writable through the API.
+ *
  * @package App\Models
  */
 namespace App\Models;
@@ -20,7 +25,10 @@ use Illuminate\Auth\Authenticatable;
 use Laravel\Lumen\Auth\Authorizable;
 use Illuminate\Contracts\Auth\Authenticatable as AuthenticatableContract;
 use Illuminate\Contracts\Auth\Access\Authorizable as AuthorizableContract;
+use MongoDB\BSON\ObjectID;
 use Nebo15\LumenApplicationable\Contracts\ApplicationableUser as ApplicationableUserContract;
+use Nebo15\LumenApplicationable\Models\Application;
+use Nebo15\LumenApplicationable\Models\User as ApplicationUser;
 use Nebo15\LumenApplicationable\Traits\ApplicationableUserTrait;
 use Nebo15\LumenOauth2\Interfaces\Oauthable as OauthableContract;
 use Nebo15\LumenOauth2\Traits\Oauthable;
@@ -37,6 +45,7 @@ use Nebo15\REST\Interfaces\ListableInterface;
  * @property string $password
  * @property string $temporary_email
  * @property bool $active
+ * @property bool $superadmin
  * @property array $tokens
  * @method static \Illuminate\Database\Eloquent\Builder where($column, $operator = null, $value = null, $boolean = 'and')
  */
@@ -56,7 +65,9 @@ class User extends Base implements
         'last_name',
     ];
 
-    protected $visible = ['_id', 'username', 'temporary_email', 'email', 'first_name', 'last_name', 'active', 'settings'];
+    protected $visible = [
+        '_id', 'username', 'temporary_email', 'email', 'first_name', 'last_name', 'active', 'settings', 'superadmin',
+    ];
 
     protected $fillable = ['username', 'temporary_email', 'email', 'password', 'first_name', 'last_name', 'settings'];
 
@@ -269,6 +280,63 @@ class User extends Base implements
     public function isActive()
     {
         return $this->active;
+    }
+
+    // -------------------------------------------------------------------------
+    // Application membership
+    // -------------------------------------------------------------------------
+
+    /**
+     * Whether the user is a superadmin (ADMIN.md).
+     *
+     * @return bool
+     */
+    public function isSuperadmin()
+    {
+        return $this->getAttribute('superadmin') === true;
+    }
+
+    /**
+     * Resolve the user's entry in the current application (set by the
+     * 'applicationable' middleware from X-Application), read by the ACL and the
+     * controllers through getApplicationUser().
+     *
+     * @return $this
+     */
+    public function getAndSetApplicationUser()
+    {
+        $this->applicationUser = $this->memberOf($this->getCurrentApplication());
+
+        return $this;
+    }
+
+    /**
+     * The user's entry in $application: their member entry, null when they do
+     * not belong to it, or, for a superadmin, an admin entry holding every user
+     * scope, never saved. Its `member` attribute says whether the superadmin also
+     * belongs to the application.
+     *
+     * @param  Application $application
+     * @return ApplicationUser|null
+     */
+    public function memberOf(Application $application)
+    {
+        $member = $application->getUser($this->getId());
+        if (!$this->isSuperadmin()) {
+            return $member;
+        }
+
+        $entry = new ApplicationUser([
+            'user_id' => new ObjectID($this->getId()),
+            'role' => 'admin',
+            'scope' => config('applicationable.scopes.users'),
+        ]);
+        $entry->username = $this->username;
+        $entry->email = $this->email;
+        $entry->superadmin = true;
+        $entry->member = (bool) $member;
+
+        return $entry;
     }
 
     // -------------------------------------------------------------------------

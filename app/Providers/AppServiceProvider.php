@@ -4,7 +4,8 @@
  *
  * Registers core application service bindings in the IoC container. Notably it
  * binds DbTransfer as a singleton, replaces the 'applicationable.acl' route
- * middleware with ApplicationAclMiddleware and, when Intercom or Mixpanel integrations are
+ * middleware with ApplicationAclMiddleware, registers the 'superadmin' route
+ * middleware and the AdminLog singleton (ADMIN.md) and, when Intercom or Mixpanel integrations are
  * disabled via environment variables, replaces their real implementations with
  * inline no-op anonymous classes. This allows the EventListener to be constructed
  * and injected normally without runtime errors in environments that do not have
@@ -49,7 +50,11 @@ class AppServiceProvider extends ServiceProvider
         // so this binding of 'applicationable.acl' wins.
         $this->app->routeMiddleware([
             'applicationable.acl' => \App\Http\Middleware\ApplicationAclMiddleware::class,
+            'superadmin' => \App\Http\Middleware\SuperadminMiddleware::class,
         ]);
+
+        // The superadmin log notes of the current request (ADMIN.md).
+        $this->app->singleton(\App\Services\AdminLog::class);
 
         // When Intercom/Mixpanel are disabled, bind no-op stubs so EventListener can be resolved.
         // Using anonymous classes that extend the real classes means type checks still pass.
