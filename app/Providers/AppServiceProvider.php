@@ -45,12 +45,15 @@ class AppServiceProvider extends ServiceProvider
             return new DbTransfer;
         });
 
-        // Routes that no ACL regex covers are closed to non-members (the package
-        // middleware let them through). Registered after the package provider,
-        // so this binding of 'applicationable.acl' wins.
+        // Registered after the package providers, so these bindings win:
+        // - 'applicationable.acl': routes that no ACL regex covers are closed to
+        //   non-members (the package middleware let them through);
+        // - 'oauth': a person with a temporary password may only choose a new
+        //   one (ADMIN.md).
         $this->app->routeMiddleware([
             'applicationable.acl' => \App\Http\Middleware\ApplicationAclMiddleware::class,
             'superadmin' => \App\Http\Middleware\SuperadminMiddleware::class,
+            'oauth' => \App\Http\Middleware\Authenticate::class,
         ]);
 
         // The superadmin log notes of the current request (ADMIN.md).

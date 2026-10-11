@@ -82,6 +82,20 @@ $app->group(
             'uses' => 'SuperadminController@log',
             'middleware' => ['oauth', 'superadmin'],
         ]);
+        // Every account with its applications; delete one for good; give one
+        // a temporary password
+        $app->get('/superadmin/users', [
+            'uses' => 'SuperadminController@users',
+            'middleware' => ['oauth', 'superadmin'],
+        ]);
+        $app->delete('/superadmin/users/{id:[0-9a-z]{24}}', [
+            'uses' => 'SuperadminController@deleteUser',
+            'middleware' => ['oauth', 'superadmin'],
+        ]);
+        $app->post('/superadmin/users/{id:[0-9a-z]{24}}/password', [
+            'uses' => 'SuperadminController@resetPassword',
+            'middleware' => ['oauth', 'superadmin'],
+        ]);
     }
 );
 
@@ -160,6 +174,12 @@ $app->delete('api/v1/projects/collaborators/invitation', [
 // POST resends the invitation email for a pending invitation (project admin only)
 $app->post('api/v1/projects/collaborators/invitation/resend', [
     'uses' => 'App\Http\Controllers\ProjectsController@resendInvitation',
+    'middleware' => ['oauth', 'applicationable', 'applicationable.acl'],
+]);
+// POST creates an account directly in the project, with a temporary password
+// (project admin only)
+$app->post('api/v1/projects/collaborators/account', [
+    'uses' => 'App\Http\Controllers\ProjectsController@createAccount',
     'middleware' => ['oauth', 'applicationable', 'applicationable.acl'],
 ]);
 // DELETE permanently deletes a user account (project admin only); refused when

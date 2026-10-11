@@ -17,4 +17,5 @@ return [
     'token_not_found' => 'Token not found',
     'token_expired' => 'Token expired. Refresh or generate new token',
     'admin_not_activated' => 'Project owner is not activated, try again later',
+    'password_change_required' => 'Choose a new password: the current one is temporary',
 ];

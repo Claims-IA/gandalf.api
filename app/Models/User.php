@@ -14,6 +14,11 @@
  * The flag is set only by the `gandalf:superadmin` command: it is neither
  * fillable nor writable through the API.
  *
+ * `must_change_password` marks a temporary password, given by an admin or a
+ * superadmin (ADMIN.md): until the person chooses their own, the 'oauth' route
+ * middleware lets them do nothing else. Any other password change clears it
+ * (UserObserver::saving()).
+ *
  * @package App\Models
  */
 namespace App\Models;
@@ -46,6 +51,7 @@ use Nebo15\REST\Interfaces\ListableInterface;
  * @property string $temporary_email
  * @property bool $active
  * @property bool $superadmin
+ * @property bool $must_change_password
  * @property array $tokens
  * @method static \Illuminate\Database\Eloquent\Builder where($column, $operator = null, $value = null, $boolean = 'and')
  */
@@ -67,6 +73,7 @@ class User extends Base implements
 
     protected $visible = [
         '_id', 'username', 'temporary_email', 'email', 'first_name', 'last_name', 'active', 'settings', 'superadmin',
+        'must_change_password',
     ];
 
     protected $fillable = ['username', 'temporary_email', 'email', 'password', 'first_name', 'last_name', 'settings'];
@@ -89,6 +96,14 @@ class User extends Base implements
     protected $hidden = [
         'password',
     ];
+
+    /**
+     * Whether the password set on this instance is a temporary one, read by
+     * UserObserver::saving(). Not an attribute: never saved.
+     *
+     * @var bool
+     */
+    private $passwordIsTemporary = false;
 
     // -------------------------------------------------------------------------
     // Password reset token methods
@@ -161,6 +176,57 @@ class User extends Base implements
     public function changePassword($new_password)
     {
         $this->setAttribute('password', $new_password);
+
+        return $this;
+    }
+
+    /**
+     * Set a temporary password, which the person must replace before doing
+     * anything else. Callers must still call save().
+     *
+     * @param  string $password  Plain text, hashed on save.
+     * @return $this
+     */
+    public function setTemporaryPassword($password)
+    {
+        $this->setAttribute('password', $password);
+        $this->setAttribute('must_change_password', true);
+        $this->passwordIsTemporary = true;
+
+        return $this;
+    }
+
+    /**
+     * Whether the password set on this instance is a temporary one.
+     *
+     * @return bool
+     */
+    public function passwordIsTemporary()
+    {
+        return $this->passwordIsTemporary;
+    }
+
+    /**
+     * Whether the person must replace a temporary password.
+     *
+     * @return bool
+     */
+    public function mustChangePassword()
+    {
+        return $this->getAttribute('must_change_password') === true;
+    }
+
+    /**
+     * Sign the account out everywhere: its access and refresh tokens are
+     * removed from the stored document at once.
+     *
+     * @return $this
+     */
+    public function revokeSessions()
+    {
+        if ($this->exists) {
+            $this->drop(['accessTokens', 'refreshTokens']);
+        }
 
         return $this;
     }
@@ -280,6 +346,27 @@ class User extends Base implements
     public function isActive()
     {
         return $this->active;
+    }
+
+    /**
+     * Activate the account on the person's behalf, as verifyEmail() does: a
+     * pending address becomes the account's. Nothing changes for an active
+     * account. Callers must still call save().
+     *
+     * @return $this
+     */
+    public function confirmAccount()
+    {
+        if (!$this->isActive()) {
+            if ($this->temporary_email) {
+                $this->email = $this->temporary_email;
+                $this->temporary_email = null;
+            }
+            $this->active = true;
+            $this->removeVerifyEmailToken();
+        }
+
+        return $this;
     }
 
     // -------------------------------------------------------------------------

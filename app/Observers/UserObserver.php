@@ -7,7 +7,9 @@
  *   and activates the user immediately when ACTIVATE_ALL_USERS=true (useful for dev).
  * - 'created': sends the welcome/email-verification email via the Mail service.
  * - 'saving': hashes the password with bcrypt whenever it has been changed, ensuring
- *   the raw password is never written to MongoDB.
+ *   the raw password is never written to MongoDB. A password the person chose
+ *   clears must_change_password; a temporary one (User::setTemporaryPassword())
+ *   keeps it set.
  *
  * @package App\Observers
  */
@@ -91,6 +93,9 @@ class UserObserver
     public function saving(User $user)
     {
         if ($user->isDirty('password')) {
+            if (!$user->passwordIsTemporary()) {
+                $user->must_change_password = false;
+            }
             $user->password = $user->getPasswordHasher()->make($user->password);
         }
     }
