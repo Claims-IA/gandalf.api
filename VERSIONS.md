@@ -198,7 +198,8 @@ The `2026_10_10_130000_TableVersionScopes` migration grants `tables_publish`,
 applications; other members get them from an admin.
 
 Two-level administration (application admin, superadmin reserved to Claims IA)
-is a separate track: batch 7.
+is a separate track: batch 7, on its own branch `feature/two-level-admin`
+(ADMIN.md there).
 
 ---
 
@@ -510,7 +511,7 @@ This document moves each section from "planned" to "in place" as batches ship.
 | 4 | API: flow versions, pinned nodes, bulk update of compatible flows | 1 | done, to review |
 | 5 | gandalf.web: table versions | 2, 3 | done, to review (gandalf.web, branch `feature/table-versions`) |
 | 6 | gandalf.web: flow versions | 4, 5 | done, to review (gandalf.web, branch `feature/table-versions`) |
-| 7 | Two-level administration (independent) | | to do |
+| 7 | Two-level administration (independent) | | done, to review (branch `feature/two-level-admin` in gandalf.api and gandalf.web, documented in its ADMIN.md) |
 
 Release A: batches 1 to 3. Release B: batches 4 to 6.
 

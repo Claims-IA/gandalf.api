@@ -206,7 +206,8 @@ admins des applications existantes ; les autres membres les reçoivent d'un
 admin.
 
 L'administration à deux niveaux (admin d'application, superadmin réservé à
-Claims IA) est un chantier indépendant : lot 7.
+Claims IA) est un chantier indépendant : lot 7, sur sa propre branche
+`feature/two-level-admin` (ADMIN.fr.md sur cette branche).
 
 ---
 
@@ -536,7 +537,7 @@ livraison.
 | 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | fait, à relire |
 | 5 | gandalf.web : versions de tables | 2, 3 | fait, à relire (gandalf.web, branche `feature/table-versions`) |
 | 6 | gandalf.web : versions de flows | 4, 5 | fait, à relire (gandalf.web, branche `feature/table-versions`) |
-| 7 | Administration à deux niveaux (indépendant) | | à faire |
+| 7 | Administration à deux niveaux (indépendant) | | fait, à relire (branche `feature/two-level-admin` dans gandalf.api et gandalf.web, documenté dans son ADMIN.fr.md) |
 
 Mise en production A : lots 1 à 3. Mise en production B : lots 4 à 6.
 
