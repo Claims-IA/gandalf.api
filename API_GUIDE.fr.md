@@ -409,7 +409,8 @@ Superadmin seulement. Supprime définitivement l'application et **toutes** ses t
 #### `GET /api/v1/superadmin/log`
 
 Superadmin seulement. Le journal d'administration : chaque requête d'un
-superadmin, la plus récente d'abord. Filtres `application_id`, `user_id` ;
+superadmin, la plus récente d'abord. Filtres `application_id` (sa création
+comprise), `user_id` ;
 `size` (1 à 200, 50 par défaut) et `page`. Les champs d'une entrée sont décrits
 dans [ADMIN.fr.md](ADMIN.fr.md#journal-dadministration).
 

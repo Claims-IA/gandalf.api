@@ -122,7 +122,7 @@ comprises, requêtes refusées ou en échec comprises, dans la collection
 | `status` | Statut HTTP de la réponse |
 | `ip` | IP du client |
 | `details` | Ce que le contrôleur a noté : `application_id` et `title` d'une application créée, `title` d'une application supprimée ; pour une commande, le compte concerné |
-| `created_at` | Date de l'entrée |
+| `created_at` | Date de l'entrée, en ISO 8601 avec son décalage |
 
 Les corps des requêtes ne sont pas conservés : ils contiennent les données des
 applications. Les requêtes des autres utilisateurs et des clés d'API ne sont
@@ -144,7 +144,7 @@ change pas la réponse.
 | `DELETE /api/v1/projects` | Superadmin | Avec `X-Application` ; 403 sinon |
 | `GET /api/v1/projects/users` | Membre ou superadmin | L'entrée de l'appelant ; pour un superadmin, `role: admin`, tous les droits utilisateur, `superadmin: true`, `member` |
 | `PUT /api/v1/projects/consumers` | `consumers_manage` | 422 quand un droit de la clé n'est pas détenu par l'appelant |
-| `GET /api/v1/superadmin/log` | Superadmin | Plus récent d'abord ; `application_id`, `user_id`, `size` (1 à 200, 50 par défaut), `page` ; `paging` comme les autres listes |
+| `GET /api/v1/superadmin/log` | Superadmin | Plus récent d'abord ; `application_id` (sa création comprise), `user_id`, `size` (1 à 200, 50 par défaut), `page` ; `paging` comme les autres listes |
 | `GET /api/v1/users/current` | Tout utilisateur | `superadmin: true` pour un superadmin, absent sinon |
 
 Les routes de superadmin demandent un token utilisateur

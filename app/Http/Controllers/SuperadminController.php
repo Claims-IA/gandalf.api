@@ -3,8 +3,8 @@
  * SuperadminController
  *
  * Routes reserved to superadmins (ADMIN.md), behind the 'superadmin' route
- * middleware: the admin log, most recent first, filtered by application or
- * by superadmin.
+ * middleware: the admin log, most recent first, filtered by application (its
+ * creation included) or by superadmin.
  *
  * @package App\Http\Controllers
  */
@@ -34,10 +34,16 @@ class SuperadminController extends Controller
         ]);
 
         $query = AdminLogEntry::query()->orderBy(AdminLogEntry::CREATED_AT, 'desc');
-        foreach (['application_id', 'user_id'] as $filter) {
-            if ($request->has($filter)) {
-                $query->where($filter, (string) $request->input($filter));
-            }
+        if ($request->has('application_id')) {
+            // Its creation included: that request has no X-Application, the
+            // new id is in its details.
+            $applicationId = (string) $request->input('application_id');
+            $query->where(function ($query) use ($applicationId) {
+                $query->where('application_id', $applicationId)->orWhere('details.application_id', $applicationId);
+            });
+        }
+        if ($request->has('user_id')) {
+            $query->where('user_id', (string) $request->input('user_id'));
         }
 
         return $response->jsonPaginator($query->paginate((int) $request->input('size', 50)));

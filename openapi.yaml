@@ -578,7 +578,8 @@ components:
           additionalProperties: true
         created_at:
           type: string
-          example: "2026-10-11 09:30:00"
+          description: ISO 8601, with its offset.
+          example: "2026-10-11T09:30:00+00:00"
 
     UserListItem:
       type: object
@@ -2252,6 +2253,7 @@ paths:
       parameters:
         - name: application_id
           in: query
+          description: Entries in this application, its creation included.
           schema:
             type: string
         - name: user_id

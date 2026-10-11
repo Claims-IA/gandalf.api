@@ -60,4 +60,21 @@ class AdminLogEntry extends Base
         'details',
         self::CREATED_AT,
     ];
+
+    /**
+     * The date in ISO 8601 with its offset, as Decision does: the default
+     * "Y-m-d H:i:s" form carries no time zone and reads as local time.
+     *
+     * @return array
+     */
+    public function toArray()
+    {
+        $data = parent::toArray();
+        $createdAt = $this->getAttribute(self::CREATED_AT);
+        if ($createdAt) {
+            $data[self::CREATED_AT] = $createdAt->toIso8601String();
+        }
+
+        return $data;
+    }
 }

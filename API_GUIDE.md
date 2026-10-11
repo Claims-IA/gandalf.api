@@ -394,7 +394,7 @@ Superadmin only. Permanently deletes the application and **all** its decision ta
 #### `GET /api/v1/superadmin/log`
 
 Superadmin only. The admin log: every request made by a superadmin, most recent
-first. Filters `application_id`, `user_id`; `size` (1 to 200, default 50) and
+first. Filters `application_id` (its creation included), `user_id`; `size` (1 to 200, default 50) and
 `page`. Entry fields are described in [ADMIN.md](ADMIN.md#admin-log).
 
 ---

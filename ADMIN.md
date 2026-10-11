@@ -117,7 +117,7 @@ included, refused and failed requests included, in the `admin_log` collection
 | `status` | HTTP status of the response |
 | `ip` | Client IP |
 | `details` | What the controller noted: `application_id` and `title` of a created application, `title` of a deleted one; for a command, the account concerned |
-| `created_at` | Time of the entry |
+| `created_at` | Time of the entry, ISO 8601 with its offset |
 
 Request bodies are not kept: they hold the applications' data. Requests of
 other users and of API keys are not recorded. Entries are never edited nor
@@ -139,7 +139,7 @@ response.
 | `DELETE /api/v1/projects` | Superadmin | With `X-Application`; 403 otherwise |
 | `GET /api/v1/projects/users` | Member or superadmin | The caller's entry; for a superadmin, `role: admin`, every user scope, `superadmin: true`, `member` |
 | `PUT /api/v1/projects/consumers` | `consumers_manage` | 422 when a key scope is not held by the caller |
-| `GET /api/v1/superadmin/log` | Superadmin | Most recent first; `application_id`, `user_id`, `size` (1 to 200, default 50), `page`; `paging` as the other lists |
+| `GET /api/v1/superadmin/log` | Superadmin | Most recent first; `application_id` (its creation included), `user_id`, `size` (1 to 200, default 50), `page`; `paging` as the other lists |
 | `GET /api/v1/users/current` | Any user | `superadmin: true` for a superadmin, absent otherwise |
 
 Superadmin routes need a user token (`Authorization: Bearer`): an API key gets
