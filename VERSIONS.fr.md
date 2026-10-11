@@ -207,8 +207,8 @@ admins des applications existantes ; les autres membres les reçoivent d'un
 admin.
 
 L'administration à deux niveaux (admin d'application, superadmin réservé à
-Claims IA) est un chantier indépendant : lot 7, sur sa propre branche
-`feature/two-level-admin` (ADMIN.fr.md sur cette branche).
+Claims IA) est un chantier indépendant : lot 7, documenté dans
+[ADMIN.fr.md](ADMIN.fr.md).
 
 ---
 
@@ -530,15 +530,15 @@ livraison.
 
 | Lot | Contenu | Dépend de | Statut |
 | --- | ------- | --------- | ------ |
-| 0 | Cadrage technique (ce document) | | fait, à relire |
-| 1 | API : fondations des versions de tables, migration, mode de compatibilité | 0 | fait, à relire |
-| 2 | API : brouillons, publication, activation, répartition, droits | 1 | fait, à relire |
-| 2b | API : import et export Excel par version, suppression de `is_default` | 2 | fait, à relire |
-| 3 | API : route v2, exécution de test, suivi des appels par clé et garde-fou de suppression associé, obsolescence v1 | 2 | fait, à relire |
-| 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | fait, à relire |
-| 5 | gandalf.web : versions de tables | 2, 3 | fait, à relire (gandalf.web, branche `feature/table-versions`) |
-| 6 | gandalf.web : versions de flows | 4, 5 | fait, à relire (gandalf.web, branche `feature/table-versions`) |
-| 7 | Administration à deux niveaux (indépendant) | | fait, à relire (branche `feature/two-level-admin` dans gandalf.api et gandalf.web, documenté dans son ADMIN.fr.md) |
+| 0 | Cadrage technique (ce document) | | fait |
+| 1 | API : fondations des versions de tables, migration, mode de compatibilité | 0 | fait |
+| 2 | API : brouillons, publication, activation, répartition, droits | 1 | fait |
+| 2b | API : import et export Excel par version, suppression de `is_default` | 2 | fait |
+| 3 | API : route v2, exécution de test, suivi des appels par clé et garde-fou de suppression associé, obsolescence v1 | 2 | fait |
+| 4 | API : versions de flows, nœuds figés, mise à jour groupée des flows compatibles | 1 | fait |
+| 5 | gandalf.web : versions de tables | 2, 3 | fait (gandalf.web) |
+| 6 | gandalf.web : versions de flows | 4, 5 | fait (gandalf.web) |
+| 7 | Administration à deux niveaux (indépendant) | | fait ([ADMIN.fr.md](ADMIN.fr.md)) |
 
 Mise en production A : lots 1 à 3. Mise en production B : lots 4 à 6.
 
