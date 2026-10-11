@@ -322,9 +322,10 @@ class ProjectsController extends AbstractController
      *
      * @param  Application $application
      * @param  Accounts    $accounts
+     * @param  AdminLog    $log  Names the account when a superadmin creates it.
      * @return \Illuminate\Http\JsonResponse
      */
-    public function createAccount(Application $application, Accounts $accounts)
+    public function createAccount(Application $application, Accounts $accounts, AdminLog $log)
     {
         if (!$this->requireAdmin()) {
             return $this->response->json(
@@ -363,6 +364,7 @@ class ProjectsController extends AbstractController
             $invitation->delete();
         }
 
+        $log->note(['user_id' => (string) $user->_id, 'email' => $email, 'username' => $user->username]);
         $emailSent = $accounts->mailTemporaryPassword($user, $temporaryPassword);
 
         return $this->response->json([
