@@ -556,6 +556,7 @@ Une `FlowValidationException` est rendue en **HTTP 422** :
   `final_decision`. Pour en gérer plusieurs, étendez la map `answer` produite par
   `Scoring::check`/`toConsumerArray`, puis assouplissez les contrôles
   `from_output === 'final_decision'` dans `validateGraph` et `FlowEngine`.
+  L'évaluation complète et le plan sont dans [OUTPUTS.fr.md](OUTPUTS.fr.md).
 - **Tout ce qui touche à l'ordre d'exécution** → passez par `GraphSort` pour que
   l'invariant d'acyclicité reste au même endroit.
 
