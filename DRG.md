@@ -534,7 +534,8 @@ A `FlowValidationException` renders as **HTTP 422**:
 - **Multiple named outputs per table** → today an output is always
   `final_decision`. To support several, extend the `answer` map produced by
   `Scoring::check`/`toConsumerArray`, then relax the `from_output === 'final_decision'`
-  checks in `validateGraph` and `FlowEngine`.
+  checks in `validateGraph` and `FlowEngine`. A full assessment and plan are in
+  [OUTPUTS.md](OUTPUTS.md).
 - **Anything touching execution order** → go through `GraphSort` so the acyclicity
   invariant stays in one place.
 
